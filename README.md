@@ -52,7 +52,7 @@ To build and start the earlier host from a source checkout, first read [Coordina
 
 ## Before you push
 
-`scripts/leak-check.mjs` stops a push that carries a private value: a private key, a token, an email address outside its allow list, or any term from a private list you keep outside the repository. Turn the hook on once in each clone:
+`scripts/leak-check.mjs` stops a push that carries a private value: a private key, a token, an email address outside its allow list in a file or a commit message, or any term from a private list you keep outside the repository. Turn the hook on once in each clone:
 
 ```sh
 git config core.hooksPath .githooks

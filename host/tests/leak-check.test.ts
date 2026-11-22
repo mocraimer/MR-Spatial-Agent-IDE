@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -158,4 +158,26 @@ test('a first push to an empty remote scans the whole history', t => {
   write(s.repo, 'old.txt', `${SECRET_TERM}\n`); execFileSync('git', ['add', '-A'], { cwd: s.repo }); execFileSync('git', ['commit', '-q', '-m', 'Old'], { cwd: s.repo });
   write(s.repo, 'old.txt', 'gone\n'); execFileSync('git', ['commit', '-q', '-am', 'Newer'], { cwd: s.repo });
   refused(run(s.repo, 'push', '-q', 'second', 'old-term'), /old\.txt:1/, 'private-list term');
+});
+
+test('an annotated tag message and the name of a pushed ref are scanned', t => {
+  const s = scratch(t);
+  execFileSync('git', ['tag', '-a', 'v1', '-m', `release for ${SECRET_TERM}`], { cwd: s.repo });
+  refused(run(s.repo, 'push', '-q', 'origin', 'v1'), /tag object/, 'private-list term');
+  execFileSync('git', ['tag', `${SECRET_TERM}-lightweight`], { cwd: s.repo });
+  refused(run(s.repo, 'push', '-q', 'origin', `${SECRET_TERM}-lightweight`), /pushed ref name/, 'private-list term');
+});
+
+test('a non-ASCII file name is matched by its real spelling', t => {
+  const s = scratch(t);
+  writeFileSync(s.list, `${readFileSync(s.list, 'utf8')}cafésecret\n`);
+  commit(s, 'unicode-name', { [`cafésecret.txt`]: 'fine\n' });
+  refused(s.push('unicode-name'), /file name no\. 1 /, 'private-list term');
+});
+
+test('tree mode from a subdirectory still checks the whole repository', t => {
+  const s = scratch(t);
+  write(s.repo, 'top.txt', `${SECRET_TERM}\n`); write(s.repo, 'sub/inner.txt', 'fine\n'); execFileSync('git', ['add', '-A'], { cwd: s.repo });
+  const { status, stderr } = spawnSync(process.execPath, [join(s.repo, 'scripts/leak-check.mjs'), 'tree'], { cwd: join(s.repo, 'sub'), encoding: 'utf8' });
+  assert.notEqual(status, 0); assert.match(stderr, /top\.txt:1/);
 });

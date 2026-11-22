@@ -60,7 +60,7 @@ function rangeUnits(revs) {
     for (const text of message) units.push({ where: `commit ${sha.slice(0, 10)} message`, text });
   }
   let sha = '', file = '', names = 0, old = 0, added = 0, number = 0;
-  const diff = git('log', '-p', '-U0', '--no-color', '--no-ext-diff', '--no-renames', '--diff-merges=first-parent', '--format=@@commit %H', ...revs);
+  const diff = git('-c', 'core.quotePath=false', 'log', '-p', '-U0', '--no-color', '--no-ext-diff', '--no-renames', '--diff-merges=first-parent', '--format=@@commit %H', ...revs);
   for (const line of lines(diff)) {
     if (old > 0 && line.startsWith('-')) old--;
     else if (added > 0 && line.startsWith('+')) { added--; units.push({ where: `commit ${sha.slice(0, 10)} ${file}:${number++}`, text: line.slice(1) }); }
@@ -110,23 +110,26 @@ const known = sha => { try { execFileSync('git', ['cat-file', '-e', `${sha}^{com
 function prePushRevs(remote, input) {
   let advertised = [];
   try { advertised = git('ls-remote', '--refs', remote).split('\n').map(line => line.split('\t')[0]).filter(sha => sha && known(sha)); } catch { /* scan whole */ }
-  const revs = [];
+  const revs = [], units = [];
   for (const line of lines(input).filter(Boolean)) {
-    const [, local, , remoteSha] = line.split(' ');
+    const [, local, remoteRef, remoteSha] = line.split(' ');
     if (/^0+$/.test(local)) continue;
+    units.push({ where: `pushed ref name no. ${units.length + 1}`, text: remoteRef ?? '' });
+    if (git('cat-file', '-t', local).trim() === 'tag') lines(git('cat-file', 'tag', local)).forEach(text => units.push({ where: `tag object ${local.slice(0, 10)}`, text }));
     if (!/^0+$/.test(remoteSha) && known(remoteSha)) revs.push([`${remoteSha}..${local}`]);
     else revs.push([local, ...(advertised.length ? ['--not', ...advertised] : [])]);
   }
-  return revs;
+  return { revs, units };
 }
 
 function main([mode, ...rest]) {
+  process.chdir(git('rev-parse', '--show-toplevel').trim());
   const patterns = privatePatterns();
   if (mode === 'tree') return report(findHits(treeUnits(), patterns));
   if (mode === 'range' && rest.length) return report(findHits(rangeUnits(rest), patterns));
   if (mode === 'pre-push') {
-    const units = prePushRevs(rest[0] ?? '', readFileSync(0, 'utf8')).flatMap(rangeUnits);
-    return report(findHits(units, patterns));
+    const pushed = prePushRevs(rest[0] ?? '', readFileSync(0, 'utf8'));
+    return report(findHits([...pushed.units, ...pushed.revs.flatMap(rangeUnits)], patterns));
   }
   throw new Refusal('usage: leak-check.mjs tree | range <rev-list args> | pre-push <remote> <url>');
 }
