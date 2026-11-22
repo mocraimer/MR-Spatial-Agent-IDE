@@ -152,7 +152,7 @@ A spoken prompt is **typed into that session's input and not sent**, so you read
 - Say **"go"** (or "submit", or "send it"), or select **Go**, to send the draft of the session in front, once. With no draft in front, "go" sends nothing and says so.
 - Say **"scratch that"** (or "clear that"), or select **Scratch that**, to clear the draft without sending it. It clears the whole input line of that session, including anything you typed at the desk into it; Claude Code can bring it back with Ctrl-Y.
 - Say more, and it is **added** to the draft, in hold to talk and in keep listening alike. A long prompt said in pieces is one draft. After a clear, the next words start a new draft.
-- Or fix it at the desk: the draft is in the session's input, so the keyboard edits it, and Enter sends it.
+- Or fix it at the desk: the draft is in the session's input, so the keyboard edits it, and Enter sends it. The view only knows the drafts it typed: after you send or empty one at the desk, the bar can still say it waits until you say "go" or "scratch that" (which then do nothing harmful), and text you type yourself into an empty input is not a draft to the view: press Enter yourself.
 
 "Go" and "scratch that" act on the session in front. A draft in another session waits there, and the bar names it; bring it forward, then say "go". A draft is never typed into an agent that is waiting on a question, because the words would be taken as keys: answer the question with a key first.
 

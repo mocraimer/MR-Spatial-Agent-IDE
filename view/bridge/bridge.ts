@@ -164,8 +164,8 @@ export class Bridge {
     }
     const shelf = this.shelf();
     const taken = classify(heard, this.questions.waiting);
-    // A command waiting for its yes is dropped by anything the owner says but a yes or a no.
-    if (this.questions.kind === 'command' && !(taken.as === 'command' && taken.command.whenConfirming)) this.dropCommand('something else was said instead');
+    // A command waiting for its yes is dropped by anything the owner says but a yes or a no. Noise that came to no words is not something said.
+    if (this.questions.kind === 'command' && taken.as !== 'nothing' && !(taken.as === 'command' && taken.command.whenConfirming)) this.dropCommand('something else was said instead');
     return record(heard, standby ? await this.inStandby(taken, heard, shelf, receiver) : await this.execute(taken, heard, shelf, receiver));
   }
 

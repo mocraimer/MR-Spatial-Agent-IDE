@@ -98,6 +98,8 @@ test('with listening off, a command that only changes the view runs at once; any
     assert.equal((await s.sayStandby('some other words')).as, 'ignored');
     assert.equal(seen.ask, null);
     await s.sayStandby('scratch that');
+    assert.equal((await s.sayStandby('  ')).as, 'nothing', 'noise that came to no words');
+    assert.equal(seen.ask, 'Clear the draft in a1', 'is not something said: the question still waits');
     assert.match((await s.sayStandby('yes')).outcome, /^Answered yes: Clear the draft in a1/);
     assert.deepEqual(s.bridge.shelf().drafts, []);
     assert.equal(seen.both, false, 'a close and a command never wait together');
