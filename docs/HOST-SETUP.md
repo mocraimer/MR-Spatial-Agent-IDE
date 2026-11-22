@@ -18,7 +18,7 @@ The installer supplies the compiled host and locked runtime dependencies. Do not
 
 ### Build a source checkout
 
-The coordinator's spatial API is public only on the agent-system branch `feature/spatial-api` until its pull request is merged; [Coordinator build and type seam](COORDINATOR-BUILD.md) says where to get it and how to point `SPATIAL_COORDINATOR_DIST` at its build. The declarations are committed, so `npm ci` is enough to compile; verifying them against a selected build is described there. Then run:
+The coordinator's spatial API is in agent-system `main`; [Coordinator build and type seam](COORDINATOR-BUILD.md) says how to get it and how to point `SPATIAL_COORDINATOR_DIST` at its build. The declarations are committed, so `npm ci` is enough to compile; verifying them against a selected build is described there. Then run:
 
 ```sh
 npm run typecheck

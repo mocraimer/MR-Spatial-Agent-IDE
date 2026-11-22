@@ -2,7 +2,7 @@
 
 This page covers how the earlier host gets the coordinator's spatial API, at build time and in tests. It does not cover activating a coordinator or running the host; see [private host setup](HOST-SETUP.md) for that. The spatial view does not use any of this.
 
-The earlier host compiles against `agent-system/spatial-api`, the spatial API of the public [agent-system](https://github.com/mocraimer/agent-system) coordinator. Until [its pull request](https://github.com/mocraimer/agent-system/pull/14) from the branch `feature/spatial-api` is merged, the API exists only on that branch; once it is merged, clone `main` instead. This is a build-time dependency, not a published package or another execution service. The coordinator owns the API in its `src/spatial-api.ts` and emits declarations with its normal build. Product source holds no coordinator paths or aliases.
+The earlier host compiles against `agent-system/spatial-api`, the spatial API of the public [agent-system](https://github.com/mocraimer/agent-system) coordinator. It was added to agent-system `main` by [pull request 14](https://github.com/mocraimer/agent-system/pull/14), so a current `main` has it. This is a build-time dependency, not a published package or another execution service. The coordinator owns the API in its `src/spatial-api.ts` and emits declarations with its normal build. Product source holds no coordinator paths or aliases.
 
 ## Quick start
 
@@ -11,7 +11,7 @@ The earlier host compiles against `agent-system/spatial-api`, the spatial API of
 To run the tests that drive the real coordinator, or the earlier host, build a coordinator that has the spatial API and point `SPATIAL_COORDINATOR_DIST` at its compiled `dist/` directory:
 
 ```sh
-git clone --branch feature/spatial-api https://github.com/mocraimer/agent-system ../agent-system
+git clone https://github.com/mocraimer/agent-system ../agent-system
 (cd ../agent-system && npm ci && npm run build)
 export SPATIAL_COORDINATOR_DIST="$PWD/../agent-system/dist"
 npm run coordinator-api:verify -- --build-directory "$SPATIAL_COORDINATOR_DIST"
