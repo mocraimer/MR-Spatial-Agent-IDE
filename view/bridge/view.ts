@@ -3,8 +3,8 @@ import type { Server as NetServer } from 'node:net';
 import type { Server } from 'node:https';
 import { join } from 'node:path';
 import { ensureHostCertificate, PairingAuthority } from '../../host/src/auth.js';
-import { Bridge, type HelperAgent, type Transcriber } from './bridge.js';
-import { claudeHaiku, Helper, serveCloseRequests } from './helper.js';
+import { claudeAgents, HerdrLevelAgents, serveCloseRequests, type LevelAgents } from './agents.js';
+import { Bridge, type Transcriber } from './bridge.js';
 import { HerdrClient } from './herdr.js';
 import { DEFAULT_MIRROR, Mirror, type MirrorOptions } from './mirror.js';
 import { startServer } from './server.js';
@@ -17,9 +17,9 @@ export interface ViewOptions {
   port: number;
   showPairingCode: (code: string) => void;
   log: (line: string) => void;
-  /** Tests may stand in for the speech model or the helper; by default both are real. */
+  /** Tests may stand in for the speech model or the level agents; by default both are real. */
   speech?: Transcriber;
-  helper?: HelperAgent;
+  agents?: LevelAgents;
   mirror?: MirrorOptions;
   closeAnswerMs?: number;
 }
@@ -45,8 +45,8 @@ export async function startView(options: ViewOptions): Promise<RunningView> {
     speech = local;
   }
   const closeSocket = join(options.dataDirectory, 'helper.sock');
-  const helper = options.helper ?? new Helper(herdr, claudeHaiku(join(options.dataDirectory, 'helper')), closeSocket);
-  const bridge = new Bridge(herdr, mirror, speech, helper, options.closeAnswerMs);
+  const agents = options.agents ?? new HerdrLevelAgents(herdr, claudeAgents(join(options.dataDirectory, 'agents')), closeSocket);
+  const bridge = new Bridge(herdr, mirror, speech, agents, options.closeAnswerMs);
   const closeServer: NetServer = serveCloseRequests(closeSocket, ref => bridge.requestClose(ref));
   const pairing = new PairingAuthority(join(options.dataDirectory, 'pairing'));
   const tls = join(options.dataDirectory, 'tls');

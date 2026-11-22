@@ -1,7 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
-import type { HelperAgent } from '../bridge/bridge.js';
 import { plain } from '../shared/ansi.js';
-import { aim, emulateQuest, enterMixedReality, feed, pair, regionPoint, rig, say, ScriptedSpeech, setPressed, squeeze, tap as tapOn, viewState, wav, type Rig } from './fixture.js';
+import { aim, emulateQuest, enterMixedReality, feed, pair, regionPoint, rig, say, ScriptedSpeech, seatOf, setPressed, shownLight, squeeze, tap as tapOn, viewState, wav, type Rig } from './fixture.js';
 
 test.use({ ignoreHTTPSErrors: true, viewport: { width: 1400, height: 900 } });
 let r: Rig;
@@ -11,15 +10,12 @@ test.afterEach(async () => { await r?.stop(); });
 const LAYOUT = [
   { label: 'alpha', panes: [{ name: 'a1', kind: 'agent' as const }, { name: 'keys', kind: 'shell' as const }] },
   { label: 'beta', panes: [{ name: 'w1', kind: 'agent' as const }, { name: 'w2', kind: 'agent' as const }] },
-  { label: 'gamma', panes: [{ name: 'w3', kind: 'agent' as const }, { name: 'helper', kind: 'agent' as const }] },
+  { label: 'gamma', panes: [{ name: 'w3', kind: 'agent' as const }] },
 ];
 
 async function start(page: Page, xr = true): Promise<void> {
   speech = new ScriptedSpeech();
-  let helperPane = '';
-  const helper: HelperAgent = { show: async () => helperPane, order: async () => undefined };
-  r = await rig(LAYOUT, { speech, helper });
-  helperPane = r.bench.pane('helper');
+  r = await rig(LAYOUT, { speech });
   if (xr) await emulateQuest(page);
   await pair(page, r);
   await page.evaluate(() => window.viewTest.fakeMic());
@@ -28,7 +24,7 @@ async function start(page: Page, xr = true): Promise<void> {
 const front = async (page: Page) => (await viewState(page)).front;
 const focus = (name: string) => r.bench.client.call('pane.focus', { pane_id: r.bench.pane(name) });
 const plainText = async (name: string) => plain(await r.bench.client.read(r.bench.pane(name), 60));
-const light = async (page: Page, name: string) => (await viewState(page)).columns.flatMap(c => c.tiles).find(t => t.id === r.bench.pane(name))?.light;
+const light = async (page: Page, name: string) => shownLight(await viewState(page), r.bench.pane(name));
 
 for (const input of ['controller', 'hand'] as const) {
   test(`every action on the shelf can be done by ${input}`, async ({ page }) => {
@@ -92,9 +88,9 @@ for (const input of ['controller', 'hand'] as const) {
     await tap('controls-0', 'back');
     await expect.poll(() => front(page)).toBe(r.bench.pane('a1'));
 
-    // The helper comes forward, so the desk keyboard types orders to it.
-    await tap('controls-0', 'helper');
-    await expect.poll(async () => (await r.bench.client.snapshot()).focusedPaneId).toBe(r.bench.pane('helper'));
+    // The overview: the helper comes forward, so the desk keyboard types orders to it.
+    await tap('controls-0', 'overview');
+    await expect.poll(async () => { const seat = await seatOf(r.bench, 'helper'); return seat !== undefined && (await r.bench.client.snapshot()).focusedPaneId === seat; }, { timeout: 20_000 }).toBe(true);
     await focus('a1');
 
     // A close answered by hand.
@@ -199,5 +195,5 @@ test('next waiting visits each session that needs the owner, back returns, and t
   expect((await act('back')).ok).toBe(false);
 
   const surfaces = (await viewState(page)).surfaces;
-  expect(surfaces.filter(s => !/^(front|strip|talk|controls-\d|tile:.+|label:.+)$/.test(s)), 'no panel beyond the shelf, such as an Inbox').toEqual([]);
+  expect(surfaces.filter(s => !/^(front|strip|talk|controls-\d|tile:.+|label:.+|chip:.+)$/.test(s)), 'no panel beyond the shelf and its chips, such as an Inbox').toEqual([]);
 });

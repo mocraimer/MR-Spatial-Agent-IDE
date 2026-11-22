@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { dataDirectory } from '../bridge/config.js';
-import { claudeHaiku, Helper } from '../bridge/helper.js';
+import { claudeHelper, claudeProjectAgent, HerdrLevelAgents } from '../bridge/agents.js';
 import { LocalSpeech, modelDirectory } from '../bridge/speech.js';
 import { slug } from '../bench/phrases.js';
 import { plain } from '../shared/ansi.js';
@@ -50,16 +50,19 @@ test('a spoken order to the helper starts, renames and closes sessions, closing 
   ], (bench, data) => ({
     speech,
     closeAnswerMs: 25_000,
-    // A bench pane has a private HOME; the helper needs the owner's, where its login lives.
-    helper: new Helper(bench.client, { ...claudeHaiku(join(data, 'helper')), env: { HOME: homedir() } }, join(data, 'helper.sock')),
+    // A bench pane has a private HOME; the agents need the owner's, where their login lives.
+    agents: new HerdrLevelAgents(bench.client, {
+      helper: { ...claudeHelper(join(data, 'agents', 'helper')), env: { HOME: homedir() } },
+      project: { ...claudeProjectAgent(join(data, 'agents', 'project-agent')), env: { HOME: homedir() } },
+    }, join(data, 'helper.sock')),
   }));
   await pair(page, r);
   await page.evaluate(() => window.viewTest.fakeMic());
   await r.bench.client.call('pane.focus', { pane_id: r.bench.pane('a1') });
 
   // The helper is started the first time it is needed, as a session on the shelf.
-  await say(page, slug('show helper'));
-  await expect.poll(async () => (await viewState(page)).columns.some(c => c.project === 'helper'), { timeout: 60_000 }).toBe(true);
+  await say(page, slug('overview'));
+  await expect.poll(async () => (await viewState(page)).place, { timeout: 60_000 }).toEqual({ overview: true });
   await helperIdle();
   await r.bench.client.call('pane.focus', { pane_id: r.bench.pane('a1') });
 

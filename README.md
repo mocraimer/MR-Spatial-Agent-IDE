@@ -1,6 +1,6 @@
 # Spatial Agent Workspace
 
-Your Herdr sessions, agents and shells, around you in a Quest 3 in mixed reality at your desk, arranged by project and readable. You act by voice, hands, controllers or keyboard, and a small helper agent starts, renames and closes sessions on a spoken order.
+Your Herdr sessions, agents and shells, around you in a Quest 3 in mixed reality at your desk, one project at a time and readable. Each project has an agent of its own you can ask about the project and tell to start or prompt its sessions; at the overview, above all projects, a small helper agent answers across them and starts, renames and closes sessions. You act by voice, hands, controllers or keyboard.
 
 This is one person's own tool, published as is under the MIT license. It is built for its owner's desk and headset; no support is promised, and issues and pull requests may go unanswered. Read it, fork it, change it.
 
@@ -23,7 +23,7 @@ npm run view:setup   # once: fetches the speech model (about 31 MB)
 npm run view         # prints the address to open on the headset
 ```
 
-Start with the [user guide](docs/USER-GUIDE.md): the one-time Windows step for the Wi-Fi link (and how to undo it), pairing, the shelf, speaking, the helper, and what to do when something goes wrong. Architecture choices are recorded in [docs/adr](docs/adr/README.md).
+Start with the [user guide](docs/USER-GUIDE.md): the one-time Windows step for the Wi-Fi link (and how to undo it), pairing, the overview and the projects, speaking, the agents at each level, and what to do when something goes wrong. Architecture choices are recorded in [docs/adr](docs/adr/README.md).
 
 ## Checks
 
@@ -36,7 +36,7 @@ npm test
 npm run test:ui
 ```
 
-The view's tests never touch your Herdr. Each starts a Herdr of its own (`view/bench/bench.ts`) with scripted stand-in agents, and drives the page in desktop Chromium with Meta's WebXR emulator (IWER) for the immersive parts. The speech tests use phrases synthesized on the PC; regenerate them with `node build/view/bench/make-speech.js`. The test of the real helper spends model quota, so it runs only when asked: `VIEW_HELPER_TESTS=1 npx playwright test view/tests/helper.spec.ts`. `node build/view/bench/demo.js` runs the view on a bench shaped like a real desk, and `node --expose-gc build/view/bench/soak.js [minutes]` watches its memory under sustained output.
+The view's tests never touch your Herdr. Each starts a Herdr of its own (`view/bench/bench.ts`) with scripted stand-in agents, and drives the page in desktop Chromium with Meta's WebXR emulator (IWER) for the immersive parts. The speech tests use phrases synthesized on the PC; regenerate them with `node build/view/bench/make-speech.js`. The tests of the real helper and project agent spend model quota, so they run only when asked: `VIEW_HELPER_TESTS=1 npx playwright test view/tests/helper.spec.ts view/tests/project-agent.spec.ts`. `node build/view/bench/demo.js` runs the view on a bench shaped like a real desk, and `node --expose-gc build/view/bench/soak.js [minutes]` watches its memory under sustained output.
 
 What these checks cannot show is sharpness, comfort and your own voice in the real headset. Only wearing it shows those.
 

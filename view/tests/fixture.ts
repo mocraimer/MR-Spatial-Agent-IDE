@@ -1,12 +1,14 @@
 /**
- * A bench Herdr and the real bridge on it, for the page's tests. Speech and the helper are
- * stand-ins unless a test passes the real ones; every other part is the shipped code.
+ * A bench Herdr and the real bridge on it, for the page's tests. Speech and the level agents'
+ * programs are stand-ins unless a test passes the real ones; every other part is the shipped code,
+ * the code that finds, makes and starts the level agents' seats included.
  */
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Page } from '@playwright/test';
 import { HerdrBench, type BenchWorkspace } from '../bench/bench.js';
-import type { HelperAgent, Transcriber } from '../bridge/bridge.js';
+import { HerdrLevelAgents, type AgentOptions, type LevelAgents } from '../bridge/agents.js';
+import type { Transcriber } from '../bridge/bridge.js';
 import { REPO } from '../bridge/config.js';
 import { startView, type RunningView, type ViewOptions } from '../bridge/view.js';
 import type { ViewState } from '../shared/view-state.js';
@@ -20,10 +22,28 @@ export class ScriptedSpeech implements Transcriber {
   async transcribe(): Promise<string> { return this.queue.shift() ?? ''; }
 }
 
-export const noHelper: HelperAgent = {
-  show: async () => { throw new Error('no helper on this bench'); },
-  order: async () => { throw new Error('no helper on this bench'); },
-};
+export interface StandinAgentOptions {
+  /** Waits this long before the stand-in starts, as a slow agent would. */
+  delayMs?: number;
+  /** Makes every start fail with this message. */
+  fail?: string;
+}
+
+/**
+ * Level agents whose programs are the bench's stand-ins: the seats are found, made and labelled
+ * by the shipped code; only the program started in a seat differs.
+ */
+export function benchAgents(bench: HerdrBench, data: string, options: StandinAgentOptions = {}): LevelAgents {
+  const launcher = (name: string): AgentOptions => ({
+    kind: 'standin', args: [], cwd: bench.directory,
+    launch: async paneId => {
+      if (options.delayMs) await new Promise(resolve => setTimeout(resolve, options.delayMs));
+      if (options.fail) throw new Error(options.fail);
+      await bench.startPane(paneId, { name, kind: 'agent' });
+    },
+  });
+  return new HerdrLevelAgents(bench.client, { helper: launcher('helper'), project: launcher('project-agent') }, join(data, 'helper.sock'));
+}
 
 export async function rig(layout: BenchWorkspace[], options: Partial<ViewOptions> | ((bench: HerdrBench, data: string) => Partial<ViewOptions>) = {}): Promise<Rig> {
   const bench = await HerdrBench.start(layout);
@@ -36,7 +56,7 @@ export async function rig(layout: BenchWorkspace[], options: Partial<ViewOptions
     host: '127.0.0.1',
     port: 0,
     speech: new ScriptedSpeech(),
-    helper: noHelper,
+    agents: benchAgents(bench, data),
     log: line => logs.push(line),
     showPairingCode: () => undefined,
     ...extra,
@@ -57,6 +77,26 @@ export async function pair(page: Page, r: Rig): Promise<void> {
 
 export async function viewState(page: Page): Promise<ViewState> {
   return await page.evaluate(() => window.viewState());
+}
+
+/** Every session the page shows, with its light and project: tiles of the current place, and the sessions on each chip. */
+export function shownSessions(state: ViewState): { id: string; light: string; project: string }[] {
+  return [
+    ...state.columns.flatMap(c => c.tiles.filter(t => !t.closed).map(t => ({ id: t.id, light: t.light, project: c.project }))),
+    ...state.chips.filter(c => !c.overview).flatMap(c => c.sessions.map(s => ({ id: s.id, light: s.light, project: c.project }))),
+  ];
+}
+
+/** A session's light as the page shows it: on a tile of the current place, or on its project's chip. */
+export function shownLight(state: ViewState, paneId: string): string | undefined {
+  return shownSessions(state).find(s => s.id === paneId)?.light;
+}
+
+/** The pane of a level agent in the bench: the helper's seat, or the agent seat of a project. */
+export async function seatOf(bench: HerdrBench, workspaceLabel: string): Promise<string | undefined> {
+  const s = await bench.client.snapshot();
+  const ws = s.workspaces.find(w => w.label === workspaceLabel)?.id;
+  return s.panes.find(p => p.workspaceId === ws && (p.label === 'helper' || p.label === 'project agent'))?.id;
 }
 
 const IWER = readFileSync(join(REPO, 'node_modules', 'iwer', 'build', 'iwer.min.js'), 'utf8');

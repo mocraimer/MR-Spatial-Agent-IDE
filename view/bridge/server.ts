@@ -90,6 +90,7 @@ export function startServer(options: ServerOptions): Promise<Server> {
     if (req.method === 'POST' && path === '/api/action') {
       const body = await json(req, 4096);
       if (typeof body.focus === 'string') return send(res, 200, await bridge.act({ kind: 'focus', sessionId: body.focus }));
+      if (typeof body.go === 'string') return send(res, 200, await bridge.act({ kind: 'go', projectId: body.go }));
       let found;
       try { found = command(String(body.command)); } catch { return send(res, 400, { error: 'Unknown action.' }); }
       if (!('bridge' in found.run)) return send(res, 400, { error: 'That action is done by the page.' });

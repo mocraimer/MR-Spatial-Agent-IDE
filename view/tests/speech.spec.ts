@@ -1,12 +1,11 @@
 import { expect, test, type Page } from '@playwright/test';
-import type { HelperAgent } from '../bridge/bridge.js';
 import { dataDirectory } from '../bridge/config.js';
 import { LocalSpeech, modelDirectory, SPEECH_MODEL } from '../bridge/speech.js';
 import { normalize } from '../bridge/heard.js';
 import { COMMANDS } from '../shared/actions.js';
 import { plain } from '../shared/ansi.js';
 import { slug } from '../bench/phrases.js';
-import { aim, emulateQuest, enterMixedReality, pair, press, regionPoint, rig, say, viewState, type Rig } from './fixture.js';
+import { aim, emulateQuest, enterMixedReality, pair, press, regionPoint, rig, say, viewState, type Rig, seatOf, shownLight } from './fixture.js';
 
 // Real speech: the local model on audio synthesized by bench/make-speech.ts, fed through the
 // page's microphone path. Only the microphone device itself is replaced.
@@ -15,7 +14,6 @@ test.describe.configure({ mode: 'serial' });
 
 let r: Rig;
 const heard: { said: string; heard: string }[] = [];
-const orders: string[] = [];
 test.afterEach(async () => { await r?.stop(); });
 test.afterAll(() => {
   const digits = (t: string) => normalize(t).replace(/\b(one|two|three)\b/g, w => String(['one', 'two', 'three'].indexOf(w) + 1));
@@ -27,14 +25,10 @@ async function start(page: Page): Promise<void> {
   const speech = new LocalSpeech(modelDirectory(dataDirectory()));
   await speech.load();
   test.skip(!speech.state().ready, 'speech model not set up: npm run view:setup');
-  orders.length = 0;
-  let helperPane = '';
-  const helper: HelperAgent = { show: async () => helperPane, order: async text => { orders.push(text); } };
   r = await rig([
     { label: 'alpha', panes: [{ name: 'agent1', kind: 'agent' }, { name: 'keys', kind: 'shell' }] },
-    { label: 'beta', panes: [{ name: 'waiter', kind: 'agent' }, { name: 'helper', kind: 'agent' }] },
-  ], { speech, helper });
-  helperPane = r.bench.pane('helper');
+    { label: 'beta', panes: [{ name: 'waiter', kind: 'agent' }] },
+  ], { speech });
   await emulateQuest(page);
   await pair(page, r);
   await page.evaluate(() => window.viewTest.fakeMic());
@@ -77,7 +71,7 @@ test('hold to talk: keys, showing, next waiting and back, prompts and helper ord
   await utter(page, 'show two');
   await expect.poll(async () => (await viewState(page)).front).toBe(r.bench.pane('keys'));
   await r.bench.type('waiter', '/block');
-  await expect.poll(async () => (await viewState(page)).columns.flatMap(c => c.tiles).find(t => t.id === r.bench.pane('waiter'))?.light).toBe('blocked');
+  await expect.poll(async () => shownLight(await viewState(page), r.bench.pane('waiter'))).toBe('blocked');
   await utter(page, 'next waiting');
   await expect.poll(async () => (await viewState(page)).front).toBe(r.bench.pane('waiter'));
   await utter(page, 'back');
@@ -92,12 +86,17 @@ test('hold to talk: keys, showing, next waiting and back, prompts and helper ord
     await expect.poll(async () => normalize(await paneText(r.bench.pane('agent1')))).toContain(`received ${normalize(phrase)}`);
   }
 
-  // An order to the helper, and showing the helper.
+  // An order to the helper (started for it, the order held until it is ready), and the overview.
   const order = await utter(page, 'helper, count the files in the current folder');
   expect(order).toMatchObject({ as: 'helper', ok: true });
-  expect(normalize(orders.at(-1) ?? '')).toBe('count the files in the current folder');
-  await utter(page, 'show helper');
-  await expect.poll(async () => (await viewState(page)).front).toBe(r.bench.pane('helper'));
+  expect((await viewState(page)).front, 'an order to the helper does not change what is in front').toBe(r.bench.pane('agent1'));
+  await expect.poll(async () => { const seat = await seatOf(r.bench, 'helper'); return seat ? normalize(await paneText(seat)) : ''; }, { timeout: 20_000 }).toContain('received count the files in the current folder');
+  await utter(page, 'overview');
+  await expect.poll(async () => (await viewState(page)).front).toBe(await seatOf(r.bench, 'helper'));
+  expect((await viewState(page)).place).toEqual({ overview: true });
+  // Going into a project by voice: its agent comes to the front.
+  await utter(page, 'go to beta');
+  await expect.poll(async () => (await viewState(page)).front, { timeout: 20_000 }).toBe(await seatOf(r.bench, 'beta'));
 });
 
 test('the listening switch, the view\'s own actions, and a close answered by voice', async ({ page }) => {

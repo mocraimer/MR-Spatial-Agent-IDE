@@ -3,10 +3,13 @@
  * It asks the bridge, which shows the owner the session's name and waits for their yes.
  */
 import { createConnection } from 'node:net';
+import { join } from 'node:path';
 import type { CloseAnswer } from './bridge.js';
+import { dataDirectory } from './config.js';
 
 const ref = process.argv.slice(2).join(' ').trim();
-const socketPath = process.env.SPATIAL_VIEW_HELPER_SOCKET;
+// A pane that came back after a Herdr restart may have lost the variable: the bridge's default place still holds.
+const socketPath = process.env.SPATIAL_VIEW_HELPER_SOCKET ?? join(dataDirectory(), 'helper.sock');
 const say: Record<CloseAnswer, string> = {
   closed: `Closed ${ref}: the owner said yes.`,
   declined: `Not closed: the owner said no to closing ${ref}.`,

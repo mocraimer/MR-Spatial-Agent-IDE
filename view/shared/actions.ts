@@ -11,11 +11,14 @@ export type PageAction = 'scroll-up' | 'scroll-down' | 'scroll-bottom' | 'recent
 /** Done by the bridge: everything that reaches Herdr. */
 export type BridgeAction =
   | { kind: 'focus'; sessionId: string }
+  /** Go into a project: its agent comes to the front, started the first time. */
+  | { kind: 'go'; projectId: string }
+  /** Go to the overview: the helper comes to the front. */
+  | { kind: 'overview' }
   | { kind: 'next-waiting' }
   | { kind: 'back' }
   | { kind: 'key'; key: KeyName }
-  | { kind: 'confirm-close'; answer: boolean }
-  | { kind: 'helper' };
+  | { kind: 'confirm-close'; answer: boolean };
 
 export interface Command {
   id: string;
@@ -54,7 +57,7 @@ export const COMMANDS: readonly Command[] = [
   { id: 'bigger', label: 'A+', say: ['bigger text', 'larger text'], run: { page: 'text-bigger' } },
   { id: 'smaller', label: 'A−', say: ['smaller text'], run: { page: 'text-smaller' } },
   { id: 'exit', label: 'Exit MR', say: ['leave mixed reality', 'exit mixed reality', 'exit'], run: { page: 'exit-mr' } },
-  { id: 'helper', label: 'Helper', say: ['show helper', 'helper'], run: { bridge: { kind: 'helper' } } },
+  { id: 'overview', label: 'Overview', say: ['overview', 'show overview', 'go to overview', 'go to the overview', 'all projects', 'show helper', 'helper'], run: { bridge: { kind: 'overview' } } },
   { id: 'confirm', label: 'Yes, close', say: ['yes', 'confirm', 'yes close it', 'close it'], run: { bridge: { kind: 'confirm-close', answer: true } }, whenConfirming: true },
   { id: 'decline', label: 'No', say: ['no', 'cancel', 'dont close', 'keep it'], run: { bridge: { kind: 'confirm-close', answer: false } }, whenConfirming: true },
 ];

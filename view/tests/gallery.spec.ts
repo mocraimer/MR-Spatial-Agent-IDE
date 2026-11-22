@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { OWNER_SHAPE } from '../bench/bench.js';
-import { aim, emulateQuest, enterMixedReality, pair, press, regionPoint, rig, viewState, type Rig } from './fixture.js';
+import { aim, emulateQuest, enterMixedReality, pair, press, regionPoint, rig, viewState, type Rig, shownSessions } from './fixture.js';
 
 // Each state the view can be in, rendered in the emulated headset, with what the owner should
 // see checked and a picture kept for review: no sessions, many, lights, a session closing, the
@@ -43,7 +43,7 @@ test('many sessions with every light, glanced at left and right', async ({ page 
   await r.bench.type('guide', '/status idle');
   await r.bench.type('bridge', '/status unknown');
   await enterMixedReality(page);
-  await expect.poll(async () => (await viewState(page)).columns.flatMap(c => c.tiles.map(t => t.light)).sort().join()).toContain('blocked');
+  await expect.poll(async () => shownSessions(await viewState(page)).map(t => t.light).sort().join()).toContain('blocked');
   await shot(page, '02-many-ahead');
   await look(page, 55);
   await shot(page, '03-many-left');

@@ -1,35 +1,47 @@
 import { expect, test } from '@playwright/test';
 import { OWNER_SHAPE } from '../bench/bench.js';
-import { aim, emulateQuest, enterMixedReality, pair, press, rig, viewState, type Rig } from './fixture.js';
+import { aim, emulateQuest, enterMixedReality, pair, press, rig, seatOf, shownSessions, viewState, type Rig } from './fixture.js';
 
 test.use({ ignoreHTTPSErrors: true, viewport: { width: 1600, height: 1000 } });
 
 let r: Rig;
 test.afterEach(async () => { await r?.stop(); });
 
-test('every pane Herdr lists is a task window under its project, with live text and a light', async ({ page }) => {
+test('every pane Herdr lists is shown under its project: a tile in the project in front, a light on every other project\'s chip', async ({ page }) => {
   test.setTimeout(60_000);
   r = await rig(OWNER_SHAPE);
   await pair(page, r);
   const herdr = await r.bench.client.snapshot();
   const labels = new Map(herdr.workspaces.map(w => [w.id, w.label]));
-  await expect.poll(async () => (await viewState(page)).columns.flatMap(c => c.tiles).length).toBe(herdr.panes.length);
+  await expect.poll(async () => shownSessions(await viewState(page)).length).toBe(herdr.panes.length);
   const s = await viewState(page);
-  const shown = s.columns.flatMap(c => c.tiles.map(t => [t.id, c.project] as const)).sort();
+  const shown = shownSessions(s).map(x => [x.id, x.project] as const).sort();
   expect(shown).toEqual(herdr.panes.map(p => [p.id, labels.get(p.workspaceId) as string] as const).sort());
+  const front = herdr.panes.find(p => p.id === herdr.focusedPaneId);
+  expect(s.place).toEqual({ overview: false, projectId: front?.workspaceId, project: labels.get(front?.workspaceId ?? '') });
+  expect(s.columns.flatMap(c => c.tiles.map(t => t.id)).sort(), 'only the project in front has tiles').toEqual(herdr.panes.filter(p => p.workspaceId === front?.workspaceId).map(p => p.id).sort());
   await page.screenshot({ path: test.info().outputPath('shelf-owner-shape.png') });
 });
 
-test('the shelf in mixed reality: one session large, every other a tile; a controller or a hand brings a tile forward', async ({ page }) => {
+test('in mixed reality: a project\'s sessions around the front, the others as chips; a controller or a hand brings a tile forward or goes into a project', async ({ page }) => {
   test.setTimeout(90_000);
   r = await rig(OWNER_SHAPE);
   await emulateQuest(page);
   await pair(page, r);
   await enterMixedReality(page);
-  await expect.poll(async () => (await viewState(page)).columns.flatMap(c => c.tiles).length).toBe(10);
-  await page.screenshot({ path: test.info().outputPath('mr-eight-agents.png') });
+  await r.bench.client.call('pane.focus', { pane_id: r.bench.pane('ledger') });
+  await expect.poll(async () => (await viewState(page)).columns.flatMap(c => c.tiles).length).toBe(3);
+  expect((await viewState(page)).chips.map(c => c.project)).toEqual(['Overview', ...OWNER_SHAPE.slice(1).map(w => w.label)]);
+  await page.screenshot({ path: test.info().outputPath('mr-inside-a-project.png') });
 
-  for (const [input, name] of [['controller', 'payouts'], ['hand', 'terraform']] as const) {
+  // A hand on the infra chip goes into infra: its agent comes to the front.
+  const infra = r.bench.workspaces.get('infra') as string;
+  await aim(page, 'hand', `chip:${infra}`);
+  await press(page, 'hand');
+  await expect.poll(async () => (await viewState(page)).place).toEqual({ overview: false, projectId: infra, project: 'infra' });
+  await expect.poll(async () => (await viewState(page)).front, { timeout: 20_000 }).toBe(await seatOf(r.bench, 'infra'));
+
+  for (const [input, name] of [['controller', 'alerts'], ['hand', 'terraform']] as const) {
     const id = r.bench.pane(name);
     await aim(page, input, `tile:${id}`);
     await press(page, input);
@@ -49,7 +61,15 @@ test('lights, sessions starting, closing, renamed and moved, and the front text 
     { label: 'beta', panes: [{ name: 'b1', kind: 'agent' }] },
   ]);
   await pair(page, r);
-  const tile = async (id: string) => (await viewState(page)).columns.flatMap(c => c.tiles.map(t => ({ ...t, project: c.project }))).find(t => t.id === id);
+  // A session as shown: a tile in the project in front (with its name), or a light on its project's chip.
+  const tile = async (id: string) => {
+    const s = await viewState(page);
+    const t = s.columns.flatMap(c => c.tiles.map(x => ({ ...x, project: c.project }))).find(x => x.id === id);
+    if (t) return t;
+    const chip = s.chips.find(c => c.sessions.some(x => x.id === id));
+    const on = chip?.sessions.find(x => x.id === id);
+    return chip && on ? { id, light: on.light, project: chip.project, name: undefined, closed: false } : undefined;
+  };
   await r.bench.client.call('pane.focus', { pane_id: r.bench.pane('a1') });
   await expect.poll(async () => (await tile(r.bench.pane('sh1')))?.light).toBe('shell');
 
@@ -79,7 +99,9 @@ test('lights, sessions starting, closing, renamed and moved, and the front text 
   await expect.poll(async () => (await tile(r.bench.pane('g1')))?.project).toBe('gamma');
 
   await r.bench.client.call('pane.rename', { pane_id: r.bench.pane('g1'), label: 'renamed-agent' });
+  await r.bench.client.call('pane.focus', { pane_id: r.bench.pane('g1') });
   await expect.poll(async () => (await tile(r.bench.pane('g1')))?.name).toBe('renamed-agent');
+  await r.bench.client.call('pane.focus', { pane_id: r.bench.pane('a1') });
   await r.bench.client.call('workspace.rename', { workspace_id: r.bench.workspaces.get('gamma') as string, label: 'gamma-renamed' });
   await expect.poll(async () => (await tile(r.bench.pane('g1')))?.project).toBe('gamma-renamed');
 
@@ -89,7 +111,6 @@ test('lights, sessions starting, closing, renamed and moved, and the front text 
   expect((await tile(r.bench.pane('sh1')))?.closed ?? true, 'the old id is not shown as a live session').toBe(true);
 
   await r.bench.client.call('pane.close', { pane_id: r.bench.pane('g1') });
-  await expect.poll(async () => (await tile(r.bench.pane('g1')))?.closed).toBe(true);
   await expect.poll(async () => await tile(r.bench.pane('g1')), { timeout: 10_000 }).toBeUndefined();
 
   // The front session's text keeps up, complete and in order.
@@ -120,8 +141,8 @@ test('each way the mirror stops being current says so and what to do, and recove
   await r.view.stop();
   await expect.poll(stale).toContain('No link to the view bridge on the PC');
   const { startView } = await import('../bridge/view.js');
-  const { ScriptedSpeech, noHelper } = await import('./fixture.js');
-  r.view = await startView({ herdrSocket: r.bench.socketPath, dataDirectory: r.data, host: '127.0.0.1', port, speech: new ScriptedSpeech(), helper: noHelper, log: () => undefined, showPairingCode: () => undefined });
+  const { ScriptedSpeech, benchAgents } = await import('./fixture.js');
+  r.view = await startView({ herdrSocket: r.bench.socketPath, dataDirectory: r.data, host: '127.0.0.1', port, speech: new ScriptedSpeech(), agents: benchAgents(r.bench, r.data), log: () => undefined, showPairingCode: () => undefined });
   await expect.poll(stale, { timeout: 20_000 }).toBeNull();
 
   // The headset's own link lost, then back.

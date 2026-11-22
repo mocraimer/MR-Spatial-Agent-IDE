@@ -1,4 +1,4 @@
-import type { HerdrLink, PendingClose, SpeechState, Utterance } from './messages.js';
+import type { HerdrLink, PendingClose, Role, SpeechState, Utterance } from './messages.js';
 
 /** What the page reports through `window.viewState()`: for tests, and for an agent driving it. */
 export interface ViewState {
@@ -11,7 +11,14 @@ export interface ViewState {
   emptyHint: string | null;
   receiver: string | null;
   frontText: string[];
-  columns: { projectId: string; project: string; side: 'left' | 'right'; tiles: { n: number; id: string; name: string; light: string; closed: boolean; inFront: boolean }[] }[];
+  /** Where the owner is: the overview, or inside one project. */
+  place: { overview: true } | { overview: false; projectId: string; project: string };
+  /** Why the level agent in front cannot take words yet, or null. */
+  agentNote: string | null;
+  /** The other projects as chips (inside a project) or nodes (at the overview); angle in degrees from straight ahead. */
+  chips: { projectId: string; project: string; overview: boolean; sessions: { id: string; light: string }[]; angle: number; width: number }[];
+  /** The sessions on the shelf: the current project's, or at the overview those of no project. */
+  columns: { projectId: string; project: string; side: 'left' | 'right'; width: number; tiles: { n: number; id: string; name: string; role: Role; light: string; closed: boolean; inFront: boolean }[] }[];
   scroll: number;
   scale: number;
   mic: { mode: 'hold' | 'switch'; open: boolean; problem: string | null };

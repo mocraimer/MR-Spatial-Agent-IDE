@@ -1,6 +1,6 @@
 # Spatial view: user guide
 
-Your Herdr sessions around you in the Quest 3, in mixed reality at your desk. Each agent and shell gets a window, grouped by project. The session you are working with is large in front of you, and every other session is a small live tile with a state light. You act by voice, hand, controller or keyboard. A small helper agent starts, renames and closes sessions when you tell it to.
+Your Herdr sessions around you in the Quest 3, in mixed reality at your desk. You work inside one project at a time: its sessions are around you, the session you are working with large in front, and every other project is a small chip with its state lights. Each project has an agent of its own that you can ask about the project and tell to start or prompt its sessions. Above all projects is the overview, where the helper is in front. You act by voice, hand, controller or keyboard.
 
 The view shows your real sessions. Herdr owns them: the view asks Herdr to bring a session forward and shows what Herdr reports. Your desk keyboard therefore types into the same session the view shows in front. Sandboxed agents are a separate, opt-in path ([earlier Quest app guide](QUEST-APP-GUIDE.md)); nothing here uses it.
 
@@ -43,18 +43,31 @@ The view shows your real sessions. Herdr owns them: the view asks Herdr to bring
 
 To stop, press Ctrl-C in the terminal running `npm run view`. The view changes nothing in Herdr's own configuration.
 
-## The shelf
+## Where you are: the overview and the projects
+
+A **project** is a Herdr workspace. The view shows one place at a time, and the place follows Herdr's focus: when you or the desk keyboard bring a session forward, you are in that session's project.
 
 ```text
- project A      +-------------------+      project C
- [1] [2]        |  session in front |      [5]
-                |  full size        |
- project B      |                   |      project D
- [3]            +-------------------+      [6] [7]
+ INSIDE A PROJECT                                   THE OVERVIEW
+
+ [Overview] [api o] [web ~] [docs !1] ...          [api o] [shop o] [web ~]
+                                                    [infra o~] [docs !1] ...
+ +------+  +------------------+  +------+
+ | task |  | session in front |  | task |                +------------------+
+ |      |  | (receiver)       |  |      |       [blog]   | the helper       |
+ +------+  +------------------+  +------+                | in front         |
+                                                         +------------------+
 ```
 
-- **In front:** the session that has Herdr's focus. This is the **receiver**: prompts and keys go here. Its name is always shown in the strip above it, under "Receiver", and its panel has a blue edge (amber while it waits on you).
-- **Tiles:** every other session, numbered, with its last lines and a light. The front session's own place on the shelf stays as a dashed outline marked "in front". The numbers follow Herdr's project and pane order, and do not move when you change sessions.
+- **Inside a project:** only that project's sessions are on the shelf, beside the one in front. Every other project is a **chip** above: its name, one light per session, and an amber edge with "!" and a count when one of its sessions waits on you. The first chip is **Overview**.
+- **The overview:** every project is a larger chip, a **node**. The helper is in front, and the sessions that belong to no project (those in the helper's workspace) are beside it.
+- **Going somewhere:** select a chip or node, or say "go to" and the project's name ("go to docs"). Say "overview" for the overview. A name that matches nothing goes nowhere, and the strip says so; your words are never sent to a session instead.
+- **Going into a project always puts its agent in front**, also when you last worked with a task there. Select a task's tile, or say "show" and its number or name, to work with it.
+
+## The shelf
+
+- **In front:** the session that has Herdr's focus. This is the **receiver**: prompts and keys go here. Its name is shown in the strip above it, the place you are in is on the right of its title, and its panel has a blue edge (amber while it waits on you).
+- **Tiles:** the other sessions of the place you are in, numbered, with their last lines and a light. A project's agent and the helper have a blue bar on the left of their tile. The front session's own place stays as a dashed outline marked "in front". Numbers count across all projects in Herdr's order, so "show 3" works from anywhere, and they do not move when you change sessions.
 - **Lights:**
 
 | Light | Means |
@@ -67,7 +80,21 @@ To stop, press Ctrl-C in the terminal running `npm run view`. The view changes n
 | grey box with ">_" | a shell, not an agent |
 
 - **Strip above the front session:** the receiver, the microphone button (red = listening), the last thing heard with what it was taken as and where it went, and the link state.
-- **Two rows of buttons below it:** on the first row moving between sessions, scrolling, text size and re-centering, the helper, and the listening mode; on the second the keys sent to the receiver.
+- **Below it:** the **Talk** button, then two rows of buttons: on the first, moving between sessions, scrolling, text size and re-centering, **Overview**, and **Exit MR**; on the second, the keys sent to the receiver.
+
+## Talking to the agents at each level
+
+| Level | Who hears a plain sentence | What it does |
+| --- | --- | --- |
+| A task session | that session, when it is in front | its own work |
+| A project | the project's agent, in front when you go in | answers about the project's sessions; on your order, starts sessions in the project and gives them prompts |
+| The overview | the helper | answers across all projects; starts, renames and closes sessions; other quick tasks |
+
+**The project's agent** is a real Claude Code session in the project's workspace, in a tab labelled "project agent". It starts the first time you go into the project; going in sends it nothing. Ask it "what is waiting here?" or "what is everyone doing?", and it reads the project's sessions and answers in its window. Tell it "start an agent on the flaky test" or "tell the test session to rebase", and it does that in this project only. It never acts unasked, and it does not do the project's work itself. Anything else, such as changing a file, running a command that changes something, or acting on another project, waits for your approval: its window shows the question and its light turns amber, and you answer with the keys below the front session. It runs on Claude Code's default model and works in its own folder (see *What this rests on*).
+
+**The helper** is in front at the overview. From inside any project, start a sentence with "helper" to reach it without leaving: "helper, start a shell in project docs". Orders with no project named start the session in the helper's workspace, so it shows at the overview.
+
+While an agent is starting, an amber band across its window says so; speak to it once the band is gone. Words spoken to it before then are not sent, and the strip says so. An order to the helper while it starts is the one exception: it waits and is delivered when the helper is ready, and a note says so. If an agent asks something as it starts (the first time, Claude Code may ask whether to trust its folder), its window shows the question: answer it with the keys. If it does not start, the band says why; go to the project again to retry.
 
 ## Acting
 
@@ -75,7 +102,9 @@ Point a hand or controller at something. A ray shows where you point. Pinch (han
 
 | Goal | By hand or controller | Say |
 | --- | --- | --- |
-| Bring a session forward | Select its tile | "show 3", "show docs" (a number, name or project) |
+| Go into a project | Select its chip or node | "go to docs" |
+| Go to the overview | **Overview**, or the Overview chip | "overview" |
+| Bring a session forward | Select its tile | "show 3", "show logs" (a number or name) |
 | Next session that needs you | **Next waiting** | "next waiting" |
 | Return to where you were before "next waiting" | **Back** | "back" |
 | Press a key in the receiver | **Enter, Esc, Ctrl-C, ↑, ↓, Tab, y, n, 1, 2, 3** | "press enter", "press escape", "interrupt", "press up", "press down", "press tab", "press yes", "press no", "press one", "press two", "press three" |
@@ -83,12 +112,11 @@ Point a hand or controller at something. A ray shows where you point. Pinch (han
 | Larger or smaller text | **A+, A−** | "bigger text", "smaller text" |
 | Put the shelf in front of you again | **Recenter** | "recenter" |
 | Leave mixed reality, back to the flat page | **Exit MR** (or the Quest's Meta button) | "leave mixed reality" |
-| Show the helper | **Helper** | "show helper" |
 | Answer a close the helper asks about | **Yes, close** / **No, keep it** in the strip, or the y / n key | "yes" / "no" |
 | Change the listening mode | the last button of the first row, which shows the mode in use | "hold to talk", "keep listening" |
 | Stop listening | Select the microphone | "stop listening" |
 
-A command must be the whole utterance. "back up the database before you migrate" is a prompt, not "back". When "next waiting" finds nothing waiting, it says so.
+A command must be the whole utterance. "back up the database before you migrate" is a prompt, not "back". When "next waiting" finds nothing waiting, it says so. "Next waiting" goes to the waiting session itself, in whatever project it is, and "back" returns you to the session and project you came from.
 
 To type, use the keyboard at the desk: it types into Herdr's focused session, which is the one in front.
 
@@ -101,16 +129,20 @@ Listening is off whenever the page opens, and turns off when you leave mixed rea
 
 Anything that is not a command is a **prompt**. It goes to the session that was in front when you started speaking, even if you bring another session forward before you finish. It is sent when you stop talking, with no confirming step. The strip always shows what was heard, whether it was taken as a command, a prompt or a helper order, and where it went. If a word was misheard, fix it by hand: press Esc or Ctrl-C in that session, or type at the desk.
 
-## The helper
+## Closing, and what the agents may do
 
-The helper is a small, fast agent (Claude Code with Haiku) in its own Herdr session named "helper". It is a tile on the shelf, so you can read what it did. It starts the first time you need it. Speak to it by starting with "helper":
+The helper is a small, fast agent (Claude Code with Haiku) in a tab labelled "helper" in the Herdr workspace labelled "helper", which is the overview. You can read what it did in its window. It starts the first time you need it. Speak to it by starting with "helper":
 
 - "helper, start a shell in project docs"
 - "helper, start a claude agent in project infra"
 - "helper, rename the shell in project docs to logs"
 - "helper, how much disk is free?"
 
-It runs these without asking you, using your account and access, with one exception. **Closing asks first:** the helper names the session in the strip, and nothing closes until you say "yes" or select **Yes, close**. With no answer within two minutes, or a "no", it stays open. This holds even if the order says not to ask: a hook outside the helper refuses any other way of closing. You can also type orders to the helper: select **Helper** and type at the desk.
+It runs these without asking you, using your account and access, with one exception. **Closing asks first,** for the helper and for every project's agent: the agent names the session in the strip, and nothing closes until you say "yes" or select **Yes, close**. With no answer within two minutes, or a "no", it stays open. This holds even if the order says not to ask: a hook outside the agents refuses any other way of closing, and it keeps working after Herdr restarts them. You can also type orders to the helper: say "overview" or select **Overview**, and type at the desk.
+
+A project's agent has less reach than the helper: on its own it only reads the project's sessions, starts sessions in the project and gives them prompts. Everything else waits for your approval in its window.
+
+**To remove a project's agent,** close its "project agent" tab like any session (ask the helper, or close it in Herdr). Going into the project again starts a new one.
 
 ## When something goes wrong
 
@@ -124,6 +156,9 @@ A window that is not current says so on an amber band, and says what to do. It r
 | This headset is not paired | Leave mixed reality (Meta button), choose **Show a new code on the PC**, and pair again. |
 | Closed in Herdr — nothing to do | The session ended; its tile leaves after a few seconds. |
 | No sessions open in Herdr | Start a session in Herdr, or ask the helper to; it appears by itself. |
+| The helper / This project's agent is starting | Wait a few seconds; the band goes when it is ready. |
+| It asks something as it starts | Answer the question in its window with the keys below it. |
+| It did not start (…) | Go to the project again, or say "overview" for the helper, to retry. If it keeps failing, check that `claude` runs in a terminal. |
 | Mic unavailable: Mic refused | Allow the microphone for this page in the Quest browser's site settings, then select the microphone again. |
 | Speech unavailable: Not set up on the PC | Run `npm run view:setup` once and restart the view. |
 
@@ -142,11 +177,11 @@ netsh interface portproxy delete v4tov4 listenaddress=0.0.0.0 listenport=47851
 Remove-NetFirewallRule -DisplayName "Herdr spatial view 47851"
 ```
 
-Then delete the view's data directory, `~/.local/share/spatial-agent-workspace/view`. It holds the pairing, the certificate, the speech model and the helper's settings. To forget the headset without undoing anything else, delete only its `pairing` folder.
+Then delete the view's data directory, `~/.local/share/spatial-agent-workspace/view`. It holds the pairing, the certificate, the speech model and the agents' settings. To forget the headset without undoing anything else, delete only its `pairing` folder.
 
 ## What this rests on
 
 - **Herdr 0.9.3, socket protocol 22.** If Herdr's protocol changes, the view says so and shows no sessions until they match.
 - **Quest browser:** a WebXR `immersive-ar` session, hand tracking, controllers, and the microphone, on a page with a self-signed certificate. The text is drawn by the view itself onto WebGL quads; compositor layers are not used.
 - **Speech:** Moonshine tiny, English, 8-bit weights, about 31 MB, on the PC's CPU through `@huggingface/transformers` and ONNX Runtime. About 0.1 s per utterance on this PC.
-- **Helper:** Claude Code with `--model haiku`, using your existing Claude login.
+- **Level agents:** Claude Code, using your existing Claude login: the helper with `--model haiku`, each project's agent on Claude Code's default model. Their settings, the closing hook and their instructions live in `~/.local/share/spatial-agent-workspace/view/agents` (one folder for the helper, one shared by all project agents), which is also where they work, so an agent Herdr restarts by itself keeps them. A project agent is found again by its tab label "project agent", the helper by its label "helper"; renaming those tabs makes the view start new ones.

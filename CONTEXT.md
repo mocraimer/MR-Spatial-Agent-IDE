@@ -12,8 +12,9 @@ A personal Quest VR/MR workspace for directing real agents and reviewing their w
 - **Inbox:** owner requests across all projects, with direct destination links and a separate return to origin.
 - **Coordinator:** agent-system, authoritative for execution permissions, capacity, attempts and evidence. Product state links to those records instead of replacing them.
 - **Session:** in the spatial view, one Herdr pane: an agent or a shell. Herdr owns it; the view shows it as a tile or in front.
-- **Shelf:** the spatial view's arrangement of the owner's Herdr sessions: one session large in front (the receiver), every other session a small numbered tile with a state light, grouped by project to the left and right.
+- **Shelf:** the spatial view's arrangement of one place's sessions: one session large in front (the receiver), the place's other sessions as numbered tiles with state lights beside it, and every other project as a chip with its lights above.
 - **Waiting:** a session Herdr reports as `blocked`, an agent asking a question or awaiting approval. "Next waiting" brings the next one to the front and "back" returns; the spatial view has no Inbox panel.
-- **Helper:** a small, fast agent that is itself a Herdr session; spoken orders starting with "helper" start, rename and close sessions. A close happens only after the owner's yes.
+- **Helper:** the overview's agent: a small, fast agent that is itself a Herdr session; it answers across projects, and spoken orders starting with "helper" reach it from anywhere. A close happens only after the owner's yes.
 - **Project agent:** a project's own agent, a real Herdr session in that project's workspace that knows of the project's other sessions. Inside a project it is the receiver while no task session is selected.
 - **Overview:** in the spatial view, the space above all projects: each project is one node with its lights, beside the sessions that belong to no project. Its agent is the helper.
+- **Chip:** a project shown as one small card with its name and one state light per session; at the overview the larger form is a node.

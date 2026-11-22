@@ -365,6 +365,7 @@ export function drawTile(canvas: HTMLCanvasElement, number: number, s: Session, 
   ctx.fillStyle = light === 'idle' || light === 'unknown' || light === 'shell' ? DIM : LIGHTS[light].colour;
   ctx.font = `600 24px ${SANS}`; ctx.textAlign = 'right';
   ctx.fillText(lightWord(light), w - 26, top + 52);
+  if (s.role !== 'task') { ctx.fillStyle = ACCENT; roundRect(ctx, 0, 24, 8, h - 48, 4); ctx.fill(); }
   ctx.textAlign = 'left';
   const textTop = top + 100;
   if (!stale) hairline(ctx, 22, textTop - 8, w - 22, textTop - 8);
@@ -373,6 +374,24 @@ export function drawTile(canvas: HTMLCanvasElement, number: number, s: Session, 
   drawLines(ctx, lines, 22, textTop + 4, 12.4, 26, 48, stale ? 0.3 : 0.7);
   ctx.restore();
   if (stale) staleBand(ctx, w, h, TILE_RADIUS, stale, 22);
+}
+
+/** A project as one card: its name and one light per session; a waiting session makes it stand out. */
+export const CHIP_SIZE = { w: 520, h: 150 };
+export function drawChip(canvas: HTMLCanvasElement, name: string, sessions: Session[], overview: boolean): void {
+  const { w, h } = CHIP_SIZE;
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d') as CanvasRenderingContext2D;
+  const waiting = sessions.filter(s => lightOf(s) === 'blocked').length;
+  panel(ctx, w, h, { radius: 22, edge: waiting ? AMBER : overview ? ACCENT : EDGE, edgeWidth: waiting ? 7 : 3 });
+  ctx.fillStyle = PAPER; ctx.font = `600 36px ${SANS}`; ctx.textBaseline = 'middle';
+  ctx.fillText(fit(ctx, name, w - (waiting ? 120 : 48)), 24, 44);
+  if (waiting) { ctx.fillStyle = AMBER; ctx.font = `700 32px ${SANS}`; ctx.textAlign = 'right'; ctx.fillText(`!${waiting}`, w - 24, 44); ctx.textAlign = 'left'; }
+  const lights = sessions.map(lightOf);
+  const shown = lights.slice(0, 11);
+  shown.forEach((light, i) => drawLight(ctx, light, 40 + i * 42, 108, 14));
+  if (lights.length > shown.length) { ctx.fillStyle = DIM; ctx.font = `600 24px ${SANS}`; ctx.fillText(`+${lights.length - shown.length}`, 40 + shown.length * 42 - 8, 110); }
+  if (lights.length === 0) { ctx.fillStyle = DIM; ctx.font = `500 24px ${SANS}`; ctx.fillText('no sessions', 24, 108); }
 }
 
 export const LABEL_SIZE = { w: 640, h: 80 };

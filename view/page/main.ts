@@ -7,11 +7,11 @@ import { plain } from '../shared/ansi.js';
 import { command, COMMANDS, type PageAction } from '../shared/actions.js';
 import { parseUtterance, type BridgeEvent, type PendingClose, type Session, type Shelf, type SpeechState, type Utterance } from '../shared/messages.js';
 import type { ViewState } from '../shared/view-state.js';
-import { arrange, columnFit, FRONT_DISTANCE, FRONT_WIDTH, FRONT_Y, ARC, TOP, type Closed } from './layout.js';
+import { arrange, columnFit, CHIP_ARC, FRONT_DISTANCE, FRONT_WIDTH, FRONT_Y, ARC, TOP, type Closed } from './layout.js';
 import { BridgeLink } from './link.js';
 import { Mic, openMicrophone, type Captured, type OpenSource } from './mic.js';
 import {
-  CONTROLS_SIZE, LINE_PX, drawControls, drawTalk, TALK_SIZE, type TalkPhase, drawFront, drawLabel, drawStrip, drawTile, EMPTY_FRONT, FRONT_SIZE, NO_SESSIONS, lightOf, regionAt, resetFonts, terminalLines, type ControlButton, type Region, type StripState,
+  CONTROLS_SIZE, LINE_PX, drawChip, drawControls, drawTalk, TALK_SIZE, type TalkPhase, drawFront, drawLabel, drawStrip, drawTile, EMPTY_FRONT, FRONT_SIZE, NO_SESSIONS, lightOf, regionAt, resetFonts, terminalLines, type ControlButton, type Region, type StripState,
 } from './panels.js';
 import { onArc, Scene, type Hit, type Pointer, type Rect } from './scene.js';
 
@@ -109,6 +109,12 @@ async function runCommand(id: string): Promise<void> {
   const c = command(id);
   if ('page' in c.run) { runPage(c.run.page); return; }
   notice(said(await link.post('/api/action', { command: id }), c.label));
+  render();
+}
+
+async function go(projectId: string): Promise<void> {
+  const r = await link.post('/api/action', { go: projectId });
+  notice(said(r, r.ok ? 'Going there.' : 'Could not go there.'));
   render();
 }
 
@@ -216,16 +222,21 @@ function pointer(event: Pointer, hit: Hit | null): void {
   if (event === 'select-end') { talkEnd('pointer'); return; }
   if (!target || target === 'talk' || target === 'mic') return;
   if (target.startsWith('session:')) { const id = target.slice(8); if (id !== state.shelf?.focusedId) void focus(id); return; }
+  if (target.startsWith('go:')) { void go(target.slice(3)); return; }
   if (COMMANDS.some(c => c.id === target)) void runCommand(target);
 }
 
 const regions = new Map<string, Region[]>();
+/** What selecting each chip does: go into its project, or to the overview. */
+const chipTargets = new Map<string, string>();
 function targetOf(hit: Hit): string | null {
   if (hit.surface.startsWith('tile:')) return `session:${hit.surface.slice(5)}`;
+  if (hit.surface.startsWith('chip:')) return chipTargets.get(hit.surface) ?? null;
   return regionAt(regions.get(hit.surface) ?? [], hit.x, hit.y);
 }
 /** The rectangle to highlight under a pointer: a whole tile, or the button it is on. */
 function targetRect(hit: Hit): Rect | null {
+  if (hit.surface.startsWith('chip:')) { const c = canvases.get(hit.surface); return c ? { x: 0, y: 0, w: c.width, h: c.height } : null; }
   if (hit.surface.startsWith('tile:')) {
     const c = canvases.get(hit.surface);
     return c && hit.surface.slice(5) !== state.shelf?.focusedId ? { x: 0, y: 0, w: c.width, h: c.height } : null;
@@ -269,6 +280,17 @@ function staleness(): string | null {
 
 function projectLabel(shelf: Shelf, s: Session): string { return shelf.projects.find(p => p.id === s.workspaceId)?.label ?? ''; }
 
+const EMPTY_SHELF: Shelf = { herdr: { state: 'up' }, projects: [], sessions: [], focusedId: null, overviewId: null, starting: [], failed: [] };
+
+/** A level agent that is not up yet says so on its window, with what to do. */
+function agentNote(shelf: Shelf, s: Session | null): string | null {
+  if (!s || s.role === 'task') return null;
+  const failed = shelf.failed.find(f => f.id === s.id);
+  if (failed) return failed.reason;
+  if (shelf.starting.includes(s.id)) return `${s.role === 'overview-agent' ? 'The helper' : 'This project\'s agent'} is starting. Speak to it once this band is gone.`;
+  return null;
+}
+
 /**
  * Asks for a redraw on the next frame. The scene's frame callback does it, in or out of the
  * headset: on a Quest the window's own frames stop in immersive mode.
@@ -278,15 +300,17 @@ function render(): void { renderWanted = true; }
 
 function renderNow(): void {
   const stale = staleness();
-  const shelf = state.shelf ?? { herdr: { state: 'up' as const }, projects: [], sessions: [], focusedId: null };
-  const { front, columns } = arrange(shelf, state.closed.values());
+  const shelf = state.shelf ?? EMPTY_SHELF;
+  const { front, place, columns, chips } = arrange(shelf, state.closed.values());
+  const placeName = place.overview ? 'Overview' : place.project;
+  const frontStale = stale ?? agentNote(shelf, front);
   const used = new Set<string>();
   const frontWidth = FRONT_WIDTH * state.scale;
   const frontHeight = frontWidth * FRONT_SIZE.h / FRONT_SIZE.w;
   const frontText = front ? state.texts.get(front.id) : undefined;
   const empty = shelf.sessions.length === 0 ? NO_SESSIONS : EMPTY_FRONT;
-  surface('front', JSON.stringify([front, front && state.textVersion.get(front.id), state.scroll, stale, empty]), frontWidth, onArc(0, FRONT_Y, FRONT_DISTANCE), c => {
-    state.scroll = drawFront(c, front, front ? projectLabel(shelf, front) : '', frontText, state.scroll, stale, empty);
+  surface('front', JSON.stringify([front, front && state.textVersion.get(front.id), state.scroll, frontStale, empty, placeName]), frontWidth, onArc(0, FRONT_Y, FRONT_DISTANCE), c => {
+    state.scroll = drawFront(c, front, placeName, frontText, state.scroll, frontStale, empty);
     // At the top of what the session holds, further scrolling back adds nothing.
     if (scrollExact > state.scroll) scrollExact = state.scroll;
   });
@@ -309,7 +333,7 @@ function renderNow(): void {
   // Each inner list is a group: what belongs together sits together.
   const row = (groups: string[][], key: boolean): ControlButton[] => groups.flatMap(ids => ids.map((id, i) => ({ id, label: command(id).label, key, group: i === 0 })));
   const rows: ControlButton[][] = [
-    row([['next', 'back'], ['scroll-up', 'scroll-down', 'bottom'], ['smaller', 'bigger', 'recenter'], ['helper'], ['exit']], false),
+    row([['next', 'back'], ['scroll-up', 'scroll-down', 'bottom'], ['smaller', 'bigger', 'recenter'], ['overview'], ['exit']], false),
     row([['enter', 'escape', 'interrupt'], ['up', 'down', 'tab'], ['y', 'n'], ['one', 'two', 'three']], true),
   ];
   // Talk, wide and first under the front session: the way in to speaking.
@@ -328,6 +352,14 @@ function renderNow(): void {
     used.add(id);
   });
 
+  chipTargets.clear();
+  for (const chip of chips) {
+    const id = `chip:${chip.projectId}`;
+    chipTargets.set(id, chip.overview ? 'overview' : `go:${chip.projectId}`);
+    surface(id, JSON.stringify([chip.project, chip.overview, chip.sessions.map(s => [s.agent, s.status])]), chip.width, onArc(chip.angle, chip.y, CHIP_ARC), c => drawChip(c, chip.project, chip.sessions, chip.overview));
+    used.add(id);
+  }
+
   for (const column of columns) {
     const { step, width } = columnFit(column.tiles.length);
     const labelId = `label:${column.projectId}`;
@@ -335,7 +367,7 @@ function renderNow(): void {
     used.add(labelId);
     column.tiles.forEach((t, i) => {
       const id = `tile:${t.session.id}`;
-      const tileStale = t.closed ? 'Closed in Herdr — nothing to do.' : stale;
+      const tileStale = t.closed ? 'Closed in Herdr — nothing to do.' : stale ?? agentNote(shelf, t.session);
       const inFront = t.session.id === front?.id;
       surface(id, JSON.stringify([t.n, t.session, inFront, tileStale, inFront ? 0 : state.textVersion.get(t.session.id)]), width, onArc(column.angle, TOP - i * step, ARC), c => {
         drawTile(c, t.n, t.session, state.texts.get(t.session.id), inFront, tileStale);
@@ -394,7 +426,7 @@ declare global {
 }
 window.viewState = () => {
   const shelf = state.shelf;
-  const { front, columns } = shelf ? arrange(shelf, state.closed.values()) : { front: null, columns: [] };
+  const { front, place, columns, chips } = arrange(shelf ?? EMPTY_SHELF, state.closed.values());
   return {
     link: link.state,
     stale: staleness(),
@@ -403,7 +435,10 @@ window.viewState = () => {
     emptyHint: front ? null : shelf && shelf.sessions.length > 0 ? EMPTY_FRONT : NO_SESSIONS,
     receiver: shelf?.focusedId ?? null,
     frontText: front ? terminalLines(plain(state.texts.get(front.id) ?? '')).slice(-40) : [],
-    columns: columns.map(c => ({ projectId: c.projectId, project: c.project, side: c.angle < 0 ? 'left' as const : 'right' as const, tiles: c.tiles.map(t => ({ n: t.n, id: t.session.id, name: t.session.name, light: lightOf(t.session), closed: t.closed, inFront: t.session.id === front?.id })) })),
+    place: place.overview ? { overview: true } : { overview: false, projectId: place.projectId, project: place.project },
+    agentNote: shelf ? agentNote(shelf, front) : null,
+    chips: chips.map(c => ({ projectId: c.projectId, project: c.project, overview: c.overview, sessions: c.sessions.map(s => ({ id: s.id, light: lightOf(s) })), angle: c.angle, width: c.width })),
+    columns: columns.map(c => ({ projectId: c.projectId, project: c.project, side: c.angle < 0 ? 'left' as const : 'right' as const, width: columnFit(c.tiles.length).width, tiles: c.tiles.map(t => ({ n: t.n, id: t.session.id, name: t.session.name, role: t.session.role, light: lightOf(t.session), closed: t.closed, inFront: t.session.id === front?.id })) })),
     scroll: state.scroll,
     scale: state.scale,
     mic: { mode: mic.mode, open: mic.open, problem: mic.problem },

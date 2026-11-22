@@ -1,5 +1,5 @@
 /**
- * What an utterance is taken as: a command, a session to show, an order to the helper, or a
+ * What an utterance is taken as: a command, a place to go, a session to show, an order to the helper, or a
  * prompt for the receiver. Bridge-side: the page only sends audio.
  */
 import { COMMANDS, type Command } from '../shared/actions.js';
@@ -23,6 +23,8 @@ function spokenNumber(word: string): number | null {
 export type Heard =
   | { as: 'command'; command: Command }
   | { as: 'show'; target: number | string }
+  /** "go to <name>": navigation only. With no match, nothing is sent to any session. */
+  | { as: 'go'; target: number | string }
   | { as: 'helper'; order: string }
   | { as: 'prompt'; text: string }
   | { as: 'nothing' };
@@ -43,7 +45,9 @@ export function classify(text: string, confirming: boolean): Heard {
   if (found) return { as: 'command', command: found };
   const helper = /^(?:hey )?helper (.+)$/.exec(said);
   if (helper?.[1]) return { as: 'helper', order: text.trim().replace(/^(?:hey[\s,]+)?helper[\s,:.!-]*/i, '') };
-  const show = /^(?:show|focus|go to|open) (?:number |tile )?(.+)$/.exec(said);
+  const go = /^go to (?:project |number |tile )?(.+)$/.exec(said);
+  if (go?.[1]) return { as: 'go', target: /^\d+$/.test(go[1]) ? Number(go[1]) : go[1] };
+  const show = /^(?:show|focus|open) (?:number |tile )?(.+)$/.exec(said);
   if (show?.[1]) return { as: 'show', target: /^\d+$/.test(show[1]) ? Number(show[1]) : show[1] };
   return { as: 'prompt', text: text.trim() };
 }

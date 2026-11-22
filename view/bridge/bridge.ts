@@ -3,13 +3,13 @@
  * the yes before a close. The HTTP server (server.ts) only authenticates and forwards here.
  */
 import { shelfOrder, type BridgeAction, type KeyName } from '../shared/actions.js';
-import type { BridgeEvent, PendingClose, Session, Shelf, SpeechState, Utterance } from '../shared/messages.js';
+import type { BridgeEvent, PendingClose, Project, Session, Shelf, SpeechState, Utterance } from '../shared/messages.js';
+import { OVERVIEW, type Level, type LevelAgents } from './agents.js';
 import { classify } from './heard.js';
 import { HerdrError, type HerdrClient } from './herdr.js';
 import type { Mirror } from './mirror.js';
 
 export interface Transcriber { state(): SpeechState; transcribe(audio: Float32Array): Promise<string> }
-export interface HelperAgent { show(): Promise<string>; order(text: string): Promise<void> }
 
 type Send = (event: BridgeEvent) => void;
 export type CloseAnswer = 'closed' | 'declined' | 'no-answer' | 'unknown-session' | 'ambiguous' | 'busy' | 'failed';
@@ -30,21 +30,31 @@ export class Bridge {
     private readonly herdr: HerdrClient,
     private readonly mirror: Mirror,
     private readonly speech: Transcriber,
-    private readonly helper: HelperAgent,
+    private readonly agents: LevelAgents,
     private readonly closeAnswerMs = CLOSE_ANSWER_MS,
   ) {
+    agents.onChange(() => this.broadcast({ type: 'shelf', shelf: this.shelf() }));
     mirror.listen({
       shelf: shelf => {
         if (this.jump && shelf.focusedId !== this.jump.current) this.jump = null;
-        this.broadcast({ type: 'shelf', shelf });
+        this.broadcast({ type: 'shelf', shelf: this.shelf() });
       },
       text: (id, text) => this.broadcast({ type: 'text', id, text }),
     });
   }
 
+  /** Herdr's sessions as the mirror holds them, with which level agents are starting or failed. */
+  shelf(): Shelf {
+    const shelf = this.mirror.shelf();
+    const pending = this.agents.pending();
+    // A start that failed only because the agent asked something is over once Herdr sees the agent running.
+    const running = new Set(shelf.sessions.filter(s => s.agent !== null).map(s => s.id));
+    return { ...shelf, starting: pending.starting, failed: pending.failed.filter(f => !running.has(f.id)) };
+  }
+
   /** Adds a page. It first gets everything it needs to draw, then each change. */
   connect(send: Send): () => void {
-    const shelf = this.mirror.shelf();
+    const shelf = this.shelf();
     send({ type: 'shelf', shelf });
     for (const s of shelf.sessions) { const text = this.mirror.text(s.id); if (text !== undefined) send({ type: 'text', id: s.id, text }); }
     send({ type: 'confirm', pending: this.pendingView() });
@@ -57,7 +67,7 @@ export class Bridge {
 
   /** Carries out one action; the answer is what to tell the owner. */
   async act(action: BridgeAction): Promise<{ ok: boolean; outcome: string }> {
-    const shelf = this.mirror.shelf();
+    const shelf = this.shelf();
     try {
       switch (action.kind) {
         case 'focus': {
@@ -82,11 +92,13 @@ export class Bridge {
           this.pending.answer(action.answer);
           return { ok: true, outcome: action.answer ? `Answered yes to closing ${this.pending.name}.` : `Answered no: ${this.pending.name} stays open.` };
         }
-        case 'helper': {
-          const id = await this.helper.show();
-          await this.focus(id);
-          return { ok: true, outcome: 'Showing the helper. Type or speak an order to it.' };
+        case 'go': {
+          if (action.projectId === shelf.overviewId) return await this.goTo(OVERVIEW, 'the overview', 'The helper');
+          const project = shelf.projects.find(p => p.id === action.projectId);
+          if (!project) return { ok: false, outcome: 'That project is no longer open.' };
+          return await this.goTo({ project: project.id }, project.label, `${project.label}'s agent`);
         }
+        case 'overview': return await this.goTo(OVERVIEW, 'the overview', 'The helper');
         default: return assertNever(action);
       }
     } catch (error) {
@@ -121,7 +133,7 @@ export class Bridge {
     try { heard = (await this.speech.transcribe(audio)).trim(); } catch (error) {
       return record('', 'nothing', false, `Speech could not be read: ${(error as Error).message}`);
     }
-    const shelf = this.mirror.shelf();
+    const shelf = this.shelf();
     const taken = classify(heard, this.pending !== null);
     switch (taken.as) {
       case 'nothing': return record(heard, 'nothing', false, 'Heard nothing to act on.');
@@ -136,16 +148,37 @@ export class Bridge {
         const r = run.kind === 'key' ? await this.spokenKey(shelf, receiver, run.key) : await this.act(run);
         return record(heard, 'command', r.ok, r.outcome);
       }
+      case 'go': {
+        // Going somewhere is navigation only: with no match, the words reach no session.
+        const project = typeof taken.target === 'string' ? projectCalled(shelf, taken.target) : null;
+        const target = project ? null : resolve(shelf, taken.target);
+        if (!project && !target) return record(heard, 'command', false, `No project or session is called "${taken.target}". Nothing was sent.`);
+        const r = await this.act(project ? { kind: 'go', projectId: project.id } : { kind: 'focus', sessionId: (target as Session).id });
+        return record(heard, 'command', r.ok, r.outcome);
+      }
       case 'show': {
+        const project = typeof taken.target === 'string' ? projectCalled(shelf, taken.target) : null;
         const target = resolve(shelf, taken.target);
-        if (target) { const r = await this.act({ kind: 'focus', sessionId: target.id }); return record(heard, 'command', r.ok, r.outcome); }
+        // A session's own name wins over a project's; a project's name goes into the project.
+        if (target && !(project && target.name.toLowerCase() !== String(taken.target).toLowerCase())) { const r = await this.act({ kind: 'focus', sessionId: target.id }); return record(heard, 'command', r.ok, r.outcome); }
+        if (project) { const r = await this.act({ kind: 'go', projectId: project.id }); return record(heard, 'command', r.ok, r.outcome); }
         if (typeof taken.target === 'number') return record(heard, 'command', false, `No session ${taken.target} on the shelf.`);
         // "show me the failing test" names no session: it is a prompt.
         return this.deliver(record, heard, shelf, receiver);
       }
       case 'helper': {
-        try { await this.helper.order(taken.order); } catch (error) { return record(heard, 'helper', false, `The helper did not get it: ${herdrProblem(error)}`); }
-        return record(heard, 'helper', true, 'Sent to the helper');
+        try {
+          const seat = await this.agents.seat(OVERVIEW);
+          if (seat.state === 'ready') { await this.herdr.call('agent.prompt', { target: seat.paneId, text: taken.order }); return record(heard, 'helper', true, 'Sent to the helper'); }
+          // The helper is starting: the order waits for it beside this queue, so speech goes on.
+          void this.agents.ready(seat.paneId)
+            .then(() => this.herdr.call('agent.prompt', { target: seat.paneId, text: taken.order }))
+            .then(
+              () => this.broadcast({ type: 'notice', text: `The helper is ready and got your order: "${taken.order}"` }),
+              (error: unknown) => this.broadcast({ type: 'notice', text: `The helper did not get "${taken.order}": ${herdrProblem(error)}` }),
+            );
+          return record(heard, 'helper', true, 'The helper is starting; your order goes to it when it is ready');
+        } catch (error) { return record(heard, 'helper', false, `The helper did not get it: ${herdrProblem(error)}`); }
       }
       case 'prompt': return this.deliver(record, heard, shelf, receiver);
       default: return assertNever(taken);
@@ -156,6 +189,8 @@ export class Bridge {
     if (receiver === null) return record(heard, 'prompt', false, 'Not sent: no session was in front when you started speaking.');
     const target = shelf.sessions.find(s => s.id === receiver);
     if (!target) return record(heard, 'prompt', false, 'Not sent: the session that was in front when you spoke has closed.');
+    const unready = notReady(shelf, target);
+    if (unready) return record(heard, 'prompt', false, `Not sent: ${unready}`);
     try { await this.prompt(target, heard); } catch (error) { return record(heard, 'prompt', false, `Not sent to ${target.name}: ${herdrProblem(error)}`); }
     return record(heard, 'prompt', true, `Sent to ${target.name}`);
   }
@@ -165,7 +200,7 @@ export class Bridge {
    * session; no answer, or a no, leaves it open.
    */
   async requestClose(ref: string): Promise<CloseAnswer> {
-    const shelf = this.mirror.shelf();
+    const shelf = this.shelf();
     // A close names exactly one session: by pane id, tile number or a name no other session has.
     const found = matches(shelf, ref, false);
     if (found.length > 1) return 'ambiguous';
@@ -205,6 +240,9 @@ export class Bridge {
 
   private async key(shelf: Shelf, target: string | null, key: KeyName): Promise<{ ok: boolean; outcome: string }> {
     if (!target) return { ok: false, outcome: 'No session is in front to receive the key.' };
+    const session = shelf.sessions.find(s => s.id === target);
+    const unready = session ? notReady(shelf, session) : null;
+    if (unready && shelf.starting.includes(target)) return { ok: false, outcome: `Not pressed: ${unready}` };
     await this.herdr.call('pane.send_keys', { pane_id: target, keys: [key] });
     return { ok: true, outcome: `Pressed ${key} in ${name(shelf, target)}` };
   }
@@ -212,6 +250,14 @@ export class Bridge {
   private async spokenKey(shelf: Shelf, receiver: string | null, key: KeyName): Promise<{ ok: boolean; outcome: string }> {
     if (receiver !== null && !shelf.sessions.some(s => s.id === receiver)) return { ok: false, outcome: 'Not pressed: the session that was in front when you spoke has closed.' };
     try { return await this.key(shelf, receiver, key); } catch (error) { return { ok: false, outcome: herdrProblem(error) }; }
+  }
+
+  /** Brings a level's agent to the front, making its seat and starting the agent beside this call. */
+  private async goTo(level: Level, place: string, who: string): Promise<{ ok: boolean; outcome: string }> {
+    const seat = await this.agents.seat(level);
+    await this.focus(seat.paneId);
+    if (seat.state === 'ready') return { ok: true, outcome: `At ${place}` };
+    return { ok: true, outcome: `At ${place}. ${who} is starting.` };
   }
 
   private async nextWaiting(shelf: Shelf): Promise<{ ok: boolean; outcome: string }> {
@@ -232,6 +278,22 @@ export class Bridge {
   }
 }
 
+/** Why words cannot go to this session now, or null: a level agent that is not up must never get them as shell input. */
+function notReady(shelf: Shelf, target: Session): string | null {
+  if (target.role === 'task') return null;
+  if (shelf.starting.includes(target.id)) return `${target.name} is still starting. Say it again when it is ready.`;
+  if (target.agent !== null) return null;
+  const failed = shelf.failed.find(f => f.id === target.id);
+  return failed ? `${target.name} is not running. ${failed.reason}` : `${target.name} is not running. Go to it again to start it.`;
+}
+
+const loose = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().replace(/\b([a-z0-9]{3,})s\b/g, '$1');
+
+/** The project whose label was said, loosely: case, punctuation and a plural s do not matter. */
+export function projectCalled(shelf: Shelf, said: string): Project | null {
+  return shelf.projects.find(p => loose(p.label) === loose(said)) ?? null;
+}
+
 /** A session by tile number, pane id, or name or project label as said. */
 export function resolve(shelf: Shelf, target: number | string): Session | null {
   const found = matches(shelf, target, true);
@@ -249,10 +311,12 @@ export function matches(shelf: Shelf, target: number | string, projects: boolean
   if (typeof target === 'number') return byNumber(target);
   const t = target.trim().toLowerCase();
   if (/^\d+$/.test(t)) return byNumber(Number(t));
-  const loose = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().replace(/\b([a-z0-9]{3,})s\b/g, '$1');
   const byId = ordered.filter(s => s.id.toLowerCase() === t);
   if (byId.length) return byId;
-  const byName = ordered.filter(s => loose(s.name) === loose(t));
+  // A name several sessions share, such as each project's agent, means the one in the project in front.
+  const here = shelf.sessions.find(s => s.id === shelf.focusedId)?.workspaceId;
+  const named = ordered.filter(s => loose(s.name) === loose(t));
+  const byName = projects && named.some(s => s.workspaceId === here) ? named.filter(s => s.workspaceId === here) : named;
   if (byName.length || !projects) return byName;
   return ordered.filter(s => loose(shelf.projects.find(p => p.id === s.workspaceId)?.label ?? '') === loose(t)).slice(0, 1);
 }

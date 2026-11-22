@@ -3,7 +3,7 @@
  * what it last reported. Herdr has no output stream (protocol 22), so text is read and compared.
  */
 import { HERDR_PROTOCOL, HerdrClient, HerdrUnavailable, type HerdrPane } from './herdr.js';
-import type { HerdrLink, Session, Shelf } from '../shared/messages.js';
+import { OVERVIEW_LABEL, SEAT_LABEL, type HerdrLink, type Role, type Session, type Shelf } from '../shared/messages.js';
 
 export interface MirrorOptions {
   /** Rows of history kept for the session in front; the page scrolls within them. */
@@ -22,7 +22,7 @@ export interface MirrorListener {
 }
 
 export class Mirror {
-  private current: Shelf = { herdr: { state: 'down', reason: 'Connecting to Herdr…' }, projects: [], sessions: [], focusedId: null };
+  private current: Shelf = { herdr: { state: 'down', reason: 'Connecting to Herdr…' }, projects: [], sessions: [], focusedId: null, overviewId: null, starting: [], failed: [] };
   private readonly texts = new Map<string, string>();
   private readonly listeners = new Set<MirrorListener>();
   private timer: NodeJS.Timeout | null = null;
@@ -79,7 +79,8 @@ export class Mirror {
         this.checkedProtocol = true;
       }
       const snapshot = await this.herdr.snapshot();
-      const sessions = snapshot.panes.map(toSession);
+      const overviewId = snapshot.workspaces.find(w => w.label === OVERVIEW_LABEL)?.id ?? null;
+      const sessions = snapshot.panes.map(pane => toSession(pane, overviewId));
       const ids = new Set(sessions.map(s => s.id));
       for (const id of [...this.texts.keys()]) if (!ids.has(id)) this.texts.delete(id);
       const next: Shelf = {
@@ -87,6 +88,9 @@ export class Mirror {
         projects: snapshot.workspaces.map(w => ({ id: w.id, label: w.label })),
         sessions,
         focusedId: snapshot.focusedPaneId,
+        overviewId,
+        starting: [],
+        failed: [],
       };
       if (JSON.stringify(next) !== JSON.stringify(this.current)) { this.current = next; this.emitShelf(); }
       const readAll = this.ticks % this.options.tileEvery === 0;
@@ -128,10 +132,17 @@ export class Mirror {
   private emitShelf(): void { for (const listener of this.listeners) listener.shelf(this.current); }
 }
 
-function toSession(pane: HerdrPane): Session {
+/** A level agent is known by its seat: the pane label, in the overview's workspace or a project's. */
+function roleOf(pane: HerdrPane, overviewId: string | null): Role {
+  if (pane.workspaceId === overviewId) return pane.label === SEAT_LABEL['overview-agent'] ? 'overview-agent' : 'task';
+  return pane.label === SEAT_LABEL['project-agent'] ? 'project-agent' : 'task';
+}
+
+function toSession(pane: HerdrPane, overviewId: string | null): Session {
   return {
     id: pane.id,
     workspaceId: pane.workspaceId,
+    role: roleOf(pane, overviewId),
     agent: pane.agent,
     status: pane.status,
     name: pane.label ?? pane.title ?? pane.agent ?? 'shell',

@@ -4,10 +4,11 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { HerdrBench } from '../bench/bench.js';
-import { Bridge, type HelperAgent, type Transcriber } from '../bridge/bridge.js';
+import type { LevelAgents } from '../bridge/agents.js';
+import { Bridge, type Transcriber } from '../bridge/bridge.js';
 import { compiled } from '../bridge/config.js';
 import { HerdrClient } from '../bridge/herdr.js';
-import { serveCloseRequests } from '../bridge/helper.js';
+import { serveCloseRequests } from '../bridge/agents.js';
 import { DEFAULT_MIRROR, Mirror } from '../bridge/mirror.js';
 import { plain } from '../shared/ansi.js';
 
@@ -17,14 +18,14 @@ class Heard implements Transcriber {
   state() { return { ready: true as const }; }
   async transcribe(): Promise<string> { return this.queue.shift() ?? ''; }
 }
-const noHelper: HelperAgent = { show: async () => { throw new Error('none'); }, order: async () => { throw new Error('none'); } };
+const noAgents: LevelAgents = { seat: async () => { throw new Error('no level agents here'); }, ready: async () => undefined, pending: () => ({ starting: [], failed: [] }), onChange: () => undefined };
 const audio = new Float32Array(1600);
 
 async function setup(closeAnswerMs = 400) {
   const bench = await HerdrBench.start([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' }, { name: 'a2', kind: 'agent' }, { name: 'sh', kind: 'shell' }] }]);
   const mirror = new Mirror(bench.client, DEFAULT_MIRROR);
   const speech = new Heard();
-  const bridge = new Bridge(bench.client, mirror, speech, noHelper, closeAnswerMs);
+  const bridge = new Bridge(bench.client, mirror, speech, noAgents, closeAnswerMs);
   mirror.start();
   await bench.waitFor(async () => mirror.shelf().sessions.length === 3, 'the mirror to see three sessions');
   const open = async (name: string) => (await bench.client.snapshot()).panes.some(p => p.id === bench.pane(name));
@@ -143,7 +144,7 @@ test('a close names exactly one session: a shared name or a project label is ref
     { label: 'beta', panes: [{ name: 'logs-b', kind: 'shell' }] },
   ]);
   const mirror = new Mirror(bench.client, DEFAULT_MIRROR);
-  const bridge = new Bridge(bench.client, mirror, new Heard(), noHelper, 300);
+  const bridge = new Bridge(bench.client, mirror, new Heard(), noAgents, 300);
   const confirms: (string | null)[] = [];
   bridge.connect(event => { if (event.type === 'confirm') confirms.push(event.pending?.name ?? null); });
   mirror.start();

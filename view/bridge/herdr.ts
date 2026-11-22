@@ -15,6 +15,7 @@ export interface HerdrPane {
   status: AgentStatus;
   label: string | null;
   title: string | null;
+  cwd: string | null;
 }
 export interface HerdrSnapshot { workspaces: HerdrWorkspace[]; panes: HerdrPane[]; focusedPaneId: string | null }
 
@@ -111,6 +112,7 @@ function parsePane(value: Json, agentNames: Map<string, string | null>): HerdrPa
     status: parseStatus(p.agent_status),
     label: optStr(p.label) ?? agentNames.get(id) ?? null,
     title: optStr(p.title) ?? optStr(p.terminal_title_stripped),
+    cwd: optStr(p.cwd),
   };
 }
 

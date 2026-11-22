@@ -5,12 +5,12 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { resolve } from '../bridge/bridge.js';
 import { compiled, REPO } from '../bridge/config.js';
-import { CLOSE_TOOL } from '../bridge/helper.js';
+import { CLOSE_TOOL } from '../bridge/agents.js';
 import { classify } from '../bridge/heard.js';
-import { arrange, columnFit } from '../page/layout.js';
+import { arrange, CHIP_ARC, columnFit } from '../page/layout.js';
 import { Mic } from '../page/mic.js';
 import { COMMANDS } from '../shared/actions.js';
-import type { Shelf } from '../shared/messages.js';
+import type { Session, Shelf } from '../shared/messages.js';
 
 function guard(tool: string, input: Record<string, unknown>): number {
   return spawnSync('node', [compiled('bridge', 'guard.js')], { input: JSON.stringify({ tool_name: tool, tool_input: input }) }).status ?? -1;
@@ -50,28 +50,48 @@ test('an utterance is a command only when the whole of it is one', () => {
   assert.deepEqual(classify('Show tree.', false), { as: 'show', target: 3 });
   assert.deepEqual(classify('show storefront web', false), { as: 'show', target: 'storefront web' });
   assert.deepEqual(classify('Helper, rename the shell to logs.', false), { as: 'helper', order: 'rename the shell to logs.' });
+  assert.deepEqual(classify('Go to storefront web.', false), { as: 'go', target: 'storefront web' });
+  assert.deepEqual(classify('go to project infra', false), { as: 'go', target: 'infra' });
+  assert.equal(id('Overview.'), 'overview');
+  assert.equal(id('Go to the overview'), 'overview');
   assert.equal(id('yes'), 'prompt', 'a yes with no close waiting is an answer to the agent');
   assert.equal(id('Yes.', true), 'confirm');
   assert.equal(id('  '), 'nothing');
 });
 
-test('the shelf: projects split left and right (the extra one left), numbered in Herdr\'s order, one column per workspace', () => {
-  const session = (id: string, workspaceId: string) => ({ id, workspaceId, agent: 'claude', status: 'idle' as const, name: id });
+test('inside a project: its sessions beside the front, every other project a chip, the overview chip first; numbers across all projects', () => {
+  const session = (id: string, workspaceId: string, role: Session['role'] = 'task') => ({ id, workspaceId, role, agent: 'claude', status: 'idle' as const, name: id });
   const shelf: Shelf = {
     herdr: { state: 'up' },
-    projects: ['w1', 'w2', 'w3', 'w4', 'w5'].map(id => ({ id, label: id === 'w4' ? 'same' : id === 'w5' ? 'same' : id })),
-    sessions: [session('w3:p1', 'w3'), session('w1:p1', 'w1'), session('w1:p2', 'w1'), session('w2:p1', 'w2'), session('w4:p1', 'w4'), session('w5:p1', 'w5')],
+    projects: ['w1', 'w2', 'w3', 'ov'].map(id => ({ id, label: id === 'ov' ? 'helper' : `project ${id}` })),
+    sessions: [session('w3:p1', 'w3'), session('w1:p1', 'w1'), session('w1:p2', 'w1'), session('w2:p1', 'w2'), session('w2:p2', 'w2', 'project-agent'), session('w2:p3', 'w2'), session('ov:p1', 'ov', 'overview-agent')],
     focusedId: 'w2:p1',
+    overviewId: 'ov', starting: [], failed: [],
   };
-  const { front, columns } = arrange(shelf, [{ session: session('w9:p9', 'w4'), projectId: 'w4', project: 'same' }]);
+  const { front, place, columns, chips } = arrange(shelf, [{ session: session('w2:p9', 'w2'), projectId: 'w2', project: 'project w2' }, { session: session('w1:p9', 'w1'), projectId: 'w1', project: 'project w1' }]);
   assert.equal(front?.id, 'w2:p1');
-  assert.deepEqual(columns.map(c => [c.projectId, Math.sign(c.angle)]), [['w1', -1], ['w2', -1], ['w3', -1], ['w4', 1], ['w5', 1]]);
-  assert.deepEqual(columns.map(c => c.tiles.map(t => t.n)), [[1, 2], [3], [4], [5, 0], [6]], 'numbers follow project order; a closed tile has none');
-  assert.deepEqual(columns.map(c => Math.abs(c.angle)), [44, 63, 82, 44, 63]);
-  assert.equal(columns[3]?.tiles[1]?.closed, true, 'a closed session stays in its own workspace\'s column');
-  const eight = columnFit(8);
-  assert.ok(Math.abs(eight.step - 0.10625) < 1e-9 && Math.abs(eight.width - 0.148256) < 1e-6, 'eight tiles shrink to fit 0.85 m');
-  assert.deepEqual(columnFit(2), { step: 0.215, width: 0.3 });
+  assert.deepEqual(place, { overview: false, projectId: 'w2', project: 'project w2' });
+  assert.deepEqual(columns.map(c => [Math.sign(c.angle), c.tiles.map(t => [t.session.id, t.n])]), [[-1, [['w2:p1', 3], ['w2:p2', 4]]], [1, [['w2:p3', 5], ['w2:p9', 0]]]],
+    'only this project\'s sessions; numbers follow project order across all projects; a closed one of this project stays a moment, without a number');
+  assert.deepEqual(chips.map(c => [c.project, c.overview, c.sessions.map(s => s.id)]), [['Overview', true, ['ov:p1']], ['project w1', false, ['w1:p1', 'w1:p2']], ['project w3', false, ['w3:p1']]]);
+  assert.ok(columnFit(2).width > 0.3, 'tiles inside a project are wider than the 0.30 m tile of the one-shelf view');
+
+  const atOverview = arrange({ ...shelf, focusedId: 'ov:p1' });
+  assert.deepEqual(atOverview.place, { overview: true });
+  assert.deepEqual(atOverview.columns.flatMap(c => c.tiles.map(t => t.session.id)), ['ov:p1'], 'at the overview, the shelf holds the sessions of no project');
+  assert.deepEqual(atOverview.chips.map(c => c.project), ['project w1', 'project w2', 'project w3'], 'every project is a node; the overview\'s own workspace is not one');
+});
+
+test('chips and nodes stay within 90 degrees either side, at 7 projects and at 14', () => {
+  for (const count of [7, 14]) {
+    const projects = Array.from({ length: count }, (_, i) => ({ id: `w${i}`, label: `a rather long project name number ${i}` }));
+    const sessions = projects.map(p => ({ id: `${p.id}:p1`, workspaceId: p.id, role: 'task' as const, agent: 'claude', status: 'idle' as const, name: 'x' }));
+    for (const focusedId of [null, 'w0:p1']) {
+      const { chips } = arrange({ herdr: { state: 'up' }, projects, sessions, focusedId, overviewId: null, starting: [], failed: [] });
+      const widest = Math.max(...chips.map(c => Math.abs(c.angle) + (c.width / 2) / CHIP_ARC * 180 / Math.PI));
+      assert.ok(widest < 90, `${count} projects, ${focusedId ? 'inside one' : 'at the overview'}: the farthest chip edge is at ${widest.toFixed(1)} degrees`);
+    }
+  }
 });
 
 test('the guard refuses a tool call it cannot read', () => {
@@ -86,10 +106,10 @@ test('a spoken session reference resolves by tile number, name or project', () =
     herdr: { state: 'up' },
     projects: [{ id: 'w2', label: 'storefront-web' }, { id: 'w1', label: 'billing' }],
     sessions: [
-      { id: 'w1:p1', workspaceId: 'w1', agent: 'claude', status: 'idle', name: 'ledger' },
-      { id: 'w2:p1', workspaceId: 'w2', agent: null, status: 'unknown', name: 'logs' },
+      { id: 'w1:p1', workspaceId: 'w1', role: 'task', agent: 'claude', status: 'idle', name: 'ledger' },
+      { id: 'w2:p1', workspaceId: 'w2', role: 'task', agent: null, status: 'unknown', name: 'logs' },
     ],
-    focusedId: null,
+    focusedId: null, overviewId: null, starting: [], failed: [],
   };
   assert.equal(resolve(shelf, 1)?.id, 'w2:p1', 'numbers follow project order, not pane order');
   assert.equal(resolve(shelf, 'Ledger')?.id, 'w1:p1');
