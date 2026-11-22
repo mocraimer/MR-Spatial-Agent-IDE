@@ -194,10 +194,10 @@ export class Bridge {
       case 'helper': {
         try {
           const seat = await this.agents.seat(OVERVIEW);
-          if (seat.state === 'ready') { await this.order(shelf, seat.paneId, taken.order); return { as: 'helper', ok: true, outcome: this.settings.direct ? 'Sent to the helper' : HELPER_DRAFT }; }
+          if (seat.state === 'ready') { await this.order(seat.paneId, taken.order); return { as: 'helper', ok: true, outcome: this.settings.direct ? 'Sent to the helper' : HELPER_DRAFT }; }
           // The helper is starting: the order waits for it beside this queue, so speech goes on.
           void this.agents.ready(seat.paneId)
-            .then(() => this.order(this.shelf(), seat.paneId, taken.order))
+            .then(() => this.order(seat.paneId, taken.order))
             .then(
               () => this.broadcast({ type: 'notice', text: this.settings.direct ? `The helper is ready and got your order: "${taken.order}"` : `The helper is ready. Your order waits as a draft: ${HELPER_DRAFT_HOW}` }),
               (error: unknown) => this.broadcast({ type: 'notice', text: `The helper did not get "${taken.order}": ${error instanceof RefusedError ? error.message : this.problem('an order to the helper', error)}` }),
@@ -288,7 +288,7 @@ export class Bridge {
       try { await this.prompt(target, heard); } catch (error) { return done(false, `Not sent to ${target.name}: ${this.problem(`a prompt to ${target.name} (${target.id})`, error)}`); }
       return done(true, `Sent to ${target.name}`);
     }
-    try { await this.typeInto(shelf, target.id, heard); } catch (error) {
+    try { await this.typeInto(target.id, heard); } catch (error) {
       return done(false, `Not typed into ${target.name}: ${error instanceof RefusedError ? error.message : this.problem(`typing into ${target.name} (${target.id})`, error)}`);
     }
     return done(true, `Draft in ${target.name}. Say “go” to send it, or “scratch that” to clear it.`);
@@ -373,20 +373,20 @@ export class Bridge {
   }
 
   /** Types spoken words into a session's input after any draft already there, without sending. */
-  private async typeInto(shelf: Shelf, id: string, text: string): Promise<void> {
+  private async typeInto(id: string, text: string): Promise<void> {
     const typed = typeable(text);
     if (!typed) throw new RefusedError('There was nothing to type.');
     // Typed into an agent that waits on a question, words would be keys answering it.
-    if (shelf.sessions.find(s => s.id === id)?.status === 'blocked') throw new RefusedError(`it is waiting on a question: answer it with a key first.`);
+    if (this.shelf().sessions.find(s => s.id === id)?.status === 'blocked') throw new RefusedError(`it is waiting on a question: answer it with a key first.`);
     await this.herdr.call('pane.send_text', { pane_id: id, text: this.drafts.has(id) ? ` ${typed}` : typed });
     this.drafts.mark(id);
     this.broadcast({ type: 'shelf', shelf: this.shelf() });
   }
 
   /** An order for the helper: typed into its input to wait for "go", or sent at once when direct sending is on. */
-  private async order(shelf: Shelf, paneId: string, text: string): Promise<void> {
+  private async order(paneId: string, text: string): Promise<void> {
     if (this.settings.direct) await this.herdr.call('agent.prompt', { target: paneId, text });
-    else await this.typeInto(shelf, paneId, text);
+    else await this.typeInto(paneId, text);
   }
 
   /** "go": presses Enter in the session, once, if it holds a draft. */

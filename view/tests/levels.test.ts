@@ -174,7 +174,8 @@ test('a prompt keeps the receiver it had when speech began, across a "go to"', a
 function tool(s: Desk, paneId: string, workspaceId: string, args: string[], extra: Record<string, string> = {}): Promise<{ status: number; out: string }> {
   return new Promise(resolve => {
     execFile('node', [compiled('bridge', 'level-tool.js'), ...args], {
-      env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', HERDR_SOCKET_PATH: s.bench.socketPath, HERDR_WORKSPACE_ID: workspaceId, HERDR_PANE_ID: paneId, ...extra },
+      // VIEW_DATA keeps the tool's fallbacks (the bridge's socket, its log) inside the test's own directory, never the owner's.
+      env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', VIEW_DATA: s.data, HERDR_SOCKET_PATH: s.bench.socketPath, HERDR_WORKSPACE_ID: workspaceId, HERDR_PANE_ID: paneId, ...extra },
     }, (error, stdout, stderr) => resolve({ status: error ? Number(error.code ?? 1) : 0, out: stdout + stderr }));
   });
 }
