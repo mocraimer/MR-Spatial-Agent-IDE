@@ -10,10 +10,12 @@
  *   close <pane>                ask the owner whether to close a session
  */
 import { execFileSync } from 'node:child_process';
+import { createConnection } from 'node:net';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { SEAT_LABEL } from '../shared/messages.js';
 import { plain } from '../shared/ansi.js';
+import { agentName } from './agent-name.js';
 import { paneOf } from './agents.js';
 import { compiled, dataDirectory } from './config.js';
 import { HerdrClient, type HerdrPane } from './herdr.js';
@@ -25,6 +27,22 @@ const socket = process.env.HERDR_SOCKET_PATH;
 function fail(message: string): never { console.error(message); process.exit(1); }
 if (!workspaceId || !self || !socket) fail('This tool runs only inside a Herdr pane.');
 const herdr = new HerdrClient(socket);
+/** Puts a line in the view's log through the bridge, so the owner can read later what failed here. Best effort. */
+function report(line: string): Promise<void> {
+  const path = process.env.SPATIAL_VIEW_HELPER_SOCKET ?? join(dataDirectory(), 'helper.sock');
+  return new Promise(resolve => {
+    const connection = createConnection(path);
+    const done = () => { connection.destroy(); resolve(); };
+    connection.setTimeout(2000, done);
+    connection.on('error', done);
+    connection.on('close', done);
+    connection.write(`${JSON.stringify({ log: line })}\n`);
+  });
+}
+async function failWith(line: string, message = line): Promise<never> {
+  await report(line);
+  return fail(message);
+}
 
 async function mine(): Promise<HerdrPane[]> {
   return (await herdr.snapshot()).panes.filter(p => p.workspaceId === workspaceId);
@@ -62,8 +80,8 @@ switch (command) {
     if (kind !== 'shell') {
       const deadline = Date.now() + 10_000;
       for (;;) {
-        try { await herdr.call('agent.start', { kind, pane_id: paneId, ...(name ? { name: `${name}-${paneId.replace(/[^A-Za-z0-9]+/g, '-')}` } : {}), timeout_ms: 90_000 }, 95_000); break; } catch (error) {
-          if (Date.now() > deadline || (error as { code?: string }).code === 'agent_not_ready') fail(`Session ${paneId} was made, but its agent did not start: ${(error as Error).message}`);
+        try { await herdr.call('agent.start', { kind, pane_id: paneId, name: agentName(name || kind, paneId), timeout_ms: 90_000 }, 95_000); break; } catch (error) {
+          if (Date.now() > deadline || (error as { code?: string }).code === 'agent_not_ready') await failWith(`a project agent in ${workspaceId} made session ${paneId}, but its ${kind} agent did not start: ${(error as Error).message}`, `Session ${paneId} was made, but its agent did not start: ${(error as Error).message}`);
           await new Promise(resolve => setTimeout(resolve, 300));
         }
       }

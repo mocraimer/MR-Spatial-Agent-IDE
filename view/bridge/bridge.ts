@@ -16,6 +16,11 @@ export type CloseAnswer = 'closed' | 'declined' | 'no-answer' | 'unknown-session
 
 /** How long a close waits for the owner's answer before it lapses. */
 export const CLOSE_ANSWER_MS = 120_000;
+export interface BridgeOptions {
+  closeAnswerMs?: number | undefined;
+  /** Where the view's log lines go. Lines name sessions and say what happened; they never hold speech or session text. */
+  log?: (line: string) => void;
+}
 const UTTERANCES_KEPT = 200;
 
 export class Bridge {
@@ -25,15 +30,21 @@ export class Bridge {
   private pending: (PendingClose & { answer: (yes: boolean) => void }) | null = null;
   private readonly heard = new Map<string, Promise<Utterance>>();
   private queue: Promise<unknown> = Promise.resolve();
+  private readonly closeAnswerMs: number;
+  private readonly log: (line: string) => void;
+  /** The level agents' starts as last logged, so each change is logged once. */
+  private logged = { starting: new Set<string>(), failed: new Map<string, string>() };
 
   constructor(
     private readonly herdr: HerdrClient,
     private readonly mirror: Mirror,
     private readonly speech: Transcriber,
     private readonly agents: LevelAgents,
-    private readonly closeAnswerMs = CLOSE_ANSWER_MS,
+    options: BridgeOptions = {},
   ) {
-    agents.onChange(() => this.broadcast({ type: 'shelf', shelf: this.shelf() }));
+    this.closeAnswerMs = options.closeAnswerMs ?? CLOSE_ANSWER_MS;
+    this.log = options.log ?? (() => undefined);
+    agents.onChange(() => { this.logAgentStarts(); this.broadcast({ type: 'shelf', shelf: this.shelf() }); });
     mirror.listen({
       shelf: shelf => {
         if (this.jump && shelf.focusedId !== this.jump.current) this.jump = null;
@@ -102,7 +113,7 @@ export class Bridge {
         default: return assertNever(action);
       }
     } catch (error) {
-      return { ok: false, outcome: herdrProblem(error) };
+      return { ok: false, outcome: this.problem(`the ${action.kind} action`, error) };
     }
   }
 
@@ -175,10 +186,10 @@ export class Bridge {
             .then(() => this.herdr.call('agent.prompt', { target: seat.paneId, text: taken.order }))
             .then(
               () => this.broadcast({ type: 'notice', text: `The helper is ready and got your order: "${taken.order}"` }),
-              (error: unknown) => this.broadcast({ type: 'notice', text: `The helper did not get "${taken.order}": ${herdrProblem(error)}` }),
+              (error: unknown) => this.broadcast({ type: 'notice', text: `The helper did not get "${taken.order}": ${this.problem('an order to the helper', error)}` }),
             );
           return record(heard, 'helper', true, 'The helper is starting; your order goes to it when it is ready');
-        } catch (error) { return record(heard, 'helper', false, `The helper did not get it: ${herdrProblem(error)}`); }
+        } catch (error) { return record(heard, 'helper', false, `The helper did not get it: ${this.problem('an order to the helper', error)}`); }
       }
       case 'prompt': return this.deliver(record, heard, shelf, receiver);
       default: return assertNever(taken);
@@ -191,7 +202,7 @@ export class Bridge {
     if (!target) return record(heard, 'prompt', false, 'Not sent: the session that was in front when you spoke has closed.');
     const unready = notReady(shelf, target);
     if (unready) return record(heard, 'prompt', false, `Not sent: ${unready}`);
-    try { await this.prompt(target, heard); } catch (error) { return record(heard, 'prompt', false, `Not sent to ${target.name}: ${herdrProblem(error)}`); }
+    try { await this.prompt(target, heard); } catch (error) { return record(heard, 'prompt', false, `Not sent to ${target.name}: ${this.problem(`a prompt to ${target.name} (${target.id})`, error)}`); }
     return record(heard, 'prompt', true, `Sent to ${target.name}`);
   }
 
@@ -210,6 +221,7 @@ export class Bridge {
     const project = shelf.projects.find(p => p.id === target.workspaceId)?.label ?? '';
     const shown = `${n} ${target.name}${project ? ` (${project})` : ''}`;
     if (this.pending) return 'busy';
+    this.log(`close of ${shown} (${target.id}) asked of the owner`);
     const answer = await new Promise<'yes' | 'no' | 'no-answer'>(settle => {
       const timer = setTimeout(() => settle('no-answer'), this.closeAnswerMs);
       this.pending = { sessionId: target.id, name: shown, answer: yes => { clearTimeout(timer); settle(yes ? 'yes' : 'no'); } };
@@ -218,15 +230,36 @@ export class Bridge {
     this.pending = null;
     this.broadcast({ type: 'confirm', pending: null });
     if (answer !== 'yes') {
+      this.log(`close of ${shown} (${target.id}): ${answer === 'no' ? 'the owner said no' : 'no answer in time'}; it stays open`);
       this.broadcast({ type: 'notice', text: `${target.name} was not closed.` });
       return answer === 'no' ? 'declined' : 'no-answer';
     }
     try { await this.herdr.call('pane.close', { pane_id: target.id }); } catch (error) {
-      this.broadcast({ type: 'notice', text: `Could not close ${target.name}: ${herdrProblem(error)}` });
+      this.broadcast({ type: 'notice', text: `Could not close ${target.name}: ${this.problem(`the close of ${shown} (${target.id})`, error)}` });
       return 'failed';
     }
+    this.log(`closed ${shown} (${target.id}) on the owner's yes`);
     this.broadcast({ type: 'notice', text: `Closed ${target.name}.` });
     return 'closed';
+  }
+
+  /** Logs a Herdr error on an action, saying which, and returns what to tell the owner. */
+  private problem(what: string, error: unknown): string {
+    const text = herdrProblem(error);
+    this.log(`Herdr refused ${what}: ${text}`);
+    return text;
+  }
+
+  private seatName(id: string): string { return `${this.agents.describe(id)} (${id})`; }
+
+  /** One log line for each level-agent start that began, finished or failed since the last. */
+  private logAgentStarts(): void {
+    const now = this.agents.pending();
+    const starting = new Set(now.starting);
+    for (const id of starting) if (!this.logged.starting.has(id)) this.log(`${this.seatName(id)} is starting`);
+    for (const f of now.failed) if (this.logged.failed.get(f.id) !== f.reason) this.log(`${this.seatName(f.id)} did not start: ${f.reason}`);
+    for (const id of this.logged.starting) if (!starting.has(id) && !now.failed.some(f => f.id === id)) this.log(`${this.seatName(id)} started`);
+    this.logged = { starting, failed: new Map(now.failed.map(f => [f.id, f.reason])) };
   }
 
   private pendingView(): PendingClose | null {
@@ -249,7 +282,7 @@ export class Bridge {
 
   private async spokenKey(shelf: Shelf, receiver: string | null, key: KeyName): Promise<{ ok: boolean; outcome: string }> {
     if (receiver !== null && !shelf.sessions.some(s => s.id === receiver)) return { ok: false, outcome: 'Not pressed: the session that was in front when you spoke has closed.' };
-    try { return await this.key(shelf, receiver, key); } catch (error) { return { ok: false, outcome: herdrProblem(error) }; }
+    try { return await this.key(shelf, receiver, key); } catch (error) { return { ok: false, outcome: this.problem(`the ${key} key`, error) }; }
   }
 
   /** Brings a level's agent to the front, making its seat and starting the agent beside this call. */

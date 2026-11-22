@@ -33,15 +33,16 @@ export class HerdrBench {
 
   private server: ChildProcess | null = null;
 
-  private constructor(readonly directory: string, readonly client: HerdrClient) {}
+  private constructor(readonly directory: string, readonly client: HerdrClient, private readonly pathPrefix: string[]) {}
 
   get socketPath(): string { return this.client.socketPath; }
 
-  static async start(layout: BenchWorkspace[] = []): Promise<HerdrBench> {
+  /** `path`: directories put before PATH in this Herdr and its panes, e.g. one holding a stand-in `claude`. */
+  static async start(layout: BenchWorkspace[] = [], options: { path?: string[] } = {}): Promise<HerdrBench> {
     // Short path: a unix socket path must fit in 108 bytes.
     const directory = mkdtempSync('/tmp/svb-');
     mkdirSync(join(directory, 'home'));
-    const bench = new HerdrBench(directory, new HerdrClient(join(directory, 'home', '.config', 'herdr', 'herdr.sock')));
+    const bench = new HerdrBench(directory, new HerdrClient(join(directory, 'home', '.config', 'herdr', 'herdr.sock')), options.path ?? []);
     try { await bench.startServer(); } catch (error) { await bench.stop(); throw error; }
     for (const workspace of layout) await bench.addWorkspace(workspace);
     return bench;
@@ -49,7 +50,7 @@ export class HerdrBench {
 
   /** Starts (or starts again) this bench's Herdr on the same socket. */
   async startServer(): Promise<void> {
-    const env = { HOME: join(this.directory, 'home'), PATH: process.env.PATH ?? '/usr/bin:/bin', TERM: 'xterm-256color', SHELL: '/bin/bash', LANG: 'C.UTF-8' };
+    const env = { HOME: join(this.directory, 'home'), PATH: [...this.pathPrefix, process.env.PATH ?? '/usr/bin:/bin'].join(':'), TERM: 'xterm-256color', SHELL: '/bin/bash', LANG: 'C.UTF-8' };
     const server = spawn('herdr', ['server'], { env, cwd: this.directory, detached: true, stdio: 'ignore' });
     this.server = server;
     const deadline = Date.now() + 15_000;

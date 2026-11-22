@@ -13,7 +13,7 @@ const minutes = Number(process.argv[2] ?? 10);
 const bench = await HerdrBench.start(OWNER_SHAPE);
 const data = mkdtempSync('/tmp/svs-');
 const transcriber = { state: () => ({ ready: true as const }), transcribe: async () => '' };
-const agents = { seat: async () => { throw new Error('no level agents in the soak'); }, ready: async () => undefined, pending: () => ({ starting: [], failed: [] }), onChange: () => undefined };
+const agents = { seat: async () => { throw new Error('no level agents in the soak'); }, ready: async () => undefined, pending: () => ({ starting: [], failed: [] }), onChange: () => undefined, describe: (id: string) => id };
 const view = await startView({ herdrSocket: bench.socketPath, dataDirectory: data, host: '127.0.0.1', port: 0, speech: transcriber, agents, log: () => undefined, showPairingCode: () => undefined });
 const browser = await chromium.launch();
 const page = await (await browser.newContext({ ignoreHTTPSErrors: true })).newPage();

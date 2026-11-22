@@ -9,6 +9,7 @@ import type { Page } from '@playwright/test';
 import { HerdrBench, type BenchWorkspace } from '../bench/bench.js';
 import { HerdrLevelAgents, type AgentOptions, type LevelAgents } from '../bridge/agents.js';
 import type { Transcriber } from '../bridge/bridge.js';
+import { HerdrError } from '../bridge/herdr.js';
 import { REPO } from '../bridge/config.js';
 import { startView, type RunningView, type ViewOptions } from '../bridge/view.js';
 import type { ViewState } from '../shared/view-state.js';
@@ -27,6 +28,8 @@ export interface StandinAgentOptions {
   delayMs?: number;
   /** Makes every start fail with this message. */
   fail?: string;
+  /** Makes every start end as Herdr's does when the agent asks a question as it starts. */
+  ask?: boolean;
 }
 
 /**
@@ -39,6 +42,7 @@ export function benchAgents(bench: HerdrBench, data: string, options: StandinAge
     launch: async paneId => {
       if (options.delayMs) await new Promise(resolve => setTimeout(resolve, options.delayMs));
       if (options.fail) throw new Error(options.fail);
+      if (options.ask) throw new HerdrError('agent_not_ready', 'the agent asks something');
       await bench.startPane(paneId, { name, kind: 'agent' });
     },
   });

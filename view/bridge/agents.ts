@@ -16,6 +16,7 @@ import { createServer, type Server } from 'node:net';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { OVERVIEW_LABEL, SEAT_LABEL, type AgentRole } from '../shared/messages.js';
+import { agentName } from './agent-name.js';
 import { compiled } from './config.js';
 import { HerdrError, type HerdrClient, type HerdrPane, type HerdrSnapshot } from './herdr.js';
 
@@ -59,6 +60,8 @@ export interface LevelAgents {
   pending(): { starting: string[]; failed: { id: string; reason: string }[] };
   /** Called when a seat's state changes. */
   onChange(listener: () => void): void;
+  /** What a seat is, for a log line: "the helper", "the project agent of alpha". */
+  describe(paneId: string): string;
 }
 
 function settings(permissions: Record<string, unknown>, model?: string): string {
@@ -119,10 +122,13 @@ export class HerdrLevelAgents implements LevelAgents {
   private readonly starts = new Map<string, Promise<void>>();
   private readonly failures = new Map<string, string>();
   private readonly listeners = new Set<() => void>();
+  private readonly described = new Map<string, string>();
 
   constructor(private readonly herdr: HerdrClient, private readonly options: LevelOptions, private readonly closeSocket: string) {}
 
   onChange(listener: () => void): void { this.listeners.add(listener); }
+
+  describe(paneId: string): string { return this.described.get(paneId) ?? `the agent in ${paneId}`; }
 
   pending(): { starting: string[]; failed: { id: string; reason: string }[] } {
     return { starting: [...this.starts.keys()], failed: [...this.failures].map(([id, reason]) => ({ id, reason })) };
@@ -167,6 +173,7 @@ export class HerdrLevelAgents implements LevelAgents {
       await this.herdr.call('pane.rename', { pane_id: paneId, label: SEAT_LABEL[role] });
       pane = { id: paneId, workspaceId: workspace?.id ?? '', tabId: '', agent: null, status: 'unknown', label: SEAT_LABEL[role], title: null, cwd: agent.cwd };
     }
+    this.described.set(pane.id, role === 'overview-agent' ? 'the helper' : `the project agent of ${workspace?.label ?? pane.workspaceId}`);
     if (pane.agent !== null && !this.starts.has(pane.id)) { this.failures.delete(pane.id); return { paneId: pane.id, state: 'ready' }; }
     if (!this.starts.has(pane.id)) this.start(pane, role, agent);
     return { paneId: pane.id, state: 'starting' };
@@ -194,7 +201,7 @@ export class HerdrLevelAgents implements LevelAgents {
     // A seat that came back after a Herdr restart may sit in another directory.
     if (pane.cwd !== agent.cwd) await this.herdr.call('pane.send_input', { pane_id: pane.id, text: `cd '${agent.cwd.replace(/'/g, `'\\''`)}'`, keys: ['enter'] });
     if (agent.launch) { await agent.launch(pane.id); return; }
-    const name = role === 'overview-agent' ? OVERVIEW_LABEL : `project-agent-${pane.id.replace(/[^A-Za-z0-9]+/g, '-')}`;
+    const name = agentName(SEAT_LABEL[role], pane.id);
     const deadline = Date.now() + 10_000;
     for (;;) {
       try {
@@ -283,10 +290,12 @@ wants work done, start a session for it or prompt the session that should do it,
 approval, which the permission prompt asks for.`;
 
 /**
- * Listens for the close tool on a socket file only the owner's user can open.
- * Each request is one JSON line {"close": "<session>"}; the reply is {"answer": "..."}.
+ * Listens for the agents' tools on a socket file only the owner's user can open. Each request is
+ * one JSON line. {"close": "<session>"} asks for a close; the reply is {"answer": "..."}.
+ * {"log": "<line>"} puts a line in the view's log (a tool's failure the owner must be able to
+ * read later); the reply is {"answer": "logged"}.
  */
-export function serveCloseRequests(path: string, requestClose: (ref: string) => Promise<string>): Server {
+export function serveCloseRequests(path: string, requestClose: (ref: string) => Promise<string>, log: (line: string) => void = () => undefined): Server {
   if (existsSync(path)) rmSync(path);
   const server = createServer(socket => {
     let buffer = '';
@@ -296,7 +305,9 @@ export function serveCloseRequests(path: string, requestClose: (ref: string) => 
       const end = buffer.indexOf('\n');
       if (end < 0) { if (buffer.length > 4096) socket.destroy(); return; }
       let ref: unknown;
-      try { ref = (JSON.parse(buffer.slice(0, end)) as { close?: unknown }).close; } catch { ref = undefined; }
+      let line: unknown;
+      try { const request = JSON.parse(buffer.slice(0, end)) as { close?: unknown; log?: unknown }; ref = request.close; line = request.log; } catch { ref = undefined; }
+      if (typeof line === 'string' && line.trim()) { log(line.slice(0, 500)); socket.end(`${JSON.stringify({ answer: 'logged' })}\n`); return; }
       if (typeof ref !== 'string' || !ref.trim()) { socket.end(`${JSON.stringify({ answer: 'unknown-session' })}\n`); return; }
       void requestClose(ref).then(answer => socket.end(`${JSON.stringify({ answer })}\n`));
     });

@@ -6,6 +6,7 @@ import { ensureHostCertificate, PairingAuthority } from '../../host/src/auth.js'
 import { claudeAgents, HerdrLevelAgents, serveCloseRequests, type LevelAgents } from './agents.js';
 import { Bridge, type Transcriber } from './bridge.js';
 import { HerdrClient } from './herdr.js';
+import { fileLog } from './log.js';
 import { DEFAULT_MIRROR, Mirror, type MirrorOptions } from './mirror.js';
 import { startServer } from './server.js';
 import { LocalSpeech, modelDirectory } from './speech.js';
@@ -25,6 +26,8 @@ export interface ViewOptions {
 }
 
 export interface RunningView {
+  /** The view's log: the terminal and `view.log` in the data directory. */
+  log: (line: string) => void;
   bridge: Bridge;
   mirror: Mirror;
   pairing: PairingAuthority;
@@ -34,6 +37,7 @@ export interface RunningView {
 }
 
 export async function startView(options: ViewOptions): Promise<RunningView> {
+  const log = fileLog(options.dataDirectory, options.log);
   const herdr = new HerdrClient(options.herdrSocket);
   const mirror = new Mirror(herdr, options.mirror ?? DEFAULT_MIRROR);
   let speech = options.speech;
@@ -41,13 +45,13 @@ export async function startView(options: ViewOptions): Promise<RunningView> {
     const local = new LocalSpeech(modelDirectory(options.dataDirectory));
     await local.load();
     const speechState = local.state();
-    if (!speechState.ready) options.log(`speech unavailable: ${speechState.reason}`);
+    if (!speechState.ready) log(`speech unavailable: ${speechState.reason}`);
     speech = local;
   }
   const closeSocket = join(options.dataDirectory, 'helper.sock');
   const agents = options.agents ?? new HerdrLevelAgents(herdr, claudeAgents(join(options.dataDirectory, 'agents')), closeSocket);
-  const bridge = new Bridge(herdr, mirror, speech, agents, options.closeAnswerMs);
-  const closeServer: NetServer = serveCloseRequests(closeSocket, ref => bridge.requestClose(ref));
+  const bridge = new Bridge(herdr, mirror, speech, agents, { closeAnswerMs: options.closeAnswerMs, log });
+  const closeServer: NetServer = serveCloseRequests(closeSocket, ref => bridge.requestClose(ref), log);
   const pairing = new PairingAuthority(join(options.dataDirectory, 'pairing'));
   const tls = join(options.dataDirectory, 'tls');
   let certificate;
@@ -59,16 +63,16 @@ export async function startView(options: ViewOptions): Promise<RunningView> {
   mirror.listen({
     shelf: shelf => {
       const link = shelf.herdr.state === 'up' ? 'Herdr connected' : `Herdr unavailable: ${shelf.herdr.reason}`;
-      if (link !== lastLink) { lastLink = link; options.log(link); }
+      if (link !== lastLink) { lastLink = link; log(link); }
     },
     text: () => undefined,
   });
   mirror.start();
-  const server = await startServer({ bridge, pairing, certificate, host: options.host, port: options.port, showPairingCode: options.showPairingCode, log: options.log });
+  const server = await startServer({ bridge, pairing, certificate, host: options.host, port: options.port, showPairingCode: options.showPairingCode, log });
   const address = server.address();
   const port = typeof address === 'object' && address ? address.port : options.port;
   return {
-    bridge, mirror, pairing, server,
+    log, bridge, mirror, pairing, server,
     url: `https://127.0.0.1:${port}`,
     async stop() {
       mirror.stop();

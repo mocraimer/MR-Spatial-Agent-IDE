@@ -16,7 +16,7 @@ const say: Record<CloseAnswer, string> = {
   'no-answer': `Not closed: the owner did not answer about ${ref}.`,
   'unknown-session': `Not closed: no open session matches "${ref}". Use its pane id from \`herdr pane list\`.`,
   ambiguous: `Not closed: more than one session matches "${ref}". Use its pane id from \`herdr pane list\`.`,
-  busy: 'Not closed: another close is already waiting for the owner. Try again after they answer.',
+  busy: 'Not closed: another question is already waiting for the owner. Try again after they answer.',
   failed: `Not closed: Herdr refused to close ${ref}.`,
 };
 

@@ -5,13 +5,15 @@
  */
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { HerdrBench, type BenchWorkspace } from '../bench/bench.js';
-import { OVERVIEW, serveCloseRequests } from '../bridge/agents.js';
+import { AGENT_NAME_RULE, agentName } from '../bridge/agent-name.js';
+import { claudeAgents, HerdrLevelAgents, OVERVIEW, serveCloseRequests } from '../bridge/agents.js';
 import { Bridge, type Transcriber } from '../bridge/bridge.js';
 import { compiled } from '../bridge/config.js';
+import type { HerdrClient } from '../bridge/herdr.js';
 import { DEFAULT_MIRROR, Mirror } from '../bridge/mirror.js';
 import { plain } from '../shared/ansi.js';
 import { currentProject } from '../shared/messages.js';
@@ -30,13 +32,13 @@ const LAYOUT: BenchWorkspace[] = [
   { label: 'beta', panes: [{ name: 'b1', kind: 'agent' }, { name: 'bsh', kind: 'shell' }] },
 ];
 
-async function setup(layout = LAYOUT, standin: StandinAgentOptions = {}, closeAnswerMs = 400) {
-  const bench = await HerdrBench.start(layout);
+async function setup(layout = LAYOUT, standin: StandinAgentOptions = {}, closeAnswerMs = 400, path: string[] = []) {
+  const bench = await HerdrBench.start(layout, { path });
   const data = mkdtempSync('/tmp/svl-');
   const mirror = new Mirror(bench.client, DEFAULT_MIRROR);
   const speech = new Heard();
   const agents = benchAgents(bench, data, standin);
-  const bridge = new Bridge(bench.client, mirror, speech, agents, closeAnswerMs);
+  const bridge = new Bridge(bench.client, mirror, speech, agents, { closeAnswerMs });
   mirror.start();
   await bench.waitFor(async () => mirror.shelf().sessions.length === layout.flatMap(w => w.panes).length, 'the mirror to see every session');
   const snap = () => bench.client.snapshot();
@@ -255,4 +257,62 @@ test('the project agent\'s tool keeps to its project, never moves the front, and
     assert.equal((await yes).status, 0);
     assert.equal((await s.snap()).panes.some(p => p.id === made?.id), false);
   } finally { await new Promise(resolve => server.close(resolve)); await s.stop(); }
+});
+
+test('every agent name the view makes meets Herdr\'s rule, for any label or pane id, and no two are alike', () => {
+  const labels = ['project agent', 'helper', 'Flaky Test', 'Ünïcode — dash/slash', 'a'.repeat(80), '', '   ', '12 monkeys', 'x'];
+  const ids = ['w1:p2', 'wW:p2', 'ww:p2', 'WW:P2', 'w12:p345', 'w1:p2'.repeat(10), ''];
+  const names = new Set<string>();
+  for (const label of labels) for (const id of ids) {
+    const name = agentName(label, id);
+    assert.match(name, AGENT_NAME_RULE, `${JSON.stringify(label)} + ${JSON.stringify(id)} -> ${name}`);
+    names.add(name);
+  }
+  assert.equal(names.size, labels.length * ids.length, 'distinct inputs give distinct names');
+  assert.notEqual(agentName('project agent', 'wW:p2'), agentName('project agent', 'ww:p2'), 'ids that differ only in capitals');
+});
+
+test('a project agent started in a pane whose id has capitals is started under a name Herdr accepts', async () => {
+  // Herdr refused "project-agent-wW-p2". The bench's Herdr only makes lower-case ids, so a stand-in
+  // for Herdr's socket answers with the owner's kind of id and holds the rule Herdr states.
+  const calls: { method: string; params: Record<string, unknown> }[] = [];
+  const herdr = {
+    snapshot: async () => ({ workspaces: [{ id: 'wW', label: 'Alpha Project' }], panes: [{ id: 'wW:p1', workspaceId: 'wW', tabId: 'wW:t1', agent: null, status: 'unknown', label: null, title: null, cwd: '/tmp' }], focusedPaneId: 'wW:p1' }),
+    call: async (method: string, params: Record<string, unknown>) => {
+      calls.push({ method, params });
+      if (method === 'tab.create') return { root_pane: { pane_id: 'wW:p2' } };
+      if (method === 'agent.start' && !AGENT_NAME_RULE.test(String(params.name))) throw Object.assign(new Error('agent name must start with a lowercase letter'), { code: 'invalid_agent_name' });
+      return {};
+    },
+  } as unknown as HerdrClient;
+  const data = mkdtempSync('/tmp/svn-');
+  try {
+    const agents = new HerdrLevelAgents(herdr, claudeAgents(data), join(data, 'helper.sock'));
+    const seat = await agents.seat({ project: 'wW' });
+    await agents.ready(seat.paneId);
+    assert.equal(seat.paneId, 'wW:p2');
+    assert.equal(calls.filter(c => c.method === 'agent.start').length, 1);
+    assert.deepEqual(agents.pending(), { starting: [], failed: [] });
+  } finally { rmSync(data, { recursive: true, force: true }); }
+});
+
+test('the level tool starts an agent under a name Herdr accepts, whatever the owner calls it', async () => {
+  // A program named claude on the bench's PATH stands in for Claude Code; Herdr starts it for real.
+  const bin = mkdtempSync('/tmp/svb-bin-');
+  writeFileSync(join(bin, 'claude'), `#!/bin/sh\nexec node ${compiled('bench', 'standin.js')} --name started --agent claude\n`);
+  chmodSync(join(bin, 'claude'), 0o755);
+  const s = await setup(LAYOUT, {}, 400, [bin]);
+  try {
+    const alpha = ws(s, 'alpha');
+    const me = s.bench.pane('a2');
+    for (const name of ['Flaky Test Runner With A Very Long Name Indeed', 'logs']) {
+      const started = await tool(s, me, alpha, ['start', 'claude', name]);
+      assert.equal(started.status, 0, started.out);
+      const made = (await s.snap()).panes.find(p => p.label === name);
+      assert.ok(made, `a session named ${name}`);
+      await s.bench.waitFor(async () => (await s.snap()).panes.some(p => p.id === made.id && p.agent !== null), `the agent in ${name}`);
+    }
+    const bare = await tool(s, me, alpha, ['start', 'claude']);
+    assert.equal(bare.status, 0, `an agent with no name of its own: ${bare.out}`);
+  } finally { await s.stop(); rmSync(bin, { recursive: true, force: true }); }
 });

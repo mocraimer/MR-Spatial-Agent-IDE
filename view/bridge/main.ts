@@ -1,6 +1,8 @@
 /** `npm run view`: the bridge on the owner's Herdr. */
+import { join } from 'node:path';
 import { BRIDGE_PORT, dataDirectory, herdrSocket } from './config.js';
 import { linkReport } from './link.js';
+import { LOG_FILE } from './log.js';
 import { startView } from './view.js';
 
 const log = (line: string) => console.log(`${new Date().toISOString().slice(11, 19)} ${line}`);
@@ -26,14 +28,14 @@ try {
   process.exit(1);
 }
 
-log(`view bridge on ${view.url} (Herdr socket ${herdrSocket()})`);
-for (const line of linkReport()) log(line);
+view.log(`view bridge on ${view.url} (Herdr socket ${herdrSocket()}; log file ${join(dataDirectory(), LOG_FILE)})`);
+for (const line of linkReport()) view.log(line);
 if (view.pairing.clients().every(c => c.revokedAt !== null)) {
-  log('no headset is paired yet');
+  view.log('no headset is paired yet');
   showPairingCode(view.pairing.setupCode().code);
 }
 
 const running = view;
-const stop = () => { log('stopping'); void running.stop().then(() => process.exit(0)); };
+const stop = () => { running.log('stopping'); void running.stop().then(() => process.exit(0)); };
 process.on('SIGINT', stop);
 process.on('SIGTERM', stop);

@@ -18,14 +18,14 @@ class Heard implements Transcriber {
   state() { return { ready: true as const }; }
   async transcribe(): Promise<string> { return this.queue.shift() ?? ''; }
 }
-const noAgents: LevelAgents = { seat: async () => { throw new Error('no level agents here'); }, ready: async () => undefined, pending: () => ({ starting: [], failed: [] }), onChange: () => undefined };
+const noAgents: LevelAgents = { seat: async () => { throw new Error('no level agents here'); }, ready: async () => undefined, pending: () => ({ starting: [], failed: [] }), onChange: () => undefined, describe: id => id };
 const audio = new Float32Array(1600);
 
 async function setup(closeAnswerMs = 400) {
   const bench = await HerdrBench.start([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' }, { name: 'a2', kind: 'agent' }, { name: 'sh', kind: 'shell' }] }]);
   const mirror = new Mirror(bench.client, DEFAULT_MIRROR);
   const speech = new Heard();
-  const bridge = new Bridge(bench.client, mirror, speech, noAgents, closeAnswerMs);
+  const bridge = new Bridge(bench.client, mirror, speech, noAgents, { closeAnswerMs });
   mirror.start();
   await bench.waitFor(async () => mirror.shelf().sessions.length === 3, 'the mirror to see three sessions');
   const open = async (name: string) => (await bench.client.snapshot()).panes.some(p => p.id === bench.pane(name));
@@ -144,7 +144,7 @@ test('a close names exactly one session: a shared name or a project label is ref
     { label: 'beta', panes: [{ name: 'logs-b', kind: 'shell' }] },
   ]);
   const mirror = new Mirror(bench.client, DEFAULT_MIRROR);
-  const bridge = new Bridge(bench.client, mirror, new Heard(), noAgents, 300);
+  const bridge = new Bridge(bench.client, mirror, new Heard(), noAgents, { closeAnswerMs: 300 });
   const confirms: (string | null)[] = [];
   bridge.connect(event => { if (event.type === 'confirm') confirms.push(event.pending?.name ?? null); });
   mirror.start();
