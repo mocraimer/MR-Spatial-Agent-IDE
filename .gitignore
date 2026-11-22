@@ -1,0 +1,20 @@
+node_modules/
+build/
+.local/
+*.log
+.env
+.env.*
+!.env.example
+test-results/
+playwright-report/
+coverage/
+
+# Unity generated state and private personal builds.
+native/Library/
+native/Temp/
+native/Logs/
+native/obj/
+native/UserSettings/
+native/Builds/
+*.apk
+*.keystore

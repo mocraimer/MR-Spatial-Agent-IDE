@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "build": {
+    "digest": "2fef8797a0fc6f608eb8f873578b83201d3976a229c3fbbe152af428800513e5",
+    "revision": "a18e480bd45a397165c01adee5f9da17f218e8f1",
+    "dirty": false
+  },
+  "declarationsDigest": "d9ca6b5c4c9cf4af9802c723f9d088b6d286173b18b5c5d47818a9319883d869"
+}

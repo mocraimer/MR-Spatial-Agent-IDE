@@ -1,0 +1,37 @@
+{
+  "name": "spatial-agent-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "coordinator-api:prepare": "node scripts/coordinator-api-prepare.mjs",
+    "coordinator-api:verify": "node scripts/coordinator-api-verify.mjs",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint host scripts view",
+    "test": "npm run build && node --test \"build/host/tests/**/*.test.js\" \"build/view/tests/**/*.test.js\"",
+    "start": "node build/host/src/main.js",
+    "test:ui": "npm run build && playwright test",
+    "view": "node build/view/bridge/main.js",
+    "view:setup": "node build/view/bridge/setup.js"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.13.0",
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^22.9.0",
+    "@types/webxr": "^0.5.24",
+    "agent-system": "file:vendor/coordinator-api",
+    "eslint": "^9.13.0",
+    "iwer": "^2.8.0",
+    "typescript": "^5.6.3",
+    "typescript-eslint": "^8.12.0"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.3.2",
+    "fs-native-extensions": "1.5.1"
+  }
+}

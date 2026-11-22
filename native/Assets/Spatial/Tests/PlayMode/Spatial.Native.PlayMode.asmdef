@@ -1,0 +1,1 @@
+{"name":"Spatial.Native.PlayMode","references":["Spatial.Native","Oculus.VR","Unity.InputSystem","Unity.ugui"],"optionalUnityReferences":["TestAssemblies"]}

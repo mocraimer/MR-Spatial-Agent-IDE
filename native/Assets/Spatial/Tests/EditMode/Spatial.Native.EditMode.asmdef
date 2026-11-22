@@ -1,0 +1,1 @@
+{"name":"Spatial.Native.EditMode","references":["Spatial.Native","Spatial.Native.Editor","Oculus.VR","Unity.InputSystem","Unity.XR.OpenXR"],"includePlatforms":["Editor"],"optionalUnityReferences":["TestAssemblies"]}

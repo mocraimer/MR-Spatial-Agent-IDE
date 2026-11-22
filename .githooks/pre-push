@@ -1,0 +1,4 @@
+#!/bin/sh
+# Refuses a push that carries a private value. Turn it on once per clone:
+#   git config core.hooksPath .githooks
+exec node scripts/leak-check.mjs pre-push "$@"

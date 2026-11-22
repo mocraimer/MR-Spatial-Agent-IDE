@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Herdr sessions — spatial view</title>
+<style>
+  @font-face { font-family: Inter; font-weight: 400; font-display: swap; src: url(/app/fonts/Inter-Regular.woff2) format("woff2"); }
+  @font-face { font-family: Inter; font-weight: 600; font-display: swap; src: url(/app/fonts/Inter-SemiBold.woff2) format("woff2"); }
+  @font-face { font-family: "JetBrains Mono"; font-weight: 400; font-display: swap; src: url(/app/fonts/JetBrainsMono-Regular.woff2) format("woff2"); }
+  @font-face { font-family: "JetBrains Mono"; font-weight: 700; font-display: swap; src: url(/app/fonts/JetBrainsMono-Bold.woff2) format("woff2"); }
+  /* Outside the headset a soft grey backdrop stands in for the room. */
+  html, body { margin: 0; height: 100%; color: #e8eef4; font: 18px/1.45 Inter, system-ui, "Segoe UI", Roboto, sans-serif; background: radial-gradient(120% 95% at 50% 32%, #7e868e 0%, #62686f 52%, #464b51 100%) #62686f; }
+  #scene { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  main { position: fixed; left: 28px; top: 28px; width: min(30rem, calc(100vw - 100px)); padding: 24px 26px 26px; background: linear-gradient(#121b27, #0b1017 40%, #090d13); border: 1.5px solid #273444; border-radius: 22px; box-shadow: 0 18px 50px rgba(8, 12, 18, 0.45); }
+  h1 { margin: 0 0 4px; font-size: 24px; font-weight: 600; letter-spacing: -0.01em; }
+  h1::before { content: ""; display: inline-block; width: 6px; height: 20px; margin-right: 12px; border-radius: 3px; background: #6cb6ff; vertical-align: -2px; }
+  p { margin: 8px 0; color: #8fa0b3; }
+  form { display: grid; gap: 12px; margin-top: 16px; }
+  label { color: #8fa0b3; font-size: 16px; }
+  input { font: 400 26px "JetBrains Mono", "DejaVu Sans Mono", monospace; letter-spacing: 0.1em; padding: 12px 14px; border-radius: 12px; border: 1.5px solid #273444; background: #141d29; color: #e8eef4; outline: none; }
+  input:focus { border-color: #6cb6ff; }
+  button { font: 600 20px Inter, system-ui, sans-serif; padding: 14px 18px; margin-top: 4px; border-radius: 999px; border: 2px solid #6cb6ff; background: linear-gradient(#234a70, #1b3a59); color: #e8eef4; cursor: pointer; }
+  button:hover { background: linear-gradient(#2a567f, #204466); }
+  button.quiet { border: 1.5px solid #273444; background: linear-gradient(#1a2532, #131c27); font-weight: 400; color: #c5d0db; }
+  #enter { margin-top: 14px; width: 100%; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<main>
+  <h1>Your Herdr sessions</h1>
+  <p id="status">Connecting to the PC…</p>
+  <form id="pair" hidden>
+    <label for="code">Pairing code from the terminal where the view runs on the PC</label>
+    <input id="code" autocomplete="off" autocapitalize="characters" spellcheck="false" required>
+    <button type="submit">Pair this headset</button>
+    <button type="button" id="newcode" class="quiet">Show a new code on the PC</button>
+  </form>
+  <button id="enter" hidden>Enter mixed reality</button>
+</main>
+<script type="module" src="/app/page/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,3 @@
+<linker>
+  <assembly fullname="Spatial.Native" preserve="all" />
+</linker>

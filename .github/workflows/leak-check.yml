@@ -1,0 +1,35 @@
+name: Leak check
+
+# Looks for private keys, tokens and email addresses outside the allow list, in the tracked files
+# and in every commit. The owner's private-terms list stays on the owner's machine, so the
+# term check runs in the pre-push hook only (see README, "Before you push").
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: Generic leak scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Scan the tracked files
+        run: node scripts/leak-check.mjs tree
+
+      - name: Scan every commit
+        run: node scripts/leak-check.mjs range HEAD

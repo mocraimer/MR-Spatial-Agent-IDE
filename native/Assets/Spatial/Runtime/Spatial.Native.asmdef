@@ -1,0 +1,1 @@
+{"name":"Spatial.Native","references":["Oculus.VR","Unity.XR.Hands","Unity.InputSystem","Unity.ugui","Unity.XR.OpenXR","Unity.XR.Management","Unity.Newtonsoft.Json"],"autoReferenced":true}

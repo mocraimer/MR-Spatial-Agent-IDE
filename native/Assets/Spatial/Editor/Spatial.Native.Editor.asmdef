@@ -1,0 +1,1 @@
+{"name":"Spatial.Native.Editor","references":["Spatial.Native","Oculus.VR","Oculus.VR.Editor","Unity.XR.Management","Unity.XR.Management.Editor","Unity.XR.OpenXR","Unity.XR.OpenXR.Editor","Unity.XR.MetaOpenXR","Unity.XR.Hands"],"includePlatforms":["Editor"],"autoReferenced":true}

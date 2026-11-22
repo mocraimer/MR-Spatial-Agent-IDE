@@ -1,0 +1,18 @@
+/Library/
+/Temp/
+/Obj/
+/Logs/
+/UserSettings/
+/artifacts/
+/.vs/
+/.utmp/
+/.gradle/
+/.idea/
+*.csproj
+*.sln
+*.slnx
+*.keystore
+*.jks
+# Meta SDK generates local editor bridge credentials here even with its dev agent disabled.
+/Assets/Resources/DevAgentSettings.asset
+/Assets/Resources/DevAgentSettings.asset.meta

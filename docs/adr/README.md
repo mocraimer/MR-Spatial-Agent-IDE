@@ -1,0 +1,9 @@
+# Architecture Decision Records
+
+| Date | ADR | Status | Area |
+|------|-----|--------|------|
+| 2026-11-21 | [The helper runs without permission prompts; closing is held by a hook and the owner's yes](20261121-helper-closes-only-on-the-owners-yes.md) | Accepted | Spatial view |
+| 2026-11-21 | [Local speech on the PC with Moonshine tiny](20261121-local-speech-on-the-pc.md) | Accepted | Spatial view |
+| 2026-11-21 | [A thin WebXR view over the owner's Herdr sessions](20261121-thin-webxr-view-over-herdr.md) | Accepted | Spatial view |
+| 2026-11-21 | [Wi-Fi link through a Windows forward, behind a pairing code](20261121-wifi-link-with-pairing.md) | Accepted | Spatial view |
+| 2026-11-22 | [The workspace is one public MIT repository; private values stay in untracked local configuration](20261122-public-mit-repository-for-the-spatial-workspace.md) | Accepted | Publication |

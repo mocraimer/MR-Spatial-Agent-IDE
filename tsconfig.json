@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": [
+      "ES2023",
+      "DOM"
+    ],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "skipLibCheck": true,
+    "rootDir": ".",
+    "outDir": "build",
+    "types": [
+      "node"
+    ],
+    "sourceMap": true
+  },
+  "include": [
+    "host/**/*.ts",
+    "scripts/**/*.ts",
+    "view/**/*.ts"
+  ]
+}

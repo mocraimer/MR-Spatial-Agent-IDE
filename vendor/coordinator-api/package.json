@@ -1,0 +1,13 @@
+{
+  "name": "agent-system",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Build-time coordinator declarations; not an execution package",
+  "exports": {
+    "./spatial-api": {
+      "types": "./dist/spatial-api.d.ts"
+    },
+    "./coordinator-api-identity": "./coordinator-api-identity.json"
+  }
+}
