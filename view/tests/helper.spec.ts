@@ -52,8 +52,9 @@ test('a spoken order to the helper starts, renames and closes sessions, closing 
     closeAnswerMs: 25_000,
     // A bench pane has a private HOME; the agents need the owner's, where their login lives.
     agents: new HerdrLevelAgents(bench.client, {
-      helper: { ...claudeHelper(join(data, 'agents', 'helper')), env: { HOME: homedir() } },
-      project: { ...claudeProjectAgent(join(data, 'agents', 'project-agent')), env: { HOME: homedir() } },
+      // One fixed folder across runs: Claude Code records its trust answer per folder, in the owner's settings.
+      helper: { ...claudeHelper('/tmp/spatial-view-test-agents/helper'), env: { HOME: homedir() } },
+      project: { ...claudeProjectAgent('/tmp/spatial-view-test-agents/project-agent'), env: { HOME: homedir() } },
     }, join(data, 'helper.sock')),
   }));
   await pair(page, r);

@@ -11,7 +11,7 @@ import { arrange, columnFit, CHIP_ARC, FRONT_DISTANCE, FRONT_WIDTH, FRONT_Y, ARC
 import { BridgeLink } from './link.js';
 import { Mic, openMicrophone, type Captured, type OpenSource } from './mic.js';
 import {
-  CONTROLS_SIZE, LINE_PX, drawChip, drawControls, drawTalk, TALK_SIZE, type TalkPhase, drawFront, drawLabel, drawStrip, drawTile, EMPTY_FRONT, FRONT_SIZE, NO_SESSIONS, lightOf, regionAt, resetFonts, terminalLines, type ControlButton, type Region, type StripState,
+  CONTROLS_SIZE, LINE_PX, drawChip, drawControls, drawTalk, TALK_SIZE, type TalkPhase, drawFront, drawStrip, drawTile, EMPTY_FRONT, FRONT_SIZE, NO_SESSIONS, lightOf, regionAt, resetFonts, terminalLines, type ControlButton, type Region, type StripState,
 } from './panels.js';
 import { onArc, Scene, type Hit, type Pointer, type Rect } from './scene.js';
 
@@ -286,8 +286,9 @@ const EMPTY_SHELF: Shelf = { herdr: { state: 'up' }, projects: [], sessions: [],
 function agentNote(shelf: Shelf, s: Session | null): string | null {
   if (!s || s.role === 'task') return null;
   const failed = shelf.failed.find(f => f.id === s.id);
-  if (failed) return failed.reason;
-  if (shelf.starting.includes(s.id)) return `${s.role === 'overview-agent' ? 'The helper' : 'This project\'s agent'} is starting. Speak to it once this band is gone.`;
+  // A leading ! marks a band that is about the agent, not about the window being out of date.
+  if (failed) return `!${failed.reason}`;
+  if (shelf.starting.includes(s.id)) return `!${s.role === 'overview-agent' ? 'The helper' : 'This project\'s agent'} is starting. Speak to it once this band is gone.`;
   return null;
 }
 
@@ -362,9 +363,6 @@ function renderNow(): void {
 
   for (const column of columns) {
     const { step, width } = columnFit(column.tiles.length);
-    const labelId = `label:${column.projectId}`;
-    surface(labelId, column.project, width, onArc(column.angle, TOP + 0.13, ARC), c => drawLabel(c, column.project));
-    used.add(labelId);
     column.tiles.forEach((t, i) => {
       const id = `tile:${t.session.id}`;
       const tileStale = t.closed ? 'Closed in Herdr — nothing to do.' : stale ?? agentNote(shelf, t.session);
@@ -436,7 +434,7 @@ window.viewState = () => {
     receiver: shelf?.focusedId ?? null,
     frontText: front ? terminalLines(plain(state.texts.get(front.id) ?? '')).slice(-40) : [],
     place: place.overview ? { overview: true } : { overview: false, projectId: place.projectId, project: place.project },
-    agentNote: shelf ? agentNote(shelf, front) : null,
+    agentNote: shelf ? agentNote(shelf, front)?.replace(/^!/, '') ?? null : null,
     chips: chips.map(c => ({ projectId: c.projectId, project: c.project, overview: c.overview, sessions: c.sessions.map(s => ({ id: s.id, light: lightOf(s) })), angle: c.angle, width: c.width })),
     columns: columns.map(c => ({ projectId: c.projectId, project: c.project, side: c.angle < 0 ? 'left' as const : 'right' as const, width: columnFit(c.tiles.length).width, tiles: c.tiles.map(t => ({ n: t.n, id: t.session.id, name: t.session.name, role: t.session.role, light: lightOf(t.session), closed: t.closed, inFront: t.session.id === front?.id })) })),
     scroll: state.scroll,

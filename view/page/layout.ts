@@ -5,13 +5,13 @@ import { currentProject, type Session, type Shelf } from '../shared/messages.js'
 /** The front session: metres wide, metres away, metres below eye height at its centre. */
 export const FRONT_WIDTH = 1.1, FRONT_DISTANCE = 0.9, FRONT_Y = -0.05;
 /** The front spans about ±31°; the columns beside it start clear of it. */
-export const TILE_WIDTH = 0.42, ARC = 1.0, FIRST_ANGLE = 46, TOP = 0.3;
+export const TILE_WIDTH = 0.42, ARC = 1.0, FIRST_ANGLE = 46, TOP = 0.22;
 /** A column's tiles fit between TOP and this far below it. */
-const COLUMN_HEIGHT = 0.85, TILE_GAP = 0.03;
+const COLUMN_HEIGHT = 0.8, TILE_GAP = 0.03;
 /** Tile canvas proportions (panels.ts TILE_SIZE): height over width. */
 const TILE_ASPECT = 400 / 640;
 /** Chips (inside a project) and nodes (at the overview): a row of projects above the strip. */
-export const CHIP_WIDTH = 0.17, NODE_WIDTH = 0.22, CHIP_ARC = 1.0, CHIP_Y = 0.46, CHIP_GAP = 0.02, ROW_MAX = 8;
+export const CHIP_WIDTH = 0.2, NODE_WIDTH = 0.26, CHIP_ARC = 1.0, CHIP_Y = 0.48, CHIP_GAP = 0.02, ROW_MAX = 8;
 /** Chip canvas proportions (panels.ts CHIP_SIZE): height over width. */
 const CHIP_ASPECT = 150 / 520;
 

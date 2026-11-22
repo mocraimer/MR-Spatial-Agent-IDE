@@ -117,3 +117,37 @@ test('listening with an utterance shown', async ({ page }) => {
   await expect.poll(async () => (await viewState(page)).last?.outcome).toBe('Sent to a1');
   await shot(page, '12-listening-utterance');
 });
+
+test('the overview and the chips: nodes and chips at seven projects and at fourteen, a waiting one standing out, agents starting and failed', async ({ page }) => {
+  test.setTimeout(120_000);
+  const { benchAgents } = await import('./fixture.js');
+  const layout = (n: number) => Array.from({ length: n }, (_, i) => ({ label: `${['billing-reconciliation-service', 'storefront-web', 'agent-coordinator', 'spatial-view', 'docs', 'infra', 'render-farm'][i % 7]}${i >= 7 ? `-${i}` : ''}`, panes: [{ name: `s${i}`, kind: 'agent' as const }] }));
+  for (const count of [7, 14]) {
+    r = await rig(layout(count), (bench, data) => ({ agents: benchAgents(bench, data, { delayMs: 4000 }) }));
+    await emulateQuest(page);
+    await pair(page, r);
+    await enterMixedReality(page);
+    await r.bench.type('s2', '/block');
+    // The overview: the helper starting in front, every project a node.
+    await page.evaluate(() => fetch('/api/action', { method: 'POST', body: JSON.stringify({ command: 'overview' }) }));
+    await expect.poll(async () => (await viewState(page)).place).toEqual({ overview: true });
+    await expect.poll(async () => (await viewState(page)).agentNote ?? '').toContain('starting');
+    await expect.poll(async () => (await viewState(page)).chips.length).toBe(count);
+    await shot(page, `13-overview-${count}-starting`);
+    await expect.poll(async () => (await viewState(page)).agentNote, { timeout: 15_000 }).toBeNull();
+    await shot(page, `14-overview-${count}`);
+    // Inside a project: chips.
+    await page.evaluate(id => fetch('/api/action', { method: 'POST', body: JSON.stringify({ go: id }) }), r.bench.workspaces.get(layout(count)[0]?.label as string) as string);
+    await expect.poll(async () => (await viewState(page)).chips.length).toBe(count);
+    await shot(page, `15-inside-${count}`);
+    await r.stop();
+  }
+  // A start that fails says so on the agent's window.
+  r = await rig(layout(2), (bench, data) => ({ agents: benchAgents(bench, data, { fail: 'claude was not found' }) }));
+  await emulateQuest(page);
+  await pair(page, r);
+  await enterMixedReality(page);
+  await page.evaluate(id => fetch('/api/action', { method: 'POST', body: JSON.stringify({ go: id }) }), r.bench.workspaces.get(layout(2)[1]?.label as string) as string);
+  await expect.poll(async () => (await viewState(page)).agentNote ?? '').toContain('did not start');
+  await shot(page, '16-agent-failed');
+});

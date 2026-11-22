@@ -94,7 +94,7 @@ A **project** is a Herdr workspace. The view shows one place at a time, and the 
 
 **The helper** is in front at the overview. From inside any project, start a sentence with "helper" to reach it without leaving: "helper, start a shell in project docs". Orders with no project named start the session in the helper's workspace, so it shows at the overview.
 
-While an agent is starting, an amber band across its window says so; speak to it once the band is gone. Words spoken to it before then are not sent, and the strip says so. An order to the helper while it starts is the one exception: it waits and is delivered when the helper is ready, and a note says so. If an agent asks something as it starts (the first time, Claude Code may ask whether to trust its folder), its window shows the question: answer it with the keys. If it does not start, the band says why; go to the project again to retry.
+While an agent is starting, an amber band across its window says so; speak to it once the band is gone. Words spoken to it before then are not sent, and the strip says so. An order to the helper while it starts is the one exception: it waits and is delivered when the helper is ready, and a note says so. The first time each kind of agent starts, Claude Code asks whether to trust its folder, and its first choice is "No, exit": press **↓** then **Enter** to choose "Yes, I trust this folder". It asks once for the helper's folder and once for the folder all project agents share. Any other question an agent asks as it starts shows in its window the same way, with an amber light: answer it with the keys. If it does not start, the band says why; go to the project again to retry.
 
 ## Acting
 
@@ -157,7 +157,7 @@ A window that is not current says so on an amber band, and says what to do. It r
 | Closed in Herdr — nothing to do | The session ended; its tile leaves after a few seconds. |
 | No sessions open in Herdr | Start a session in Herdr, or ask the helper to; it appears by itself. |
 | The helper / This project's agent is starting | Wait a few seconds; the band goes when it is ready. |
-| It asks something as it starts | Answer the question in its window with the keys below it. |
+| (an amber light on an agent that just started) | It asks something, such as whether to trust its folder: answer in its window with the keys below it (↓ then Enter for "Yes, I trust this folder"). |
 | It did not start (…) | Go to the project again, or say "overview" for the helper, to retry. If it keeps failing, check that `claude` runs in a terminal. |
 | Mic unavailable: Mic refused | Allow the microphone for this page in the Quest browser's site settings, then select the microphone again. |
 | Speech unavailable: Not set up on the PC | Run `npm run view:setup` once and restart the view. |

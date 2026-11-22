@@ -242,7 +242,7 @@ function staleBand(ctx: CanvasRenderingContext2D, w: number, h: number, radius: 
   ctx.fillStyle = INK;
   ctx.font = `600 ${size}px ${SANS}`;
   ctx.textBaseline = 'middle';
-  ctx.fillText(fit(ctx, `Not current — ${reason}`, w - size * 1.8), size * 0.9, size * 1.14);
+  ctx.fillText(fit(ctx, reason.startsWith('!') ? reason.slice(1) : `Not current — ${reason}`, w - size * 1.8), size * 0.9, size * 1.14);
   ctx.restore();
 }
 
@@ -388,26 +388,10 @@ export function drawChip(canvas: HTMLCanvasElement, name: string, sessions: Sess
   ctx.fillText(fit(ctx, name, w - (waiting ? 120 : 48)), 24, 44);
   if (waiting) { ctx.fillStyle = AMBER; ctx.font = `700 32px ${SANS}`; ctx.textAlign = 'right'; ctx.fillText(`!${waiting}`, w - 24, 44); ctx.textAlign = 'left'; }
   const lights = sessions.map(lightOf);
-  const shown = lights.slice(0, 11);
-  shown.forEach((light, i) => drawLight(ctx, light, 40 + i * 42, 108, 14));
-  if (lights.length > shown.length) { ctx.fillStyle = DIM; ctx.font = `600 24px ${SANS}`; ctx.fillText(`+${lights.length - shown.length}`, 40 + shown.length * 42 - 8, 110); }
+  const shown = lights.slice(0, 10);
+  shown.forEach((light, i) => drawLight(ctx, light, 42 + i * 46, 106, 17));
+  if (lights.length > shown.length) { ctx.fillStyle = DIM; ctx.font = `600 24px ${SANS}`; ctx.fillText(`+${lights.length - shown.length}`, 42 + shown.length * 46 - 8, 108); }
   if (lights.length === 0) { ctx.fillStyle = DIM; ctx.font = `500 24px ${SANS}`; ctx.fillText('no sessions', 24, 108); }
-}
-
-export const LABEL_SIZE = { w: 640, h: 80 };
-export function drawLabel(canvas: HTMLCanvasElement, text: string): void {
-  const { w, h } = LABEL_SIZE;
-  canvas.width = w; canvas.height = h;
-  const ctx = canvas.getContext('2d') as CanvasRenderingContext2D;
-  ctx.clearRect(0, 0, w, h);
-  ctx.font = `600 34px ${SANS}`; ctx.textBaseline = 'middle';
-  const shown = fit(ctx, text, w - 70);
-  // A tag as wide as its name, not a bar: the project names the group below it.
-  const pill = ctx.measureText(shown).width + 62;
-  ctx.fillStyle = INK; ctx.globalAlpha = 0.86; roundRect(ctx, 0, 12, pill, h - 24, (h - 24) / 2); ctx.fill(); ctx.globalAlpha = 1;
-  ctx.fillStyle = ACCENT; roundRect(ctx, 20, h / 2 - 13, 6, 26, 3); ctx.fill();
-  ctx.fillStyle = PAPER;
-  ctx.fillText(shown, 40, h / 2 + 2);
 }
 
 export interface StripState {

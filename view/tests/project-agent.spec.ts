@@ -16,6 +16,8 @@ let speech: ScriptedSpeech;
 test.afterAll(async () => { await r?.stop(); });
 
 const timings: string[] = [];
+/** One fixed folder for the agents across runs: Claude Code records its trust answer per folder, in the owner's settings. */
+const AGENTS = '/tmp/spatial-view-test-agents';
 const snap = () => r.bench.client.snapshot();
 const text = async (id: string, lines = 120) => plain(await r.bench.client.read(id, lines));
 /** Speaks `phrase` as heard text and returns what the strip shows for it. */
@@ -31,19 +33,22 @@ async function utter(page: Page, phrase: string) {
 async function settle(id: string): Promise<void> {
   await expect.poll(async () => {
     const pane = (await snap()).panes.find(p => p.id === id);
-    if (pane?.status === 'blocked' && /trust/i.test(await text(id, 40))) await r.bench.client.call('pane.send_keys', { pane_id: id, keys: ['enter'] });
+    // Claude Code asks once per folder whether to trust it; its first choice is "No, exit".
+    if (pane?.status === 'blocked' && /trust this folder/i.test(await text(id, 40))) await r.bench.client.call('pane.send_keys', { pane_id: id, keys: ['down', 'enter'] });
     return pane?.agent !== null && ['idle', 'done'].includes(String(pane?.status));
   }, { timeout: 180_000, intervals: [1000] }).toBe(true);
 }
 async function answer(page: Page, seat: string, phrase: string, what: string): Promise<string> {
-  const before = (await text(seat, 400)).length;
   const u = await utter(page, phrase);
   expect(u, phrase).toMatchObject({ ok: true });
   const t0 = Date.now();
   await expect.poll(async () => (await snap()).panes.find(p => p.id === seat)?.status, { timeout: 30_000 }).toBe('working').catch(() => undefined);
   await settle(seat);
   timings.push(`${what}: ${((Date.now() - t0) / 1000).toFixed(1)} s`);
-  return (await text(seat, 400)).slice(Math.max(0, before - 200));
+  // The answer is what follows the question in the agent's window.
+  const all = (await text(seat, 600)).replace(/\s+/g, ' ');
+  const at = all.lastIndexOf(phrase.slice(0, 30));
+  return at >= 0 ? all.slice(at + phrase.length) : all;
 }
 
 test('a real project agent knows its project, acts only on order and within its project; the helper answers across projects', async ({ page }) => {
@@ -57,8 +62,8 @@ test('a real project agent knows its project, acts only on order and within its 
     closeAnswerMs: 20_000,
     // A bench pane has a private HOME; the agents need the owner's, where their login lives.
     agents: new HerdrLevelAgents(bench.client, {
-      helper: { ...claudeHelper(join(data, 'agents', 'helper')), env: { HOME: homedir() } },
-      project: { ...claudeProjectAgent(join(data, 'agents', 'project-agent')), env: { HOME: homedir() } },
+      helper: { ...claudeHelper(join(AGENTS, 'helper')), env: { HOME: homedir() } },
+      project: { ...claudeProjectAgent(join(AGENTS, 'project-agent')), env: { HOME: homedir() } },
     }, join(data, 'helper.sock')),
   }));
   await pair(page, r);
