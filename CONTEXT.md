@@ -18,3 +18,5 @@ A personal Quest VR/MR workspace for directing real agents and reviewing their w
 - **Project agent:** a project's own agent, a real Herdr session in that project's workspace that knows of the project's other sessions. Inside a project it is the receiver while no task session is selected.
 - **Overview:** in the spatial view, the space above all projects: each project is one node with its lights, beside the sessions that belong to no project. Its agent is the helper.
 - **Chip:** a project shown as one small card with its name and one state light per session; at the overview the larger form is a node.
+- **Draft:** spoken words typed into a session's input and not yet sent; "go" sends them, "scratch that" clears them, and further speech is added to them.
+- **Standby:** the microphone open while listening is off: speech is heard only for commands, each done after the owner's yes, and nothing is sent to a session.

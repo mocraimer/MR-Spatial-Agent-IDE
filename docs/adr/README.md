@@ -10,3 +10,4 @@
 | 2026-11-22 | [Level agents keep their rules in a folder of their own, and a project agent acts through one tool](20261122-level-agents-keep-their-rules-in-their-own-folder.md) | Accepted | Spatial view |
 | 2026-11-22 | [Levels ride on Herdr workspaces: an overview and one space per project](20261122-levels-ride-on-herdr-workspaces.md) | Accepted | Spatial view |
 | 2026-11-22 | [The workspace is one public MIT repository; private values stay in untracked local configuration](20261122-public-mit-repository-for-the-spatial-workspace.md) | Accepted | Publication |
+| 2026-11-22 | [Spoken prompts wait for "go", and the microphone stands by while listening is off](20261122-spoken-prompts-wait-for-go.md) | Accepted | Spatial view |
