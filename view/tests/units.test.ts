@@ -120,10 +120,10 @@ test('a spoken session reference resolves by tile number, name or project', () =
   assert.equal(resolve(shelf, 'nothing like it'), null);
 });
 
-test('the user guide names the spoken form of every command', () => {
+test('the user guide names every spoken form of every command', () => {
   const guide = readFileSync(join(REPO, 'docs', 'USER-GUIDE.md'), 'utf8');
   assert.ok(COMMANDS.length >= 25, 'the registry is not empty');
-  const missing = COMMANDS.filter(c => !guide.includes(`"${c.say[0] as string}"`)).map(c => c.say[0]);
+  const missing = COMMANDS.flatMap(c => c.say).filter(form => !guide.includes(`"${form}"`));
   assert.deepEqual(missing, []);
 });
 

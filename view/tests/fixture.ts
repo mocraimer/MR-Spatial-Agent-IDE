@@ -223,6 +223,19 @@ export async function say(page: Page, slug: string, beforeRelease?: () => Promis
   }, JSON.stringify(before), { timeout: 20_000 });
 }
 
+/**
+ * Says a phrase while listening is off, in mixed reality: the microphone is open on standby, so
+ * the audio is simply fed and cut at the pause that follows. Waits until the page shows the result.
+ */
+export async function sayStandby(page: Page, slug: string): Promise<void> {
+  const before = (await viewState(page)).last;
+  await feed(page, [...silence(0.3), ...wav(slug), ...silence(1.0)]);
+  await page.waitForFunction(b => {
+    const s = window.viewState() as { last: unknown; hearing: number };
+    return s.hearing === 0 && JSON.stringify(s.last) !== b;
+  }, JSON.stringify(before), { timeout: 20_000 });
+}
+
 /** Points at a button on a surface and selects it. */
 export async function tap(page: Page, input: Input, surface: string, id: string): Promise<void> {
   const p = await regionPoint(page, surface, id);

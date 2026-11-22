@@ -52,6 +52,8 @@ export interface Utterance {
 }
 
 export interface PendingClose { sessionId: string; name: string }
+/** A command heard while listening is off, waiting for the owner's yes: what it will do. */
+export interface PendingAsk { label: string }
 
 export type SpeechState = { ready: true } | { ready: false; reason: string };
 
@@ -61,6 +63,8 @@ export type BridgeEvent =
   | { type: 'utterance'; utterance: Utterance }
   | { type: 'notice'; text: string }
   | { type: 'confirm'; pending: PendingClose | null }
+  /** A command heard while listening is off, waiting for "yes"; at most one question waits, this or a close. */
+  | { type: 'ask'; ask: PendingAsk | null }
   /** Whether direct sending is on: spoken prompts sent as soon as they are heard. */
   | { type: 'direct'; on: boolean }
   | { type: 'speech'; speech: SpeechState }
@@ -105,6 +109,9 @@ export function parseEvent(text: string): BridgeEvent | null {
     case 'shelf': { const shelf = parseShelf(v.shelf); return shelf ? { type: 'shelf', shelf } : null; }
     case 'text': return isStr(v.id) && isStr(v.text) ? { type: 'text', id: v.id, text: v.text } : null;
     case 'utterance': { const u = parseUtterance(v.utterance); return u ? { type: 'utterance', utterance: u } : null; }
+    case 'ask':
+      if (v.ask === null) return { type: 'ask', ask: null };
+      return isObj(v.ask) && isStr(v.ask.label) ? { type: 'ask', ask: { label: v.ask.label } } : null;
     case 'direct': return typeof v.on === 'boolean' ? { type: 'direct', on: v.on } : null;
     case 'notice': return isStr(v.text) ? { type: 'notice', text: v.text } : null;
     case 'confirm':

@@ -5,7 +5,7 @@ import { normalize } from '../bridge/heard.js';
 import { COMMANDS } from '../shared/actions.js';
 import { plain } from '../shared/ansi.js';
 import { slug } from '../bench/phrases.js';
-import { aim, emulateQuest, enterMixedReality, pair, press, regionPoint, rig, say, viewState, type Rig, seatOf, shownLight } from './fixture.js';
+import { aim, emulateQuest, enterMixedReality, pair, press, regionPoint, rig, say, sayStandby, viewState, type Rig, seatOf, shownLight } from './fixture.js';
 
 // Real speech: the local model on audio synthesized by bench/make-speech.ts, fed through the
 // page's microphone path. Only the microphone device itself is replaced.
@@ -192,4 +192,41 @@ test('a long prompt said in pieces is one draft in both listening modes; "scratc
   await utter(page, 'wait for go');
   await expect.poll(async () => (await viewState(page)).direct).toBe(false);
   expect((await utter(page, 'summarize the ledger change')).outcome).toMatch(/^Draft in agent1/);
+});
+
+test('after "stop listening" the microphone stays open on standby: voice comes back by voice, and a prompt said there goes nowhere', async ({ page }) => {
+  test.setTimeout(240_000);
+  await start(page);
+  const agent1 = r.bench.pane('agent1');
+  await r.bench.client.call('pane.focus', { pane_id: agent1 });
+  await expect.poll(async () => (await viewState(page)).receiver).toBe(agent1);
+  // Standby from the moment the owner is in mixed reality.
+  await expect.poll(async () => (await viewState(page)).mic).toMatchObject({ open: false, standby: true });
+
+  // Listening on by voice, from standby: asked, answered yes.
+  const standby = async (phrase: string) => { await sayStandby(page, slug(phrase)); const last = (await viewState(page)).last; if (!last) throw new Error('no utterance shown'); heard.push({ said: phrase, heard: last.heard }); return last; };
+  expect(await standby('keep listening')).toMatchObject({ as: 'command', ok: true });
+  expect((await viewState(page)).ask).toEqual({ label: 'Keep listening' });
+  expect((await viewState(page)).mic.open, 'asked, not done').toBe(false);
+  expect(await standby('yes')).toMatchObject({ as: 'command', ok: true });
+  await expect.poll(async () => (await viewState(page)).mic).toMatchObject({ mode: 'switch', open: true });
+
+  // The owner's trouble: "stop listening", and then no voice. Now it is standby, and voice turns it on again.
+  await utter(page, 'stop listening');
+  await expect.poll(async () => (await viewState(page)).mic).toMatchObject({ open: false, standby: true });
+  expect(await standby('summarize the ledger change'), 'a prompt on standby').toMatchObject({ as: 'ignored', ok: false });
+  expect((await viewState(page)).drafts).toEqual([]);
+  expect(normalize(await paneText(agent1)), 'went nowhere').not.toContain('summarize the ledger change');
+  expect(await standby('keep listening')).toMatchObject({ as: 'command' });
+  expect(await standby('yes')).toMatchObject({ as: 'command', ok: true });
+  await expect.poll(async () => (await viewState(page)).mic).toMatchObject({ mode: 'switch', open: true });
+
+  // A draft typed earlier is sent after "go" and a yes, while listening is off.
+  expect((await utter(page, 'summarize the ledger change')).outcome).toMatch(/^Draft in agent1/);
+  await utter(page, 'stop listening');
+  await expect.poll(async () => (await viewState(page)).mic.standby).toBe(true);
+  expect(await standby('go')).toMatchObject({ as: 'command', ok: true });
+  expect((await viewState(page)).ask?.label).toBe('Send the draft in agent1');
+  await standby('yes');
+  await expect.poll(async () => normalize(await paneText(agent1))).toContain('received summarize the ledger change');
 });

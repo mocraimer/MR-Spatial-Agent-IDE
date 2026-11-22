@@ -5,7 +5,7 @@
  */
 import { plain } from '../shared/ansi.js';
 import { command, COMMANDS, type PageAction } from '../shared/actions.js';
-import { parseUtterance, type BridgeEvent, type PendingClose, type Session, type Shelf, type SpeechState, type Utterance } from '../shared/messages.js';
+import { parseUtterance, type BridgeEvent, type PendingAsk, type PendingClose, type Session, type Shelf, type SpeechState, type Utterance } from '../shared/messages.js';
 import type { ViewState } from '../shared/view-state.js';
 import { arrange, columnFit, CHIP_ARC, FRONT_DISTANCE, FRONT_WIDTH, FRONT_Y, ARC, TOP, type Closed } from './layout.js';
 import { BridgeLink } from './link.js';
@@ -25,6 +25,7 @@ const state = {
   hearing: 0,
   notice: null as { text: string; until: number } | null,
   confirm: null as PendingClose | null,
+  ask: null as PendingAsk | null,
   direct: false,
   speech: { ready: false, reason: 'Connecting to the PC…' } as SpeechState,
   scroll: 0,
@@ -88,6 +89,7 @@ function apply(event: BridgeEvent): void {
     case 'utterance': state.last = event.utterance; break;
     case 'notice': notice(event.text); break;
     case 'confirm': state.confirm = event.pending; break;
+    case 'ask': state.ask = event.ask; break;
     case 'direct': state.direct = event.on; break;
     case 'speech': state.speech = event.speech; break;
     case 'page': if (isPageAction(event.action)) runPage(event.action); break;
@@ -158,7 +160,7 @@ function sendUtterance(c: Captured): void {
   state.hearing += 1;
   render();
   utterances = utterances.then(async () => {
-    const query = new URLSearchParams({ id: c.id, ...(c.receiver ? { receiver: c.receiver } : {}) });
+    const query = new URLSearchParams({ id: c.id, ...(c.receiver ? { receiver: c.receiver } : {}), ...(c.standby ? { standby: '1' } : {}) });
     // The same id may be sent again after a drop: the bridge carries each utterance out once.
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       const r = await link.post(`/api/utterance?${query.toString()}`, c.audio.slice().buffer, UTTERANCE_TIMEOUT_MS);
@@ -249,8 +251,9 @@ function targetRect(hit: Hit): Rect | null {
 addEventListener('keydown', e => {
   if (e.target instanceof HTMLInputElement) return;
   if (e.code === 'Backquote' && !e.repeat) { talkStart('key'); e.preventDefault(); return; }
-  if (state.confirm && (e.key === 'y' || e.key === 'Y')) void runCommand('confirm');
-  if (state.confirm && (e.key === 'n' || e.key === 'N' || e.key === 'Escape')) void runCommand('decline');
+  const asked = state.confirm !== null || state.ask !== null;
+  if (asked && (e.key === 'y' || e.key === 'Y')) void runCommand('confirm');
+  if (asked && (e.key === 'n' || e.key === 'N' || e.key === 'Escape')) void runCommand('decline');
 });
 addEventListener('keyup', e => { if (e.code === 'Backquote') talkEnd('key'); });
 // A key released in another window never reaches this one.
@@ -322,7 +325,7 @@ function renderNow(): void {
   const stripWidth = Math.max(FRONT_WIDTH, frontWidth);
   const strip: StripState = {
     receiver: front?.name ?? null,
-    mic: { open: mic.open, opening: mic.isOpening, mode: mic.mode, problem: mic.problem },
+    mic: { open: mic.open, opening: mic.isOpening, standby: mic.standby, mode: mic.mode, problem: mic.problem },
     speech: state.speech.ready ? null : state.speech.reason,
     last: state.last,
     pendingHeard: state.hearing > 0,
@@ -330,6 +333,7 @@ function renderNow(): void {
     link: stale && link.state !== 'live' ? 'No link to the PC' : stale ? 'Herdr unavailable' : null,
     direct: state.direct,
     confirm: state.confirm,
+    ask: state.ask,
   };
   surface('strip', JSON.stringify(strip), stripWidth, onArc(0, FRONT_Y + frontHeight / 2 + 0.06, FRONT_DISTANCE), c => { regions.set('strip', drawStrip(c, strip)); });
   used.add('strip');
@@ -357,7 +361,7 @@ function renderNow(): void {
   ];
   // Talk, wide and first under the front session: the way in to speaking.
   const phase: TalkPhase = mic.problem ?? (state.speech.ready ? null : state.speech.reason) ? 'problem'
-    : mic.open ? (mic.mode === 'hold' ? 'holding' : 'listening') : mic.isOpening ? 'opening' : 'idle';
+    : mic.open ? (mic.mode === 'hold' ? 'holding' : 'listening') : mic.standby ? 'standby' : mic.isOpening ? 'opening' : 'idle';
   const talkProblem = mic.problem ?? (state.speech.ready ? null : state.speech.reason);
   const talkHeight = stripWidth * TALK_SIZE.h / TALK_SIZE.w;
   const talkY = FRONT_Y - frontHeight / 2 - 0.02 - talkHeight / 2;
@@ -418,7 +422,8 @@ enterButton.addEventListener('click', () => {
   void (async () => {
     enterProblem = null;
     // Leaving mixed reality turns listening off: the owner can no longer see the microphone.
-    try { await scene.enter(() => { stopListening(); updatePage(); }); scene.recenter(); } catch (error) { enterProblem = `Mixed reality did not start: ${(error as Error).message}`; }
+    // In mixed reality the microphone stays open for commands while listening is off; leaving closes it.
+    try { await scene.enter(() => { stopListening(); mic.disarm(); updatePage(); }); scene.recenter(); void mic.arm(); } catch (error) { enterProblem = `Mixed reality did not start: ${(error as Error).message}`; }
     updatePage();
   })();
 });
@@ -457,12 +462,13 @@ window.viewState = () => {
     columns: columns.map(c => ({ projectId: c.projectId, project: c.project, side: c.angle < 0 ? 'left' as const : 'right' as const, width: columnFit(c.tiles.length).width, tiles: c.tiles.map(t => ({ n: t.n, id: t.session.id, name: t.session.name, role: t.session.role, light: lightOf(t.session), closed: t.closed, inFront: t.session.id === front?.id, text: tileRows(plain(state.texts.get(t.session.id) ?? '')) })) })),
     scroll: state.scroll,
     scale: state.scale,
-    mic: { mode: mic.mode, open: mic.open, problem: mic.problem },
+    mic: { mode: mic.mode, open: mic.open, standby: mic.standby, problem: mic.problem },
     speech: state.speech,
     last: state.last,
     hearing: state.hearing,
     notice: state.notice?.text ?? null,
     confirm: state.confirm,
+    ask: state.ask,
     drafts: shelf?.drafts ?? [],
     direct: state.direct,
     immersive: scene.immersive,

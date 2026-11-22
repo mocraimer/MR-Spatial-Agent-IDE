@@ -9,6 +9,7 @@ import { HerdrClient } from './herdr.js';
 import { fileLog } from './log.js';
 import { DEFAULT_MIRROR, Mirror, type MirrorOptions } from './mirror.js';
 import { startServer } from './server.js';
+import { Settings } from './settings.js';
 import { LocalSpeech, modelDirectory } from './speech.js';
 
 export interface ViewOptions {
@@ -23,6 +24,7 @@ export interface ViewOptions {
   agents?: LevelAgents;
   mirror?: MirrorOptions;
   closeAnswerMs?: number;
+  standbyAnswerMs?: number;
 }
 
 export interface RunningView {
@@ -50,7 +52,8 @@ export async function startView(options: ViewOptions): Promise<RunningView> {
   }
   const closeSocket = join(options.dataDirectory, 'helper.sock');
   const agents = options.agents ?? new HerdrLevelAgents(herdr, claudeAgents(join(options.dataDirectory, 'agents')), closeSocket);
-  const bridge = new Bridge(herdr, mirror, speech, agents, { closeAnswerMs: options.closeAnswerMs, log });
+  const settings = new Settings(options.dataDirectory);
+  const bridge = new Bridge(herdr, mirror, speech, agents, { closeAnswerMs: options.closeAnswerMs, standbyAnswerMs: options.standbyAnswerMs, log, settings });
   const closeServer: NetServer = serveCloseRequests(closeSocket, ref => bridge.requestClose(ref), log);
   const pairing = new PairingAuthority(join(options.dataDirectory, 'pairing'));
   const tls = join(options.dataDirectory, 'tls');

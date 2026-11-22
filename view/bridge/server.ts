@@ -101,11 +101,13 @@ export function startServer(options: ServerOptions): Promise<Server> {
       // An id the page did not send (or sent empty) is no id: this utterance is new.
       const id = url.searchParams.get('id') || randomUUID();
       const receiver = url.searchParams.get('receiver');
+      // Speech heard while listening is off: the bridge acts on commands only, each after a yes.
+      const standby = url.searchParams.get('standby') === '1';
       const bytes = await body(req, MAX_AUDIO_BYTES);
       if (bytes.length === 0 || bytes.length % 4 !== 0) return send(res, 400, { error: 'Audio must be 16 kHz mono 32-bit float samples.' });
       const audio = new Float32Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length));
       if (!audio.every(Number.isFinite)) return send(res, 400, { error: 'Audio samples must be finite numbers.' });
-      return send(res, 200, await bridge.utterance(id, audio, receiver));
+      return send(res, 200, await bridge.utterance(id, audio, receiver, standby));
     }
     return send(res, 404, { error: 'Not found.' });
   }

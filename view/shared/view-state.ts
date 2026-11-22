@@ -1,4 +1,4 @@
-import type { HerdrLink, PendingClose, Role, SpeechState, Utterance } from './messages.js';
+import type { HerdrLink, PendingAsk, PendingClose, Role, SpeechState, Utterance } from './messages.js';
 
 /** What the page reports through `window.viewState()`: for tests, and for an agent driving it. */
 export interface ViewState {
@@ -22,12 +22,15 @@ export interface ViewState {
   columns: { projectId: string; project: string; side: 'left' | 'right'; width: number; tiles: { n: number; id: string; name: string; role: Role; light: string; closed: boolean; inFront: boolean; /** The rows the tile draws, as plain text. */ text: string[] }[] }[];
   scroll: number;
   scale: number;
-  mic: { mode: 'hold' | 'switch'; open: boolean; problem: string | null };
+  /** `open`: listening, prompts are heard. `standby`: open while listening is off, only commands are acted on, each after a yes. Neither: closed. */
+  mic: { mode: 'hold' | 'switch'; open: boolean; standby: boolean; problem: string | null };
   speech: SpeechState;
   last: Utterance | null;
   hearing: number;
   notice: string | null;
   confirm: PendingClose | null;
+  /** A command heard in standby, waiting for "yes"; never together with `confirm`. */
+  ask: PendingAsk | null;
   /** Sessions that hold a draft, by id. */
   drafts: string[];
   /** Direct sending is on. */

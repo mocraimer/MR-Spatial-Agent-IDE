@@ -12,9 +12,9 @@ The first view sent each spoken prompt to the session in front as soon as the ow
 ## Decision
 - By default, spoken words that are not a command are typed into the receiver's input as a draft and are not sent. "go" (also "submit", "send it") sends the draft. "scratch that" clears it. Further speech is added to it, so a prompt said in pieces stays whole. The same holds for orders to the helper.
 - Sending at once stays available as an opt-in setting, switched by a button or by saying "send at once" and "wait for go", and kept on the PC.
-- In mixed reality the microphone stays open while listening is off: standby. In standby only commands are heard. Each is shown as "Do X? Say yes" and done only after the owner's yes. Nothing is ever sent to a session from standby. "stop listening" returns to standby, and leaving mixed reality closes the microphone.
+- In mixed reality the microphone stays open while listening is off: standby. In standby only commands are heard. Each is shown as "Do X? Say yes" and done only after the owner's yes, except commands that only change the view (scroll, text size, recenter), which run at once. Nothing is ever sent to a session from standby: words that are not commands are shown as ignored, and a command that presses a key, "go" included, acts only after the yes, on what is already in the session. One question waits at a time, so a "yes" answers exactly one of a close and a command heard on standby. "stop listening" returns to standby, and leaving mixed reality closes the microphone.
 
-The owner chose drafts by default, helper orders waiting too, adding over replacing, and confirmed commands in standby. The words "go", "scratch that" and "send at once", and standby starting on entering mixed reality, are this session's working choices.
+The owner chose drafts by default, helper orders waiting too, adding over replacing, and confirmed commands in standby. The words "go", "scratch that" and "send at once", standby starting on entering mixed reality, which commands run without a yes, and a yes lasting 15 seconds, are this session's working choices.
 
 ## Alternatives Considered
 - **Send at once, as before**: one step less — but a misheard prompt reaches an agent that acts on it.

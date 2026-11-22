@@ -19,4 +19,4 @@ A personal Quest VR/MR workspace for directing real agents and reviewing their w
 - **Overview:** in the spatial view, the space above all projects: each project is one node with its lights, beside the sessions that belong to no project. Its agent is the helper.
 - **Chip:** a project shown as one small card with its name and one state light per session; at the overview the larger form is a node.
 - **Draft:** spoken words typed into a session's input and not yet sent; "go" sends them, "scratch that" clears them, and further speech is added to them.
-- **Standby:** the microphone open while listening is off: speech is heard only for commands, each done after the owner's yes, and nothing is sent to a session.
+- **Standby:** the microphone open while listening is off: speech is heard only for commands, each done after the owner's yes (those that only change the view run at once), and no spoken words are sent to a session.

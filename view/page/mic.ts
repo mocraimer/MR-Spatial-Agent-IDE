@@ -2,6 +2,10 @@
  * The microphone, in the two ways the owner chose: hold to talk (open only while held) and a
  * listening switch (open until turned off; speech is cut into utterances where the owner pauses).
  * The receiver is taken when speech begins, and travels with the utterance.
+ *
+ * In mixed reality the microphone is armed: when listening is off it stays open, cuts speech at
+ * pauses as the listening switch does, and marks each utterance `standby`, so the bridge acts on
+ * commands only and only after a "yes". Not armed, listening off means the microphone is closed.
  */
 
 import { MAX_SECONDS, SAMPLE_RATE } from '../shared/audio.js';
@@ -13,7 +17,13 @@ const START_FRAMES = 2, END_FRAMES = 22, PRE_ROLL_FRAMES = 10;
 const MAX_SAMPLES = RATE * MAX_SECONDS;
 const MIN_SAMPLES = RATE * 0.25;
 
-export interface Captured { id: string; audio: Float32Array; receiver: string | null }
+export interface Captured {
+  id: string;
+  audio: Float32Array;
+  receiver: string | null;
+  /** Heard while listening was off: the bridge acts on commands only, each after a yes. */
+  standby: boolean;
+}
 /** An open microphone: it calls `push` with 16 kHz samples until `close`. */
 export interface Source { close(): void }
 export type OpenSource = (push: (samples: Float32Array) => void) => Promise<Source>;
@@ -22,9 +32,17 @@ export type MicMode = 'hold' | 'switch';
 
 export class Mic {
   mode: MicMode = 'hold';
-  /** True while the microphone is open. */
-  open = false;
   problem: string | null = null;
+  /** True while the microphone itself is open, listening or on standby. */
+  private live = false;
+  /** In mixed reality: listening off leaves the microphone open for commands. */
+  private armed = false;
+  /** The owner has listening on: a hold to talk is pressed, or keep listening is on. */
+  private talking = false;
+  /** Listening: the microphone is open and what is said is a prompt. */
+  get open(): boolean { return this.live && this.talking; }
+  /** Standby: the microphone is open and only commands are acted on. */
+  get standby(): boolean { return this.live && !this.talking; }
   private source: Source | null = null;
   private opening: { generation: number; done: Promise<void> } | null = null;
   /** Bumped by stop(): an open that finishes after a stop closes what it opened. */
@@ -34,7 +52,7 @@ export class Mic {
   get isHolding(): boolean { return this.holding; }
   /** True while the microphone is being opened: speech is not heard yet. */
   get isOpening(): boolean { return this.opening !== null; }
-  private recording: { receiver: string | null; chunks: Float32Array[]; length: number } | null = null;
+  private recording: { receiver: string | null; chunks: Float32Array[]; length: number; standby: boolean } | null = null;
   private pending = new Float32Array(0);
   private preRoll: Float32Array[] = [];
   private loud = 0;
@@ -59,7 +77,8 @@ export class Mic {
   async holdStart(): Promise<void> {
     if (this.mode !== 'hold' || this.holding) return;
     this.holding = true;
-    this.recording = { receiver: this.receiverNow(), chunks: [], length: 0 };
+    this.talking = true;
+    this.recording = { receiver: this.receiverNow(), chunks: [], length: 0, standby: false };
     await this.start();
     if (!this.holding) this.stop();
   }
@@ -74,29 +93,60 @@ export class Mic {
 
   async switchOn(): Promise<void> {
     if (this.mode !== 'switch') return;
+    this.talking = true;
+    this.onChange();
     await this.start();
   }
 
-  /** Turns listening off in either mode; an utterance in progress is dropped, not sent. */
+  /**
+   * Turns listening off in either mode; an utterance in progress is dropped, not sent. In mixed
+   * reality the microphone stays open on standby; otherwise it closes.
+   */
   stop(): void {
-    this.generation += 1;
+    if (!this.armed) { this.close(); return; }
+    this.clear();
+    this.talking = false;
+    this.onChange();
+  }
+
+  /** Mixed reality begins: the microphone opens, and stays open for commands while listening is off. */
+  async arm(): Promise<void> {
+    this.armed = true;
+    await this.start();
+  }
+
+  /** Mixed reality ends: the microphone closes, whatever it was doing. */
+  disarm(): void {
+    this.armed = false;
+    this.close();
+  }
+
+  /** Drops what was being recorded or waited for. */
+  private clear(): void {
     this.holding = false;
     this.recording = null;
-    this.source?.close();
-    this.source = null;
     this.pending = new Float32Array(0);
     this.preRoll = [];
     this.loud = 0; this.quiet = 0;
-    if (this.open) { this.open = false; this.onChange(); }
+  }
+
+  /** Closes the microphone itself. */
+  private close(): void {
+    this.generation += 1;
+    this.clear();
+    this.talking = false;
+    this.source?.close();
+    this.source = null;
+    if (this.live) { this.live = false; this.onChange(); }
   }
 
   /** Every sample the microphone hears comes through here. */
   feed(samples: Float32Array): void {
-    if (!this.open) return;
-    if (this.mode === 'hold') {
+    if (!this.live) return;
+    if (this.holding) {
       if (!this.recording) return;
       this.append(samples);
-      // Held past the longest utterance: send what was said and close, so it shows as off.
+      // Held past the longest utterance: send what was said and stop listening, so it shows as off.
       if (this.recording.length >= MAX_SAMPLES) { this.finish(); this.stop(); }
       return;
     }
@@ -118,7 +168,7 @@ export class Mic {
       if (this.preRoll.length > PRE_ROLL_FRAMES) this.preRoll.shift();
       this.loud = speaking ? this.loud + 1 : 0;
       if (this.loud >= START_FRAMES) {
-        this.recording = { receiver: this.receiverNow(), chunks: [], length: 0 };
+        this.recording = { receiver: this.receiverNow(), chunks: [], length: 0, standby: !this.talking };
         for (const f of this.preRoll) this.append(f);
         this.preRoll = [];
         this.quiet = 0;
@@ -146,11 +196,11 @@ export class Mic {
     const audio = new Float32Array(r.length);
     let at = 0;
     for (const c of r.chunks) { audio.set(c, at); at += c.length; }
-    this.onUtterance({ id: crypto.randomUUID(), audio, receiver: r.receiver });
+    this.onUtterance({ id: crypto.randomUUID(), audio, receiver: r.receiver, standby: r.standby });
   }
 
   private async start(): Promise<void> {
-    if (this.open) return;
+    if (this.live) return;
     const generation = this.generation;
     // An open begun before the last stop belongs to an older generation: start a fresh one.
     if (this.opening?.generation === generation) { await this.opening.done; return; }
@@ -161,7 +211,7 @@ export class Mic {
         if (generation !== this.generation) { source.close(); return; }
         this.source = source;
         this.problem = null;
-        this.open = true;
+        this.live = true;
       } catch (error) {
         if (generation !== this.generation) return;
         this.recording = null;

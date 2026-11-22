@@ -126,10 +126,22 @@ To type, use the keyboard at the desk: it types into Herdr's focused session, wh
 
 ## Speaking
 
-Listening is off whenever the page opens, and turns off when you leave mixed reality. There are two ways to listen; switch at any time by saying "hold to talk" or "keep listening", or with the Talk button.
+Listening is off whenever the page opens. There are two ways to listen; switch at any time by saying "hold to talk" or "keep listening" ("start listening" does the same), or with the Talk button.
 
-- **Hold to talk:** the microphone is open only while you hold a pinch or trigger on the microphone in the strip, or hold a controller grip, or hold the ` key on a keyboard paired to the headset. The microphone opens when you press, so start speaking when the microphone turns red and the strip says "Listening" ("Opening mic…" means not yet). Release to send. An utterance longer than 30 seconds is sent at 30 seconds and the microphone closes.
+- **Hold to talk:** the microphone is open for prompts only while you hold a pinch or trigger on the microphone in the strip, or hold a controller grip, or hold the ` key on a keyboard paired to the headset. Start speaking when the microphone turns red and the strip says "Listening" ("Opening mic…" means not yet). Release to send. An utterance longer than 30 seconds is sent at 30 seconds.
 - **Keep listening:** select the microphone once to start, or say "keep listening". Each pause ends an utterance. Say "stop listening", or select the microphone again, to stop.
+
+### Standby: listening off, voice still works
+
+In mixed reality the microphone stays open even when listening is off. This is **standby**: the strip says "Standby", and the Talk button says that listening is off. Standby starts when you enter mixed reality and ends, with the microphone closing, when you leave it; on the flat page the microphone is closed ("Mic off"). Audio is turned into text on the PC and goes nowhere else.
+
+On standby the view acts on commands only, and nothing is ever sent to a session:
+
+- A command that only changes how the view is shown (scroll up, scroll down, scroll bottom, recenter, bigger text, smaller text) runs at once.
+- Any other command is **asked first**: the strip turns amber and says what it will do, for example "Do “Keep listening”?" or "Do “Send the draft in logs”?". Say **"yes"** (or select **Yes, do it**, or press y) to do it. Say "no" (or select **No**, or press Esc or n) to drop it. Anything else you say, or 15 seconds of silence, drops it too.
+- Words that are not a command, such as a prompt or an order to the helper, are shown as **Ignored** and sent nowhere: not typed, not drafted.
+
+So after "stop listening" you can turn voice back on by voice: say "keep listening" (or "start listening"), then "yes". The same "yes" answers a close the helper asks about (it says "Close … ?"); only one question waits at a time, and the strip says which one you answered. While a close waits, a command heard on standby is refused until you have answered it.
 
 Anything that is not a command is a **prompt**. It goes to the session that was in front when you started speaking, even if you bring another session forward before you finish.
 
@@ -150,6 +162,32 @@ An order to the helper waits the same way, in the helper's input. The helper is 
 
 The strip always shows what was heard, whether it was taken as a command, a prompt or a helper order, and where it went. If a word was misheard, say "scratch that", or fix it at the desk.
 
+### Every spoken form
+
+A command must be the whole utterance. These are all the forms, each in quotation marks; the speech model sometimes writes a word differently, so a few extra spellings are accepted.
+
+| Command | You say |
+| --- | --- |
+| Next waiting session | "next waiting", "next", "whats waiting" |
+| Back | "back", "go back" |
+| Enter, Escape, Ctrl-C | "press enter", "enter"; "press escape", "escape"; "interrupt", "press control c", "control c" |
+| Arrows, Tab | "press up", "arrow up"; "press down", "arrow down"; "press tab" |
+| y, n | "press yes", "press y"; "press no", "press n" |
+| 1 | "press one", "press 1", "option one", "option 1" |
+| 2 | "press two", "press 2", "option two", "option 2" |
+| 3 | "press three", "press 3", "option three", "option 3" |
+| Send the draft | "go", "submit", "send it" |
+| Clear the draft | "scratch that", "clear that" |
+| Send at once, wait for go | "send at once"; "wait for go" ("way for go") |
+| Scroll | "scroll up", "page up"; "scroll down", "page down"; "scroll bottom", "bottom", "go bottom", "scroll to bottom", "latest" |
+| Recenter | "recenter", "re center", "center" |
+| Text size | "bigger text", "larger text"; "smaller text" |
+| Listening | "stop listening", "mic off", "microphone off"; "hold to talk"; "keep listening", "start listening", "listening switch" |
+| Leave mixed reality | "leave mixed reality", "exit mixed reality", "exit" |
+| Overview | "overview", "show overview", "go to overview", "go to the overview", "all projects", "show helper", "helper" |
+| Go into a project, show a session | "go to" or "show" and a name or number: "go to docs", "show 3", "show logs" |
+| Answer a question that waits | "yes", "confirm", "yes close it", "close it"; "no", "cancel", "dont close", "keep it" |
+
 ## Closing, and what the agents may do
 
 The helper is a small, fast agent (Claude Code with Haiku) in a tab labelled "helper" in the Herdr workspace labelled "helper", which is the overview. You can read what it did in its window. It starts the first time you need it. Speak to it by starting with "helper":
@@ -166,6 +204,8 @@ A project's agent has less reach than the helper: on its own it only reads the p
 **To remove a project's agent,** close its "project agent" tab like any session (ask the helper, or close it in Herdr). Going into the project again starts a new one.
 
 ## When something goes wrong
+
+**The log.** Everything that fails is also written down, in the terminal where `npm run view` runs and in a file that outlasts it: `~/.local/share/spatial-agent-workspace/view/view.log` (the file is kept under 1 MB, and the one before it is `view.log.1`). Each line is dated and says what happened to which session or project and why: an agent that did not start (with the reason and what to do), an agent that asked something as it started, a session the project agent could not start, a Herdr error on an action, a close asked of you and your answer, a standby command asked, confirmed or dropped, and the send setting changing. The log never holds your prompts, what you said, what a session shows, or a pairing code.
 
 A window that is not current says so on an amber band, and says what to do. It recovers by itself, without reloading, once the cause clears.
 
@@ -198,7 +238,7 @@ netsh interface portproxy delete v4tov4 listenaddress=0.0.0.0 listenport=47851
 Remove-NetFirewallRule -DisplayName "Herdr spatial view 47851"
 ```
 
-Then delete the view's data directory, `~/.local/share/spatial-agent-workspace/view`. It holds the pairing, the certificate, the speech model and the agents' settings. To forget the headset without undoing anything else, delete only its `pairing` folder.
+Then delete the view's data directory, `~/.local/share/spatial-agent-workspace/view`. It holds the pairing, the certificate, the speech model, the agents' settings, your send setting (`settings.json`) and the log. To forget the headset without undoing anything else, delete only its `pairing` folder.
 
 ## What this rests on
 

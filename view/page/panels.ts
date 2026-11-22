@@ -3,7 +3,7 @@
  * The app draws the text itself: a picture of a terminal is not legible in the headset.
  */
 import { ANSI, CONTROL, plain } from '../shared/ansi.js';
-import type { AgentStatus, PendingClose, Session, Utterance } from '../shared/messages.js';
+import type { AgentStatus, PendingAsk, PendingClose, Session, Utterance } from '../shared/messages.js';
 
 export const INK = '#0b1017';
 export const PAPER = '#e8eef4';
@@ -421,7 +421,7 @@ export function drawChip(canvas: HTMLCanvasElement, name: string, sessions: Sess
 
 export interface StripState {
   receiver: string | null;
-  mic: { open: boolean; opening: boolean; mode: 'hold' | 'switch'; problem: string | null };
+  mic: { open: boolean; opening: boolean; standby: boolean; mode: 'hold' | 'switch'; problem: string | null };
   /** Why speech cannot be heard on the PC, or null when it can. */
   speech: string | null;
   last: Utterance | null;
@@ -430,7 +430,9 @@ export interface StripState {
   link: string | null;
   /** Direct sending is on: spoken prompts are sent as soon as they are heard. */
   direct: boolean;
+  /** A close that waits for the owner's answer, or a command heard in standby: at most one. */
   confirm: PendingClose | null;
+  ask: PendingAsk | null;
 }
 
 export const STRIP_SIZE = { w: 2464, h: 150 };
@@ -457,16 +459,17 @@ export function drawStrip(canvas: HTMLCanvasElement, st: StripState): Region[] {
   const { w, h } = STRIP_SIZE;
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext('2d') as CanvasRenderingContext2D;
-  if (st.confirm) {
+  if (st.confirm || st.ask) {
+    // A question takes the strip over: what it asks, and how to answer. A close names the session; a command heard in standby says what it will do.
     panel(ctx, w, h, { edge: AMBER, edgeWidth: 6, radius: 30 });
     ctx.textBaseline = 'middle';
     ctx.fillStyle = AMBER; ctx.font = `600 44px ${SANS}`;
-    ctx.fillText(fit(ctx, `Close ${st.confirm.name}?`, w - 800), 44, 56);
+    ctx.fillText(fit(ctx, st.confirm ? `Close ${st.confirm.name}?` : `Do “${st.ask?.label ?? ''}”?`, w - 800), 44, 56);
     ctx.fillStyle = DIM; ctx.font = `28px ${SANS}`;
-    ctx.fillText('Say “yes” or “no”, or choose here. It stays open until you answer yes.', 44, 106);
+    ctx.fillText(st.confirm ? 'Say “yes” or “no”, or choose here. It stays open until you answer yes.' : 'Listening is off. Say “yes” to do it, “no” to drop it, or choose here. It is dropped after 15 seconds.', 44, 106);
     const regions = [{ id: 'confirm', x: w - 716, y: 26, w: 336, h: h - 52 }, { id: 'decline', x: w - 364, y: 26, w: 336, h: h - 52 }];
-    button(ctx, regions[0] as Region, 'Yes, close', 34, 'on');
-    button(ctx, regions[1] as Region, 'No, keep it', 34, 'plain');
+    button(ctx, regions[0] as Region, st.confirm ? 'Yes, close' : 'Yes, do it', 34, 'on');
+    button(ctx, regions[1] as Region, st.confirm ? 'No, keep it' : 'No', 34, 'plain');
     return regions;
   }
   panel(ctx, w, h, { radius: 30 });
@@ -478,26 +481,26 @@ export function drawStrip(canvas: HTMLCanvasElement, st: StripState): Region[] {
   // The microphone is a button: select it to listen, or hold it to talk.
   const mic = { id: 'mic', x: 600, y: 18, w: 600, h: h - 36 };
   const problem = st.mic.problem ?? st.speech;
-  const state = problem ? AMBER : st.mic.open ? RED : st.mic.opening ? ACCENT : FAINT;
+  const state = problem ? AMBER : st.mic.open ? RED : st.mic.opening || st.mic.standby ? ACCENT : FAINT;
   ctx.fillStyle = st.mic.open ? '#2a1418' : RAISED; roundRect(ctx, mic.x, mic.y, mic.w, mic.h, mic.h / 2); ctx.fill();
-  ctx.strokeStyle = problem || st.mic.open || st.mic.opening ? state : EDGE; ctx.lineWidth = st.mic.open ? 4 : 2.5;
+  ctx.strokeStyle = problem || st.mic.open || st.mic.opening || st.mic.standby ? state : EDGE; ctx.lineWidth = st.mic.open ? 4 : 2.5;
   roundRect(ctx, mic.x, mic.y, mic.w, mic.h, mic.h / 2); ctx.stroke();
   const cx = mic.x + mic.h / 2 + 4, cy = h / 2;
   ctx.save();
   if (st.mic.open) { ctx.shadowColor = RED; ctx.shadowBlur = 26; }
   ctx.fillStyle = st.mic.open ? RED : '#1d2835'; ctx.beginPath(); ctx.arc(cx, cy, 40, 0, Math.PI * 2); ctx.fill();
   ctx.restore();
-  micGlyph(ctx, cx, cy, 50, st.mic.open ? '#ffffff' : problem ? AMBER : PAPER);
+  micGlyph(ctx, cx, cy, 50, st.mic.open ? '#ffffff' : problem ? AMBER : st.mic.standby ? ACCENT : PAPER);
   const tx = cx + 60;
   ctx.font = `600 36px ${SANS}`; ctx.fillStyle = PAPER;
-  ctx.fillText(st.mic.problem ? 'Mic unavailable' : st.speech ? 'Speech unavailable' : st.mic.open ? 'Listening' : st.mic.opening ? 'Opening mic…' : 'Mic off', tx, problem ? 42 : 54);
+  ctx.fillText(st.mic.problem ? 'Mic unavailable' : st.speech ? 'Speech unavailable' : st.mic.open ? 'Listening' : st.mic.standby ? 'Standby' : st.mic.opening ? 'Opening mic…' : 'Mic off', tx, problem ? 42 : 54);
   if (problem) {
     // A problem says what to do, so it gets two lines rather than being cut short.
     ctx.font = `23px ${SANS}`; ctx.fillStyle = AMBER;
     wrap(ctx, problem, mic.x + mic.w - tx - 30, 2).forEach((line, i) => ctx.fillText(line, tx, 80 + i * 28));
   } else {
     ctx.font = `26px ${SANS}`; ctx.fillStyle = DIM;
-    ctx.fillText(st.mic.mode === 'hold' ? 'Hold to talk' : 'Keep listening until “stop listening”', tx, 98);
+    ctx.fillText(st.mic.standby ? 'Commands only: each asks “yes”' : st.mic.mode === 'hold' ? 'Hold to talk' : 'Keep listening until “stop listening”', tx, 98);
   }
 
   const sayX = 1250, sayW = w - sayX - (st.link ? 400 : 44) - (st.direct ? 340 : 0);
@@ -564,10 +567,11 @@ export function regionAt(regions: Region[], x: number, y: number): string | null
   return regions.find(r => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h)?.id ?? null;
 }
 
-export type TalkPhase = 'idle' | 'opening' | 'holding' | 'listening' | 'problem';
+export type TalkPhase = 'idle' | 'standby' | 'opening' | 'holding' | 'listening' | 'problem';
 export const TALK_SIZE = { w: 2464, h: 120 };
 const TALK_TEXT: Record<Exclude<TalkPhase, 'problem'>, string> = {
   idle: 'Talk — hold to speak, or tap to keep listening',
+  standby: 'Talk — hold to speak, or tap to keep listening. Listening is off: say a command, then “yes”',
   opening: 'Opening mic… start when the dot turns red',
   holding: 'Listening — release to send',
   listening: 'Keep listening — tap to stop',
@@ -582,6 +586,7 @@ export function drawTalk(canvas: HTMLCanvasElement, phase: TalkPhase, problem: s
   panel(ctx, w, h, { edge: phase === 'problem' ? AMBER : live ? RED : '#6cb6ff', edgeWidth: 6 });
   ctx.beginPath(); ctx.arc(70, h / 2, 22, 0, Math.PI * 2);
   ctx.fillStyle = phase === 'problem' ? AMBER : live ? RED : phase === 'opening' ? DIM : '#6cb6ff'; ctx.fill();
+  if (phase === 'standby') { ctx.strokeStyle = INK; ctx.lineWidth = 8; ctx.beginPath(); ctx.arc(70, h / 2, 10, 0, Math.PI * 2); ctx.stroke(); }
   ctx.textBaseline = 'middle';
   ctx.fillStyle = PAPER; ctx.font = `600 44px ${SANS}`;
   ctx.fillText(fit(ctx, phase === 'problem' ? `Mic unavailable — ${problem ?? ''}` : TALK_TEXT[phase], w - 150), 116, h / 2);

@@ -23,6 +23,8 @@ npm run view:setup   # once: fetches the speech model (about 31 MB)
 npm run view         # prints the address to open on the headset
 ```
 
+Spoken prompts do not reach an agent unseen: each is typed into the session's input as a **draft**, and you say "go" to send it or "scratch that" to clear it (say "send at once" to switch the wait off). With listening off in mixed reality the microphone stands by for commands, each asked with "yes" before it is done. Failures are written to the terminal and to `view.log` in the data directory (`~/.local/share/spatial-agent-workspace/view`), which never holds your words or session text.
+
 Start with the [user guide](docs/USER-GUIDE.md): the one-time Windows step for the Wi-Fi link (and how to undo it), pairing, the overview and the projects, speaking, the agents at each level, and what to do when something goes wrong. Architecture choices are recorded in [docs/adr](docs/adr/README.md).
 
 ## Checks

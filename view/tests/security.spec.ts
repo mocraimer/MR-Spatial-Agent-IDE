@@ -56,6 +56,7 @@ test('only a paired headset reads or drives sessions; nothing logs a secret or s
     // Every action the bridge carries out, as the registry lists them.
     ...COMMANDS.filter(c => 'bridge' in c.run).map(c => ['POST', '/api/action', JSON.stringify({ command: c.id })] as const),
     ['POST', `/api/utterance?receiver=${r.bench.pane('sh')}`, Buffer.alloc(64000)],
+    ['POST', `/api/utterance?receiver=${r.bench.pane('sh')}&standby=1`, Buffer.alloc(64000)],
   ] as const) {
     const reply = await call(port, method, path, body);
     expect(reply.status, `${method} ${path}`).toBe(401);
@@ -123,7 +124,7 @@ test('nothing the bridge logs or writes holds a pairing code, a token, session t
   const code = r.view.pairing.setupCode().code;
   const token = (await page.context().cookies()).find(c => c.name === 'svw')?.value as string;
   const audio = new Float32Array(1600);
-  const heard = async (words: string, receiver: string | null) => { speech.queue.push(words); return await r.view.bridge.utterance(`m${Math.random()}`, audio, receiver); };
+  const heard = async (words: string, receiver: string | null, standby = false) => { speech.queue.push(words); return await r.view.bridge.utterance(`m${Math.random()}`, audio, receiver, standby); };
 
   // A prompt and an order to the helper (its agent fails to start), a prompt in direct mode, a start that fails, a close.
   await r.bench.client.call('pane.focus', { pane_id: r.bench.pane('sh') });
@@ -132,6 +133,10 @@ test('nothing the bridge logs or writes holds a pairing code, a token, session t
   await heard(`helper, ${ORDER}`, r.bench.pane('sh'));
   await r.view.bridge.act({ kind: 'direct', on: true });
   await heard(`more ${PROMPT}`, r.bench.pane('sh'));
+  // Heard on standby: ignored, and a command asked and dropped.
+  await heard(`standby ${PROMPT}`, r.bench.pane('sh'), true);
+  await heard('go to alpha', r.bench.pane('sh'), true);
+  await heard(`no ${ORDER}`, r.bench.pane('sh'), true);
   await r.view.bridge.act({ kind: 'go', projectId: r.bench.workspaces.get('alpha') as string });
   const closing = r.view.bridge.requestClose('sh');
   await r.view.bridge.act({ kind: 'answer', answer: false });
