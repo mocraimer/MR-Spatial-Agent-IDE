@@ -8,6 +8,7 @@ import { compiled, REPO } from '../bridge/config.js';
 import { CLOSE_TOOL } from '../bridge/agents.js';
 import { classify } from '../bridge/heard.js';
 import { arrange, CHIP_ARC, columnFit } from '../page/layout.js';
+import { terminalLines } from '../page/panels.js';
 import { Mic } from '../page/mic.js';
 import { COMMANDS } from '../shared/actions.js';
 import type { Session, Shelf } from '../shared/messages.js';
@@ -181,4 +182,15 @@ test('page code redraws through the scene\'s frames: a Quest stops the window\'s
     return lines.flatMap((line, i) => /requestAnimationFrame\(/.test(line) && !/session\.requestAnimationFrame|\(desktop\)/.test(line) ? [`${f}:${i + 1}`] : []);
   });
   assert.deepEqual(offenders, [], 'schedule redraws with render() (drawn in Scene\'s frame callback), never window.requestAnimationFrame: it does not run in an immersive session on a Quest');
+});
+
+test('terminal text: each run of three or more blank rows is one blank row, shorter runs and the text around them stay, trailing blanks go', () => {
+  const blank = (n: number) => Array<string>(n).fill('');
+  const rows = (...parts: (string | number)[]) => parts.flatMap(p => (typeof p === 'number' ? blank(p) : [p])).join('\n');
+  assert.deepEqual(terminalLines(rows('answer', 38, '> input', 3)), ['answer', '', '> input']);
+  assert.deepEqual(terminalLines(rows('a', 2, 'b')), ['a', '', '', 'b'], 'two blank rows are kept');
+  assert.deepEqual(terminalLines(rows('a', 3, 'b', 4, 'c')), ['a', '', 'b', '', 'c'], 'every run is collapsed alone');
+  assert.deepEqual(terminalLines(rows('a', '  ', '\t', '\u001b[0m', 'b')), ['a', '', 'b'], 'rows of only spaces or colour codes are blank too');
+  assert.deepEqual(terminalLines(rows(5, 'a')), ['', 'a'], 'leading blanks too');
+  assert.deepEqual(terminalLines(''), []);
 });

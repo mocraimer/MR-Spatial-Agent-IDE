@@ -7,6 +7,8 @@
  *   /steady <count> <ms> [tag]      print numbered lines, one every <ms>
  *   /burst <count> [tag]            print numbered lines at once
  *                                   (a tag marks this run's lines apart from earlier runs')
+ *   /tall <blank rows> [tag]        a short answer, that many blank rows, then an input box at the bottom,
+ *                                   as Claude Code draws in a tall pane
  *   /block                          ask a question and stay blocked until the next line
  *   /exit                           exit
  *   anything else                   answer like an agent: working, a reply, idle
@@ -62,6 +64,14 @@ async function handle(line: string): Promise<void> {
     }
     if (lines.length) process.stdout.write(`${lines.join('\n')}\n`);
     process.stdout.write(`${mark} END ${count}\n`);
+    await report('idle');
+    return;
+  }
+  if (command === '/tall') {
+    const blanks = Number(a ?? 0);
+    const mark = b ? `${name} ${b}` : name;
+    await report('working');
+    process.stdout.write(`${mark} SHORT ANSWER\n${'\n'.repeat(blanks)}╭────────────────────╮\n│ > ${mark} INPUT BOX │\n╰────────────────────╯\n  ${mark} STATUS LINE\n`);
     await report('idle');
     return;
   }

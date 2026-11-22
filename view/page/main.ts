@@ -11,7 +11,7 @@ import { arrange, columnFit, CHIP_ARC, FRONT_DISTANCE, FRONT_WIDTH, FRONT_Y, ARC
 import { BridgeLink } from './link.js';
 import { Mic, openMicrophone, type Captured, type OpenSource } from './mic.js';
 import {
-  CONTROLS_SIZE, LINE_PX, drawChip, drawControls, drawTalk, TALK_SIZE, type TalkPhase, drawFront, drawStrip, drawTile, EMPTY_FRONT, FRONT_SIZE, NO_SESSIONS, lightOf, regionAt, resetFonts, terminalLines, type ControlButton, type Region, type StripState,
+  CONTROLS_SIZE, LINE_PX, drawChip, drawControls, drawTalk, TALK_SIZE, type TalkPhase, drawFront, drawStrip, drawTile, EMPTY_FRONT, FRONT_SIZE, NO_SESSIONS, frontRows, lightOf, regionAt, resetFonts, terminalLines, tileRows, type ControlButton, type Region, type StripState,
 } from './panels.js';
 import { onArc, Scene, type Hit, type Pointer, type Rect } from './scene.js';
 
@@ -432,11 +432,11 @@ window.viewState = () => {
     front: front?.id ?? null,
     emptyHint: front ? null : shelf && shelf.sessions.length > 0 ? EMPTY_FRONT : NO_SESSIONS,
     receiver: shelf?.focusedId ?? null,
-    frontText: front ? terminalLines(plain(state.texts.get(front.id) ?? '')).slice(-40) : [],
+    frontText: front ? frontRows(plain(state.texts.get(front.id) ?? ''), state.scroll).rows : [],
     place: place.overview ? { overview: true } : { overview: false, projectId: place.projectId, project: place.project },
     agentNote: shelf ? agentNote(shelf, front)?.replace(/^!/, '') ?? null : null,
     chips: chips.map(c => ({ projectId: c.projectId, project: c.project, overview: c.overview, sessions: c.sessions.map(s => ({ id: s.id, light: lightOf(s) })), angle: c.angle, width: c.width })),
-    columns: columns.map(c => ({ projectId: c.projectId, project: c.project, side: c.angle < 0 ? 'left' as const : 'right' as const, width: columnFit(c.tiles.length).width, tiles: c.tiles.map(t => ({ n: t.n, id: t.session.id, name: t.session.name, role: t.session.role, light: lightOf(t.session), closed: t.closed, inFront: t.session.id === front?.id })) })),
+    columns: columns.map(c => ({ projectId: c.projectId, project: c.project, side: c.angle < 0 ? 'left' as const : 'right' as const, width: columnFit(c.tiles.length).width, tiles: c.tiles.map(t => ({ n: t.n, id: t.session.id, name: t.session.name, role: t.session.role, light: lightOf(t.session), closed: t.closed, inFront: t.session.id === front?.id, text: tileRows(plain(state.texts.get(t.session.id) ?? '')) })) })),
     scroll: state.scroll,
     scale: state.scale,
     mic: { mode: mic.mode, open: mic.open, problem: mic.problem },

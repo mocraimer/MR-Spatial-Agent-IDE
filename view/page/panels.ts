@@ -133,12 +133,39 @@ export function parseAnsi(line: string): Span[] {
   return spans.map(s => ({ ...s, text: s.text.replace(CONTROL, '') })).filter(s => s.text);
 }
 
-/** Terminal text into lines, without the trailing empty rows a terminal pads with. */
+/** A run of this many blank rows or more is drawn as one. */
+const BLANK_RUN = 3;
+
+/**
+ * Terminal text into lines, for drawing. Without the trailing empty rows a terminal pads with,
+ * and with each run of three or more blank rows as one: Claude Code pins its input box to the
+ * bottom of a tall pane, so a short answer above it would otherwise sit out of view.
+ */
 export function terminalLines(text: string): string[] {
   const lines = text.split(/\r?\n/);
-  while (lines.length > 0 && plain(lines[lines.length - 1] as string).trim() === '') lines.pop();
-  return lines;
+  while (lines.length > 0 && isBlank(lines[lines.length - 1] as string)) lines.pop();
+  const out: string[] = [];
+  for (let i = 0; i < lines.length;) {
+    if (!isBlank(lines[i] as string)) { out.push(lines[i] as string); i += 1; continue; }
+    let end = i;
+    while (end < lines.length && isBlank(lines[end] as string)) end += 1;
+    out.push(...(end - i >= BLANK_RUN ? [''] : lines.slice(i, end)));
+    i = end;
+  }
+  return out;
 }
+
+function isBlank(line: string): boolean { return plain(line).trim() === ''; }
+
+/** The rows the front panel draws: FRONT_ROWS of them, `scroll` rows back from the latest; `back` is how far back that really is. */
+export function frontRows(text: string | undefined, scroll: number): { rows: string[]; back: number; total: number } {
+  const lines = terminalLines(text ?? '');
+  const back = Math.min(scroll, Math.max(0, lines.length - FRONT_ROWS));
+  return { rows: lines.slice(Math.max(0, lines.length - FRONT_ROWS - back), lines.length - back), back, total: lines.length };
+}
+
+/** The rows a tile draws: the last few the session shows. */
+export function tileRows(text: string | undefined): string[] { return terminalLines(text ?? '').slice(-TILE_ROWS); }
 
 const fonts = new Map<string, string>();
 /** Forgets measured fonts, for when the page's own fonts finish loading. */
@@ -296,10 +323,8 @@ export function drawFront(canvas: HTMLCanvasElement, s: Session | null, project:
   const light = lightOf(s);
   // The front session is the receiver: its edge says so, in amber when it waits on the owner.
   panel(ctx, w, h, { radius: FRONT_RADIUS, edge: light === 'blocked' ? AMBER : ACCENT, edgeWidth: light === 'blocked' ? 6 : 4 });
-  const lines = terminalLines(text ?? '');
-  const maxScroll = Math.max(0, lines.length - FRONT_ROWS);
-  const back = Math.min(scroll, maxScroll);
-  const shown = lines.slice(Math.max(0, lines.length - FRONT_ROWS - back), lines.length - back);
+  const { rows: shown, back, total } = frontRows(text, scroll);
+  const maxScroll = Math.max(0, total - FRONT_ROWS);
   const top = stale ? 2 * LINE_PX : 0, mid = top + HEADER / 2 + 2;
   drawLight(ctx, light, 58, mid, 17);
   ctx.fillStyle = PAPER; ctx.font = `600 38px ${SANS}`; ctx.textBaseline = 'middle';
@@ -315,7 +340,7 @@ export function drawFront(canvas: HTMLCanvasElement, s: Session | null, project:
   drawLines(ctx, stale ? shown.slice(2) : shown, 32, (stale ? 2 * LINE_PX : 0) + 100, CHAR_PX, LINE_PX, FRONT_COLS, stale ? 0.4 : 1);
   if (maxScroll > 0) {
     // Where the shown rows sit in the session's history.
-    const track = h - 100 - 28, thumb = Math.max(48, track * FRONT_ROWS / lines.length);
+    const track = h - 100 - 28, thumb = Math.max(48, track * FRONT_ROWS / total);
     const at = 100 + (track - thumb) * (1 - back / maxScroll);
     ctx.fillStyle = back > 0 ? ACCENT : EDGE; ctx.globalAlpha = back > 0 ? 0.85 : 1;
     roundRect(ctx, w - 20, at, 6, thumb, 3); ctx.fill(); ctx.globalAlpha = 1;
@@ -369,7 +394,7 @@ export function drawTile(canvas: HTMLCanvasElement, number: number, s: Session, 
   ctx.textAlign = 'left';
   const textTop = top + 100;
   if (!stale) hairline(ctx, 22, textTop - 8, w - 22, textTop - 8);
-  const lines = terminalLines(text ?? '').slice(-TILE_ROWS);
+  const lines = tileRows(text);
   ctx.save(); ctx.beginPath(); ctx.rect(16, textTop, w - 32, h - textTop - 14); ctx.clip();
   drawLines(ctx, lines, 22, textTop + 4, 12.4, 26, 48, stale ? 0.3 : 0.7);
   ctx.restore();

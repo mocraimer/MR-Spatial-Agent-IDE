@@ -176,3 +176,37 @@ test('with a single session, it is the one in front and the shelf holds nothing 
   expect(s.columns.map(c => [c.project, c.tiles.map(t => t.inFront)])).toEqual([['solo-project', [true]]]);
   await page.screenshot({ path: test.info().outputPath('mr-one-session.png') });
 });
+
+test('a short answer above a tall blank area shows with the input box, on the front and on the tile', async ({ page }) => {
+  test.setTimeout(60_000);
+  r = await rig([{ label: 'alpha', panes: [{ name: 'tall', kind: 'agent' }, { name: 'plain', kind: 'agent' }, { name: 'gappy', kind: 'agent' }] }]);
+  await pair(page, r);
+  const frontOf = async (name: string) => { await r.bench.client.call('pane.focus', { pane_id: r.bench.pane(name) }); await expect.poll(async () => (await viewState(page)).front).toBe(r.bench.pane(name)); };
+  const tileOf = async (name: string) => (await viewState(page)).columns.flatMap(c => c.tiles).find(t => t.id === r.bench.pane(name))?.text ?? [];
+
+  // What Claude Code draws in a 69-row pane: a short answer, blank rows, the input box at the bottom.
+  await r.bench.type('tall', '/tall 45');
+  await r.bench.type('gappy', '/tall 2');
+  await r.bench.type('plain', '/burst 5');
+  await frontOf('tall');
+  await expect.poll(async () => (await viewState(page)).frontText.join('\n')).toContain('tall INPUT BOX');
+  const front = (await viewState(page)).frontText;
+  expect(front.join('\n'), 'the answer is in view with the input box, with nothing scrolled').toContain('tall SHORT ANSWER');
+  expect((await viewState(page)).scroll).toBe(0);
+  const answerAt = front.findIndex(l => l.includes('tall SHORT ANSWER'));
+  expect(front.slice(answerAt, answerAt + 3).map(l => l.trim()), 'the 45 blank rows between answer and box are drawn as one').toEqual(['tall SHORT ANSWER', '', '╭────────────────────╮']);
+
+  // On its tile, once another session is in front.
+  await frontOf('plain');
+  await expect.poll(async () => (await tileOf('tall')).join('\n')).toContain('tall INPUT BOX');
+  expect((await tileOf('tall')).join('\n'), 'the answer is on the tile too').toContain('tall SHORT ANSWER');
+
+  // Text with no such run is shown as it is, a short run of blank rows included.
+  await expect.poll(async () => (await tileOf('gappy')).join('\n')).toContain('gappy INPUT BOX');
+  const gappy = await tileOf('gappy');
+  const at = gappy.findIndex(l => l.includes('gappy SHORT ANSWER'));
+  expect(gappy.slice(at, at + 4).map(l => l.trim())).toEqual(['gappy SHORT ANSWER', '', '', '╭────────────────────╮']);
+  await expect.poll(async () => (await viewState(page)).frontText.join('\n')).toContain('plain END 5');
+  const plainRows = (await viewState(page)).frontText;
+  expect(plainRows.filter(l => /plain L0000\d/.test(l)).length, 'unbroken text is all there').toBe(5);
+});

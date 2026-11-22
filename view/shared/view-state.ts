@@ -10,6 +10,7 @@ export interface ViewState {
   /** What the front panel says when no session is in front. */
   emptyHint: string | null;
   receiver: string | null;
+  /** The rows the front panel draws, as plain text. */
   frontText: string[];
   /** Where the owner is: the overview, or inside one project. */
   place: { overview: true } | { overview: false; projectId: string; project: string };
@@ -18,7 +19,7 @@ export interface ViewState {
   /** The other projects as chips (inside a project) or nodes (at the overview); angle in degrees from straight ahead. */
   chips: { projectId: string; project: string; overview: boolean; sessions: { id: string; light: string }[]; angle: number; width: number }[];
   /** The sessions on the shelf: the current project's, or at the overview those of no project. */
-  columns: { projectId: string; project: string; side: 'left' | 'right'; width: number; tiles: { n: number; id: string; name: string; role: Role; light: string; closed: boolean; inFront: boolean }[] }[];
+  columns: { projectId: string; project: string; side: 'left' | 'right'; width: number; tiles: { n: number; id: string; name: string; role: Role; light: string; closed: boolean; inFront: boolean; /** The rows the tile draws, as plain text. */ text: string[] }[] }[];
   scroll: number;
   scale: number;
   mic: { mode: 'hold' | 'switch'; open: boolean; problem: string | null };
