@@ -14,6 +14,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { SEAT_LABEL } from '../shared/messages.js';
 import { plain } from '../shared/ansi.js';
+import { paneOf } from './agents.js';
 import { compiled, dataDirectory } from './config.js';
 import { HerdrClient, type HerdrPane } from './herdr.js';
 
@@ -56,7 +57,7 @@ switch (command) {
     // A new session works where the project's sessions work, not in the agent's own directory.
     const cwd = (await mine()).find(p => p.id !== self && p.cwd)?.cwd ?? homedir();
     const made = await herdr.call('tab.create', { workspace_id: workspaceId, cwd, focus: false });
-    const paneId = (made.root_pane as { pane_id: string }).pane_id;
+    const paneId = paneOf(made.root_pane);
     if (name) await herdr.call('pane.rename', { pane_id: paneId, label: name });
     if (kind !== 'shell') {
       const deadline = Date.now() + 10_000;

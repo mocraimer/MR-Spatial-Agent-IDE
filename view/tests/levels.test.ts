@@ -178,6 +178,11 @@ test('a failed start says so and how to retry; going in again retries', async ()
     const words = await s.say('what is waiting here');
     assert.equal(words.ok, false);
     assert.match(words.outcome, /not running/);
+    // Keys, by hand or spoken, are not typed into the empty shell either.
+    const key = await s.bridge.act({ kind: 'key', key: 'enter' });
+    assert.equal(key.ok, false, key.outcome);
+    assert.equal((await s.say('press yes')).ok, false);
+    assert.equal((await s.text(seat)).includes('what is waiting'), false);
     delete standin.fail;
     await s.bridge.act({ kind: 'go', projectId: ws(s, 'alpha') });
     await s.agents.ready(seat);

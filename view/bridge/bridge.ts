@@ -242,7 +242,7 @@ export class Bridge {
     if (!target) return { ok: false, outcome: 'No session is in front to receive the key.' };
     const session = shelf.sessions.find(s => s.id === target);
     const unready = session ? notReady(shelf, session) : null;
-    if (unready && shelf.starting.includes(target)) return { ok: false, outcome: `Not pressed: ${unready}` };
+    if (unready) return { ok: false, outcome: `Not pressed: ${unready}` };
     await this.herdr.call('pane.send_keys', { pane_id: target, keys: [key] });
     return { ok: true, outcome: `Pressed ${key} in ${name(shelf, target)}` };
   }

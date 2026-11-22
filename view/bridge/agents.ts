@@ -150,6 +150,8 @@ export class HerdrLevelAgents implements LevelAgents {
     const role: AgentRole = 'overview' in level ? 'overview-agent' : 'project-agent';
     const agent = role === 'overview-agent' ? this.options.helper : this.options.project;
     const snapshot = await this.herdr.snapshot();
+    // A seat closed from outside takes its failed start with it.
+    for (const id of [...this.failures.keys()]) if (!snapshot.panes.some(p => p.id === id)) this.failures.delete(id);
     const workspace = 'overview' in level
       ? snapshot.workspaces.find(w => w.label === OVERVIEW_LABEL)
       : snapshot.workspaces.find(w => w.id === level.project);
@@ -221,7 +223,7 @@ function startProblem(error: unknown): string {
   return `It did not start (${(error as Error).message}). Go to it again to retry.`;
 }
 
-function paneOf(value: unknown): string {
+export function paneOf(value: unknown): string {
   const id = typeof value === 'object' && value !== null ? (value as { pane_id?: unknown }).pane_id : undefined;
   if (typeof id !== 'string') throw new HerdrError('bad-reply', 'Herdr sent an unexpected pane');
   return id;
