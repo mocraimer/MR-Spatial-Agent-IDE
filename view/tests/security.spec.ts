@@ -4,7 +4,8 @@ import { createServer } from 'node:http';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { join } from 'node:path';
-import { pair, rig, type Rig } from './fixture.js';
+import { COMMANDS } from '../shared/actions.js';
+import { benchAgents, pair, rig, ScriptedSpeech, type Rig } from './fixture.js';
 
 test.use({ ignoreHTTPSErrors: true });
 let r: Rig;
@@ -41,6 +42,7 @@ test('only a paired headset reads or drives sessions; nothing logs a secret or s
   await expect.poll(async () => (await r.bench.client.read(r.bench.pane('sh'), 10)).includes(MARKER)).toBe(true);
   const port = Number(new URL(r.view.url).port);
   const focusedBefore = (await r.bench.client.snapshot()).focusedPaneId;
+  const settingBefore = r.view.bridge.shelf().drafts.length;
 
   // Every endpoint the server routes, without credentials. The page's own files are public and
   // hold no session data; everything under /api refuses.
@@ -50,7 +52,9 @@ test('only a paired headset reads or drives sessions; nothing logs a secret or s
   expect((await call(port, 'GET', '/app/fonts/..%2Findex.woff2')).status).toBe(404);
   for (const [method, path, body] of [
     ['GET', '/api/session', undefined], ['GET', '/api/events', undefined],
-    ['POST', '/api/action', JSON.stringify({ focus: r.bench.pane('sh') })], ['POST', '/api/action', JSON.stringify({ command: 'enter' })],
+    ['POST', '/api/action', JSON.stringify({ focus: r.bench.pane('sh') })], ['POST', '/api/action', JSON.stringify({ go: r.bench.workspaces.get('alpha') })],
+    // Every action the bridge carries out, as the registry lists them.
+    ...COMMANDS.filter(c => 'bridge' in c.run).map(c => ['POST', '/api/action', JSON.stringify({ command: c.id })] as const),
     ['POST', `/api/utterance?receiver=${r.bench.pane('sh')}`, Buffer.alloc(64000)],
   ] as const) {
     const reply = await call(port, method, path, body);
@@ -92,6 +96,7 @@ test('only a paired headset reads or drives sessions; nothing logs a secret or s
     await evil.close();
   } finally { other.close(); }
   expect((await r.bench.client.snapshot()).focusedPaneId, 'the other page moved nothing').toBe(focusedBefore);
+  expect(r.view.bridge.shelf().drafts.length, 'nothing without a pairing changed a draft').toBe(settingBefore);
 
   // A wrong code, repeated, until the bridge's own limit answers; then even the right code waits.
   const code = r.view.pairing.setupCode().code;
@@ -105,4 +110,35 @@ test('only a paired headset reads or drives sessions; nothing logs a secret or s
   expect(token).toMatch(/^sw_/);
   const written = [...r.logs, ...filesUnder(r.data)].join('\n');
   for (const secret of [code, token, MARKER]) expect(written.includes(secret), `${secret.slice(0, 6)}… not written`).toBe(false);
+});
+
+test('nothing the bridge logs or writes holds a pairing code, a token, session text or a word the owner said', async ({ page }) => {
+  test.setTimeout(90_000);
+  const SESSION = 'SESSION-TEXT-MARKER-91c2', PROMPT = 'PROMPT-SPOKEN-MARKER-5d10', ORDER = 'ORDER-SPOKEN-MARKER-e7a4';
+  const speech = new ScriptedSpeech();
+  r = await rig([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' }, { name: 'sh', kind: 'shell' }] }], (bench, data) => ({ speech, agents: benchAgents(bench, data, { fail: 'no such program' }) }));
+  await r.bench.type('sh', `echo ${SESSION}`);
+  await expect.poll(async () => (await r.bench.client.read(r.bench.pane('sh'), 10)).includes(SESSION)).toBe(true);
+  await pair(page, r);
+  const code = r.view.pairing.setupCode().code;
+  const token = (await page.context().cookies()).find(c => c.name === 'svw')?.value as string;
+  const audio = new Float32Array(1600);
+  const heard = async (words: string, receiver: string | null) => { speech.queue.push(words); return await r.view.bridge.utterance(`m${Math.random()}`, audio, receiver); };
+
+  // A prompt and an order to the helper (its agent fails to start), a prompt in direct mode, a start that fails, a close.
+  await r.bench.client.call('pane.focus', { pane_id: r.bench.pane('sh') });
+  await expect.poll(() => r.view.bridge.shelf().focusedId).toBe(r.bench.pane('sh'));
+  expect((await heard(`echo ${PROMPT}`, r.bench.pane('sh'))).ok).toBe(true);
+  await heard(`helper, ${ORDER}`, r.bench.pane('sh'));
+  await r.view.bridge.act({ kind: 'direct', on: true });
+  await heard(`more ${PROMPT}`, r.bench.pane('sh'));
+  await r.view.bridge.act({ kind: 'go', projectId: r.bench.workspaces.get('alpha') as string });
+  const closing = r.view.bridge.requestClose('sh');
+  await r.view.bridge.act({ kind: 'answer', answer: false });
+  await closing;
+  await expect.poll(() => r.logs.some(l => /did not start/.test(l))).toBe(true);
+
+  const written = [...r.logs, ...filesUnder(r.data)].join('\n');
+  for (const secret of [code, token, SESSION, PROMPT, ORDER]) expect(written.includes(secret), `${secret.slice(0, 8)}… not written`).toBe(false);
+  expect(readFileSync(join(r.data, 'view.log'), 'utf8')).toMatch(/did not start: .*no such program/);
 });

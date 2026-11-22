@@ -77,23 +77,30 @@ test('hold to talk: keys, showing, next waiting and back, prompts and helper ord
   await utter(page, 'back');
   await expect.poll(async () => (await viewState(page)).front).toBe(r.bench.pane('keys'));
 
-  // A prompt goes to the receiver; one that only starts like a command is still a prompt.
+  // A prompt waits as a draft in the receiver and "go" sends it; one that only starts like a command is still a prompt.
   await r.bench.client.call('pane.focus', { pane_id: r.bench.pane('agent1') });
   await expect.poll(async () => (await viewState(page)).receiver).toBe(r.bench.pane('agent1'));
   for (const phrase of ['summarize the ledger change', 'back up the database before you migrate']) {
     const u = await utter(page, phrase);
-    expect(u, phrase).toMatchObject({ as: 'prompt', ok: true, outcome: 'Sent to agent1' });
+    expect(u, phrase).toMatchObject({ as: 'prompt', ok: true });
+    expect(u.outcome).toMatch(/^Draft in agent1\. Say “go”/);
+    await expect.poll(async () => normalize(await paneText(r.bench.pane('agent1')))).toContain(normalize(phrase));
+    expect(normalize(await paneText(r.bench.pane('agent1'))), 'typed, not sent').not.toContain(`received ${normalize(phrase)}`);
+    expect(await utter(page, 'go'), 'go').toMatchObject({ as: 'command', ok: true });
     await expect.poll(async () => normalize(await paneText(r.bench.pane('agent1')))).toContain(`received ${normalize(phrase)}`);
   }
 
-  // An order to the helper (started for it, the order held until it is ready), and the overview.
+  // An order to the helper (started for it) waits in the helper's input; it is sent from the overview, where it is in front.
   const order = await utter(page, 'helper, count the files in the current folder');
   expect(order).toMatchObject({ as: 'helper', ok: true });
   expect((await viewState(page)).front, 'an order to the helper does not change what is in front').toBe(r.bench.pane('agent1'));
-  await expect.poll(async () => { const seat = await seatOf(r.bench, 'helper'); return seat ? normalize(await paneText(seat)) : ''; }, { timeout: 20_000 }).toContain('received count the files in the current folder');
+  await expect.poll(async () => { const seat = await seatOf(r.bench, 'helper'); return seat ? normalize(await paneText(seat)) : ''; }, { timeout: 20_000 }).toContain('count the files in the current folder');
+  expect(normalize(await paneText((await seatOf(r.bench, 'helper')) as string)), 'typed, not sent').not.toContain('received count the files');
   await utter(page, 'overview');
   await expect.poll(async () => (await viewState(page)).front).toBe(await seatOf(r.bench, 'helper'));
   expect((await viewState(page)).place).toEqual({ overview: true });
+  expect(await utter(page, 'submit'), '"submit" sends the draft in front').toMatchObject({ as: 'command', ok: true });
+  await expect.poll(async () => normalize(await paneText((await seatOf(r.bench, 'helper')) as string)), { timeout: 20_000 }).toContain('received count the files in the current folder');
   // Going into a project by voice: its agent comes to the front.
   await utter(page, 'go to beta');
   await expect.poll(async () => (await viewState(page)).front, { timeout: 20_000 }).toBe(await seatOf(r.bench, 'beta'));
@@ -150,4 +157,39 @@ test('every action the view performs has a spoken form', () => {
   // The registry is what the page's handlers and the bridge's actions dispatch on; the two
   // parametric actions (show a session, prompt) and helper orders are spoken above.
   for (const c of COMMANDS) expect(c.say.length, c.id).toBeGreaterThan(0);
+});
+
+test('a long prompt said in pieces is one draft in both listening modes; "scratch that" clears it; direct sending is switched by voice', async ({ page }) => {
+  test.setTimeout(240_000);
+  await start(page);
+  const agent1 = r.bench.pane('agent1');
+  await r.bench.client.call('pane.focus', { pane_id: agent1 });
+  await expect.poll(async () => (await viewState(page)).receiver).toBe(agent1);
+  const typedOnly = async (words: string) => { const t = normalize(await paneText(agent1)); return t.includes(normalize(words)) && !t.includes(`received ${normalize(words)}`); };
+
+  // Hold to talk: two pieces are added into one draft; "scratch that" clears it and nothing is sent.
+  await utter(page, 'summarize the ledger change');
+  await utter(page, 'back up the database before you migrate');
+  await expect.poll(async () => typedOnly('summarize the ledger change')).toBe(true);
+  await expect.poll(async () => normalize(await paneText(agent1))).toMatch(/summarize the ledger change\s*back up the database before you migrate/);
+  expect(await utter(page, 'scratch that')).toMatchObject({ as: 'command', ok: true });
+  expect((await viewState(page)).drafts).toEqual([]);
+
+  // Keep listening: each pause ends a piece; the pieces are one draft, sent by "go".
+  await utter(page, 'keep listening');
+  await expect.poll(async () => (await viewState(page)).mic).toMatchObject({ mode: 'switch', open: true });
+  await utter(page, 'summarize the ledger change');
+  await utter(page, 'back up the database before you migrate');
+  expect((await viewState(page)).drafts).toEqual([agent1]);
+  expect(await utter(page, 'go')).toMatchObject({ as: 'command', ok: true });
+  await expect.poll(async () => normalize(await paneText(agent1))).toMatch(/received summarize the ledger change\s*back up the database before you migrate/);
+  expect(normalize(await paneText(agent1)), 'the cleared words were never sent').not.toContain('received summarize the ledger change back up the database before you migrate summarize');
+
+  // Direct sending by voice: a prompt is sent as soon as it is heard, until "wait for go".
+  await utter(page, 'send at once');
+  await expect.poll(async () => (await viewState(page)).direct).toBe(true);
+  expect(await utter(page, 'summarize the ledger change')).toMatchObject({ as: 'prompt', ok: true, outcome: 'Sent to agent1' });
+  await utter(page, 'wait for go');
+  await expect.poll(async () => (await viewState(page)).direct).toBe(false);
+  expect((await utter(page, 'summarize the ledger change')).outcome).toMatch(/^Draft in agent1/);
 });

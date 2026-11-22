@@ -80,7 +80,8 @@ A **project** is a Herdr workspace. The view shows one place at a time, and the 
 | grey box with ">_" | a shell, not an agent |
 
 - **Strip above the front session:** the receiver, the microphone button (red = listening), the last thing heard with what it was taken as and where it went, and the link state.
-- **Below it:** the **Talk** button, then two rows of buttons: on the first, moving between sessions, scrolling, text size and re-centering, **Overview**, and **Exit MR**; on the second, the keys sent to the receiver.
+- **Below it:** the **Talk** button, then three rows of buttons: on the first, moving between sessions, scrolling, text size and re-centering, **Overview**, and **Exit MR**; on the second, the keys sent to the receiver; on the third, **Go**, **Scratch that**, and the send setting.
+- **Above it:** when a draft waits, a bar says in which session and the words that send or clear it.
 
 ## Talking to the agents at each level
 
@@ -108,26 +109,46 @@ Point a hand or controller at something. A ray shows where you point. Pinch (han
 | Next session that needs you | **Next waiting** | "next waiting" |
 | Return to where you were before "next waiting" | **Back** | "back" |
 | Press a key in the receiver | **Enter, Esc, Ctrl-C, ↑, ↓, Tab, y, n, 1, 2, 3** | "press enter", "press escape", "interrupt", "press up", "press down", "press tab", "press yes", "press no", "press one", "press two", "press three" |
+| Send the draft in front | **Go** (the third row of buttons) | "go", "submit", "send it" |
+| Clear the draft in front | **Scratch that** | "scratch that", "clear that" |
+| Send each prompt as soon as it is heard, or wait for "go" again | **Send at once**, **Wait for go** (the one in force is lit) | "send at once", "wait for go" |
 | Scroll the front session back, forward, to the latest | Grab the text (pinch or trigger on it) and drag up or down; or push the thumbstick; or **Scroll up, Scroll down, Latest** | "scroll up", "scroll down", "scroll bottom" |
 | Larger or smaller text | **A+, A−** | "bigger text", "smaller text" |
 | Put the shelf in front of you again | **Recenter** | "recenter" |
 | Leave mixed reality, back to the flat page | **Exit MR** (or the Quest's Meta button) | "leave mixed reality" |
 | Answer a close the helper asks about | **Yes, close** / **No, keep it** in the strip, or the y / n key | "yes" / "no" |
-| Change the listening mode | the last button of the first row, which shows the mode in use | "hold to talk", "keep listening" |
+| Change the listening mode | the Talk button: hold it to talk, tap it to keep listening | "hold to talk", "keep listening" (also "start listening") |
 | Stop listening | Select the microphone | "stop listening" |
 
-A command must be the whole utterance. "back up the database before you migrate" is a prompt, not "back". When "next waiting" finds nothing waiting, it says so. "Next waiting" goes to the waiting session itself, in whatever project it is, and "back" returns you to the session and project you came from.
+A command must be the whole utterance. "back up the database before you migrate" is a prompt, not "back". "Go" alone sends a draft; "go to docs" goes to a project. When "next waiting" finds nothing waiting, it says so. "Next waiting" goes to the waiting session itself, in whatever project it is, and "back" returns you to the session and project you came from.
 
 To type, use the keyboard at the desk: it types into Herdr's focused session, which is the one in front.
 
 ## Speaking
 
-Listening is off whenever the page opens, and turns off when you leave mixed reality. There are two ways to listen; switch at any time with the last button of the first row, which shows the mode in use.
+Listening is off whenever the page opens, and turns off when you leave mixed reality. There are two ways to listen; switch at any time by saying "hold to talk" or "keep listening", or with the Talk button.
 
 - **Hold to talk:** the microphone is open only while you hold a pinch or trigger on the microphone in the strip, or hold a controller grip, or hold the ` key on a keyboard paired to the headset. The microphone opens when you press, so start speaking when the microphone turns red and the strip says "Listening" ("Opening mic…" means not yet). Release to send. An utterance longer than 30 seconds is sent at 30 seconds and the microphone closes.
-- **Keep listening:** select the microphone once to start. Each pause ends an utterance. Say "stop listening", or select the microphone again, to stop.
+- **Keep listening:** select the microphone once to start, or say "keep listening". Each pause ends an utterance. Say "stop listening", or select the microphone again, to stop.
 
-Anything that is not a command is a **prompt**. It goes to the session that was in front when you started speaking, even if you bring another session forward before you finish. It is sent when you stop talking, with no confirming step. The strip always shows what was heard, whether it was taken as a command, a prompt or a helper order, and where it went. If a word was misheard, fix it by hand: press Esc or Ctrl-C in that session, or type at the desk.
+Anything that is not a command is a **prompt**. It goes to the session that was in front when you started speaking, even if you bring another session forward before you finish.
+
+### Drafts: a prompt waits for "go"
+
+A spoken prompt is **typed into that session's input and not sent**, so you read it in the window before any agent acts on it. A bar above the strip says "Draft waiting in" the session, and the strip says what was heard and where it went. Then:
+
+- Say **"go"** (or "submit", or "send it"), or select **Go**, to send the draft of the session in front, once. With no draft in front, "go" sends nothing and says so.
+- Say **"scratch that"** (or "clear that"), or select **Scratch that**, to clear the draft without sending it. It clears the whole input line of that session, including anything you typed at the desk into it; Claude Code can bring it back with Ctrl-Y.
+- Say more, and it is **added** to the draft, in hold to talk and in keep listening alike. A long prompt said in pieces is one draft. After a clear, the next words start a new draft.
+- Or fix it at the desk: the draft is in the session's input, so the keyboard edits it, and Enter sends it.
+
+"Go" and "scratch that" act on the session in front. A draft in another session waits there, and the bar names it; bring it forward, then say "go". A draft is never typed into an agent that is waiting on a question, because the words would be taken as keys: answer the question with a key first.
+
+An order to the helper waits the same way, in the helper's input. The helper is in front at the overview, so say "overview", then "go". (An order said while the helper is starting waits there until it is ready; a note says so.)
+
+**Send at once.** If drafts slow you down, say **"send at once"** (or select **Send at once**): a prompt is then sent as soon as it is heard, with no "go", and the strip shows "Sending at once" while it is on. Say **"wait for go"** (or select **Wait for go**) to go back. The setting is kept on the PC across restarts and is off the first time.
+
+The strip always shows what was heard, whether it was taken as a command, a prompt or a helper order, and where it went. If a word was misheard, say "scratch that", or fix it at the desk.
 
 ## Closing, and what the agents may do
 

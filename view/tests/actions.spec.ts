@@ -111,15 +111,15 @@ for (const input of ['controller', 'hand'] as const) {
     await expect.poll(async () => (await viewState(page)).mic.open).toBe(true);
     await feed(page, wav('summarize-the-ledger-change'));
     await setPressed(page, input, 0);
-    await expect.poll(async () => (await viewState(page)).last?.outcome).toBe('Sent to a1');
-    await expect.poll(() => plainText('a1')).toContain('received: first prompt by hand');
+    await expect.poll(async () => (await viewState(page)).last?.outcome).toMatch(/^Draft in a1/);
+    await expect.poll(() => plainText('a1')).toContain('first prompt by hand');
     if (input === 'controller') {
       speech.queue.push('second prompt by grip');
       await squeeze(page, 1);
       await expect.poll(async () => (await viewState(page)).mic.open).toBe(true);
       await feed(page, wav('summarize-the-ledger-change'));
       await squeeze(page, 0);
-      await expect.poll(() => plainText('a1')).toContain('received: second prompt by grip');
+      await expect.poll(() => plainText('a1')).toContain('second prompt by grip');
     }
 
     // Talk tapped: keep listening; tapped again: off.
@@ -154,7 +154,7 @@ test('the receiver is shown, moves only by a focus act, and is fixed when speech
     await focus('w3');
     await expect.poll(async () => (await viewState(page)).receiver).toBe(r.bench.pane('w3'));
   });
-  await expect.poll(() => plainText('a1')).toContain('received: hold utterance for the first receiver');
+  await expect.poll(() => plainText('a1')).toContain('hold utterance for the first receiver');
   expect(await plainText('w3')).not.toContain('hold utterance');
 
   // Listening switch: the receiver is the one in front where speech begins, not where it ends.
@@ -170,7 +170,7 @@ test('the receiver is shown, moves only by a focus act, and is fixed when speech
   await focus('w3');
   await expect.poll(async () => (await viewState(page)).receiver).toBe(r.bench.pane('w3'));
   await feed(page, [...audio.slice(half), ...new Array<number>(16000).fill(0)]);
-  await expect.poll(() => plainText('a1')).toContain('received: switch utterance for a1');
+  await expect.poll(() => plainText('a1')).toContain('switch utterance for a1');
   expect(await plainText('w3')).not.toContain('switch utterance');
 });
 
@@ -195,5 +195,5 @@ test('next waiting visits each session that needs the owner, back returns, and t
   expect((await act('back')).ok).toBe(false);
 
   const surfaces = (await viewState(page)).surfaces;
-  expect(surfaces.filter(s => !/^(front|strip|talk|controls-\d|tile:.+|label:.+|chip:.+)$/.test(s)), 'no panel beyond the shelf and its chips, such as an Inbox').toEqual([]);
+  expect(surfaces.filter(s => !/^(front|strip|talk|draft|controls-\d|tile:.+|label:.+|chip:.+)$/.test(s)), 'no panel beyond the shelf and its chips, such as an Inbox').toEqual([]);
 });

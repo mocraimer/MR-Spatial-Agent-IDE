@@ -8,60 +8,26 @@ import { execFile } from 'node:child_process';
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { HerdrBench, type BenchWorkspace } from '../bench/bench.js';
+import type { BenchWorkspace } from '../bench/bench.js';
 import { AGENT_NAME_RULE, agentName } from '../bridge/agent-name.js';
 import { claudeAgents, HerdrLevelAgents, OVERVIEW, serveCloseRequests } from '../bridge/agents.js';
-import { Bridge, type Transcriber } from '../bridge/bridge.js';
 import { compiled } from '../bridge/config.js';
 import type { HerdrClient } from '../bridge/herdr.js';
-import { DEFAULT_MIRROR, Mirror } from '../bridge/mirror.js';
-import { plain } from '../shared/ansi.js';
+import { Settings } from '../bridge/settings.js';
 import { currentProject } from '../shared/messages.js';
-import { benchAgents, type StandinAgentOptions } from './fixture.js';
-
-class Heard implements Transcriber {
-  readonly queue: string[] = [];
-  state() { return { ready: true as const }; }
-  async transcribe(): Promise<string> { return this.queue.shift() ?? ''; }
-}
-const audio = new Float32Array(1600);
-let seq = 0;
+import { setup as deskSetup, type Desk } from './desk.js';
+import type { StandinAgentOptions } from './fixture.js';
 
 const LAYOUT: BenchWorkspace[] = [
   { label: 'alpha', panes: [{ name: 'a1', kind: 'agent' }, { name: 'a2', kind: 'agent' }] },
   { label: 'beta', panes: [{ name: 'b1', kind: 'agent' }, { name: 'bsh', kind: 'shell' }] },
 ];
 
-async function setup(layout = LAYOUT, standin: StandinAgentOptions = {}, closeAnswerMs = 400, path: string[] = []) {
-  const bench = await HerdrBench.start(layout, { path });
-  const data = mkdtempSync('/tmp/svl-');
-  const mirror = new Mirror(bench.client, DEFAULT_MIRROR);
-  const speech = new Heard();
-  const agents = benchAgents(bench, data, standin);
-  const bridge = new Bridge(bench.client, mirror, speech, agents, { closeAnswerMs });
-  mirror.start();
-  await bench.waitFor(async () => mirror.shelf().sessions.length === layout.flatMap(w => w.panes).length, 'the mirror to see every session');
-  const snap = () => bench.client.snapshot();
-  const say = async (text: string, receiver: string | null = mirror.shelf().focusedId) => { speech.queue.push(text); return await bridge.utterance(`u${++seq}`, audio, receiver); };
-  /** Level-agent seats per workspace label. */
-  const seats = async () => {
-    const s = await snap();
-    return s.panes.filter(p => p.label === 'helper' || p.label === 'project agent').map(p => [s.workspaces.find(w => w.id === p.workspaceId)?.label, p.label]);
-  };
-  const text = async (id: string) => plain(await bench.client.read(id, 80));
-  const received = async () => {
-    const out: string[] = [];
-    for (const p of (await snap()).panes) if ((await text(p.id)).includes('received:')) out.push(p.id);
-    return out;
-  };
-  const focused = async () => (await snap()).focusedPaneId;
-  return {
-    bench, data, mirror, speech, agents, bridge, say, seats, text, received, focused, snap,
-    stop: async () => { mirror.stop(); await bench.stop(); rmSync(data, { recursive: true, force: true }); },
-  };
-}
+/** Direct sending is on here: these tests are about which session a prompt reaches, and a draft would only add a "go". */
+const direct = (on = true) => { const settings = new Settings(); settings.setDirect(on); return settings; };
+const setup = (layout = LAYOUT, standin: StandinAgentOptions = {}, closeAnswerMs = 400, path: string[] = []) => deskSetup(layout, { standin, closeAnswerMs, path, settings: direct() });
 
-const ws = (s: Awaited<ReturnType<typeof setup>>, label: string) => s.bench.workspaces.get(label) as string;
+const ws = (s: Desk, label: string) => s.bench.workspaces.get(label) as string;
 
 test('the helper is one, whatever state Herdr is in: none yet, a workspace of its name, closed by hand, after a restart', async () => {
   // A Herdr with a workspace labelled "helper" holding sessions of no project, and no helper agent.
@@ -205,7 +171,7 @@ test('a prompt keeps the receiver it had when speech began, across a "go to"', a
   } finally { await s.stop(); }
 });
 
-function tool(s: Awaited<ReturnType<typeof setup>>, paneId: string, workspaceId: string, args: string[], extra: Record<string, string> = {}): Promise<{ status: number; out: string }> {
+function tool(s: Desk, paneId: string, workspaceId: string, args: string[], extra: Record<string, string> = {}): Promise<{ status: number; out: string }> {
   return new Promise(resolve => {
     execFile('node', [compiled('bridge', 'level-tool.js'), ...args], {
       env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', HERDR_SOCKET_PATH: s.bench.socketPath, HERDR_WORKSPACE_ID: workspaceId, HERDR_PANE_ID: paneId, ...extra },
@@ -253,7 +219,7 @@ test('the project agent\'s tool keeps to its project, never moves the front, and
     assert.equal((await s.snap()).panes.some(p => p.id === made?.id), true, 'no answer leaves it open');
     const yes = tool(s, me, alpha, ['close', made?.id as string], { VIEW_DATA: s.data });
     await s.bench.waitFor(async () => waiting, 'the close to be put to the owner');
-    await s.bridge.act({ kind: 'confirm-close', answer: true });
+    await s.bridge.act({ kind: 'answer', answer: true });
     assert.equal((await yes).status, 0);
     assert.equal((await s.snap()).panes.some(p => p.id === made?.id), false);
   } finally { await new Promise(resolve => server.close(resolve)); await s.stop(); }

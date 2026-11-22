@@ -4,6 +4,8 @@ import { COMMANDS } from '../shared/actions.js';
 /** Every spoken form's first wording, plus the phrases that are not commands. */
 export const PHRASES: string[] = [
   ...COMMANDS.map(c => c.say[0] as string),
+  'submit',
+  'start listening',
   'show two',
   'go to beta',
   'go to nowhere at all',

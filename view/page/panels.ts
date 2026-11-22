@@ -428,6 +428,8 @@ export interface StripState {
   pendingHeard: boolean;
   notice: string | null;
   link: string | null;
+  /** Direct sending is on: spoken prompts are sent as soon as they are heard. */
+  direct: boolean;
   confirm: PendingClose | null;
 }
 
@@ -498,18 +500,21 @@ export function drawStrip(canvas: HTMLCanvasElement, st: StripState): Region[] {
     ctx.fillText(st.mic.mode === 'hold' ? 'Hold to talk' : 'Keep listening until “stop listening”', tx, 98);
   }
 
-  const sayX = 1250, sayW = w - sayX - (st.link ? 400 : 44);
+  const sayX = 1250, sayW = w - sayX - (st.link ? 400 : 44) - (st.direct ? 340 : 0);
   ctx.font = `600 34px ${SANS}`; ctx.fillStyle = st.last || st.pendingHeard ? PAPER : DIM;
   const said = st.pendingHeard ? 'Hearing…' : st.last ? `“${st.last.heard || '…'}”` : 'Nothing said yet';
   ctx.fillText(fit(ctx, said, sayW), sayX, 48);
   let x = sayX;
   if (!st.notice && st.last) {
-    const tag = { command: 'Command', prompt: 'Prompt', helper: 'Helper order', nothing: 'Not acted on' }[st.last.as];
+    const tag = { command: 'Command', prompt: 'Prompt', helper: 'Helper order', nothing: 'Not acted on', ignored: 'Ignored' }[st.last.as];
     x += chip(ctx, tag, x, 102, 24, st.last.ok ? ACCENT : AMBER) + 16;
   }
   ctx.font = `28px ${SANS}`; ctx.fillStyle = st.last && !st.last.ok && !st.notice ? AMBER : DIM; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
   ctx.fillText(fit(ctx, st.notice ?? st.last?.outcome ?? 'What you say shows here, with where it went.', sayX + sayW - x), x, 103);
-  if (st.link) chip(ctx, st.link, w - 40, h / 2, 28, AMBER, 'right');
+  let right = w - 40;
+  if (st.link) right -= chip(ctx, st.link, right, h / 2, 28, AMBER, 'right') + 16;
+  // Direct sending is a standing exception to "say go": it shows whenever it is on.
+  if (st.direct) chip(ctx, 'Sending at once', right, h / 2, 28, AMBER, 'right');
   return [mic];
 }
 
@@ -581,4 +586,31 @@ export function drawTalk(canvas: HTMLCanvasElement, phase: TalkPhase, problem: s
   ctx.fillStyle = PAPER; ctx.font = `600 44px ${SANS}`;
   ctx.fillText(fit(ctx, phase === 'problem' ? `Mic unavailable — ${problem ?? ''}` : TALK_TEXT[phase], w - 150), 116, h / 2);
   return [{ id: 'talk', x: 0, y: 0, w, h }];
+}
+
+export interface DraftState {
+  /** The session in front holds a draft. */
+  inFront: boolean;
+  /** The other sessions that hold one, by name. */
+  elsewhere: string[];
+  /** The name of the session in front. */
+  front: string | null;
+}
+export const DRAFT_SIZE = { w: 2464, h: 100 };
+
+/** A draft that waits: in which session, and the words that send it or clear it. */
+export function drawDraft(canvas: HTMLCanvasElement, d: DraftState): void {
+  const { w, h } = DRAFT_SIZE;
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d') as CanvasRenderingContext2D;
+  panel(ctx, w, h, { edge: d.inFront ? ACCENT : AMBER, edgeWidth: 5, radius: 26 });
+  ctx.textBaseline = 'middle';
+  const where = d.inFront ? d.front ?? 'the session in front' : d.elsewhere.join(', ');
+  ctx.fillStyle = PAPER; ctx.font = `600 38px ${SANS}`;
+  const title = d.inFront ? `Draft waiting in ${where}` : `Draft waiting in ${where}, not in front`;
+  ctx.fillText(fit(ctx, title, 1150), 44, h / 2);
+  ctx.fillStyle = d.inFront ? PAPER : DIM; ctx.font = `32px ${SANS}`; ctx.textAlign = 'right';
+  const how = d.inFront ? 'Say “go” to send it, “scratch that” to clear it. More words are added to it.' : 'Bring it forward, then say “go”.';
+  ctx.fillText(fit(ctx, how, w - 1250 - 44), w - 44, h / 2 + 2);
+  ctx.textAlign = 'left';
 }

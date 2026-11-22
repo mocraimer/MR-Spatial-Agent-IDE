@@ -22,7 +22,7 @@ export interface MirrorListener {
 }
 
 export class Mirror {
-  private current: Shelf = { herdr: { state: 'down', reason: 'Connecting to Herdr…' }, projects: [], sessions: [], focusedId: null, overviewId: null, starting: [], failed: [] };
+  private current: Shelf = { herdr: { state: 'down', reason: 'Connecting to Herdr…' }, projects: [], sessions: [], focusedId: null, overviewId: null, starting: [], failed: [], drafts: [] };
   private readonly texts = new Map<string, string>();
   private readonly listeners = new Set<MirrorListener>();
   private timer: NodeJS.Timeout | null = null;
@@ -91,6 +91,7 @@ export class Mirror {
         overviewId,
         starting: [],
         failed: [],
+        drafts: [],
       };
       if (JSON.stringify(next) !== JSON.stringify(this.current)) { this.current = next; this.emitShelf(); }
       const readAll = this.ticks % this.options.tileEvery === 0;

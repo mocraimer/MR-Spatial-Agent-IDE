@@ -11,7 +11,7 @@ import { arrange, columnFit, CHIP_ARC, FRONT_DISTANCE, FRONT_WIDTH, FRONT_Y, ARC
 import { BridgeLink } from './link.js';
 import { Mic, openMicrophone, type Captured, type OpenSource } from './mic.js';
 import {
-  CONTROLS_SIZE, LINE_PX, drawChip, drawControls, drawTalk, TALK_SIZE, type TalkPhase, drawFront, drawStrip, drawTile, EMPTY_FRONT, FRONT_SIZE, NO_SESSIONS, frontRows, lightOf, regionAt, resetFonts, terminalLines, tileRows, type ControlButton, type Region, type StripState,
+  CONTROLS_SIZE, LINE_PX, drawChip, drawControls, drawTalk, TALK_SIZE, type TalkPhase, drawDraft, DRAFT_SIZE, drawFront, drawStrip, drawTile, STRIP_SIZE, EMPTY_FRONT, FRONT_SIZE, NO_SESSIONS, frontRows, lightOf, regionAt, resetFonts, terminalLines, tileRows, type ControlButton, type DraftState, type Region, type StripState,
 } from './panels.js';
 import { onArc, Scene, type Hit, type Pointer, type Rect } from './scene.js';
 
@@ -25,6 +25,7 @@ const state = {
   hearing: 0,
   notice: null as { text: string; until: number } | null,
   confirm: null as PendingClose | null,
+  direct: false,
   speech: { ready: false, reason: 'Connecting to the PC…' } as SpeechState,
   scroll: 0,
   scale: 1,
@@ -87,6 +88,7 @@ function apply(event: BridgeEvent): void {
     case 'utterance': state.last = event.utterance; break;
     case 'notice': notice(event.text); break;
     case 'confirm': state.confirm = event.pending; break;
+    case 'direct': state.direct = event.on; break;
     case 'speech': state.speech = event.speech; break;
     case 'page': if (isPageAction(event.action)) runPage(event.action); break;
     default: return assertNever(event);
@@ -280,7 +282,7 @@ function staleness(): string | null {
 
 function projectLabel(shelf: Shelf, s: Session): string { return shelf.projects.find(p => p.id === s.workspaceId)?.label ?? ''; }
 
-const EMPTY_SHELF: Shelf = { herdr: { state: 'up' }, projects: [], sessions: [], focusedId: null, overviewId: null, starting: [], failed: [] };
+const EMPTY_SHELF: Shelf = { herdr: { state: 'up' }, projects: [], sessions: [], focusedId: null, overviewId: null, starting: [], failed: [], drafts: [] };
 
 /** A level agent that is not up yet says so on its window, with what to do. */
 function agentNote(shelf: Shelf, s: Session | null): string | null {
@@ -326,16 +328,32 @@ function renderNow(): void {
     pendingHeard: state.hearing > 0,
     notice: state.notice?.text ?? null,
     link: stale && link.state !== 'live' ? 'No link to the PC' : stale ? 'Herdr unavailable' : null,
+    direct: state.direct,
     confirm: state.confirm,
   };
   surface('strip', JSON.stringify(strip), stripWidth, onArc(0, FRONT_Y + frontHeight / 2 + 0.06, FRONT_DISTANCE), c => { regions.set('strip', drawStrip(c, strip)); });
   used.add('strip');
+
+  // A draft that waits says where, and the words that send or clear it, just above the strip.
+  const stripHeight = stripWidth * STRIP_SIZE.h / STRIP_SIZE.w;
+  const draft: DraftState | null = shelf.drafts.length === 0 ? null : {
+    inFront: front !== null && shelf.drafts.includes(front.id),
+    elsewhere: shelf.drafts.filter(id => id !== front?.id).map(id => shelf.sessions.find(s => s.id === id)?.name ?? id),
+    front: front?.name ?? null,
+  };
+  if (draft) {
+    const barHeight = stripWidth * DRAFT_SIZE.h / DRAFT_SIZE.w;
+    surface('draft', JSON.stringify(draft), stripWidth, onArc(0, FRONT_Y + frontHeight / 2 + 0.06 + stripHeight / 2 + 0.014 + barHeight / 2, FRONT_DISTANCE), c => drawDraft(c, draft));
+    used.add('draft');
+  }
 
   // Each inner list is a group: what belongs together sits together.
   const row = (groups: string[][], key: boolean): ControlButton[] => groups.flatMap(ids => ids.map((id, i) => ({ id, label: command(id).label, key, group: i === 0 })));
   const rows: ControlButton[][] = [
     row([['next', 'back'], ['scroll-up', 'scroll-down', 'bottom'], ['smaller', 'bigger', 'recenter'], ['overview'], ['exit']], false),
     row([['enter', 'escape', 'interrupt'], ['up', 'down', 'tab'], ['y', 'n'], ['one', 'two', 'three']], true),
+    // Words: send or clear the draft in front, and how spoken prompts are sent. The one in force is lit.
+    row([['send', 'scratch'], ['direct-on', 'direct-off']], false).map(b => ({ ...b, on: b.id === (state.direct ? 'direct-on' : 'direct-off') })),
   ];
   // Talk, wide and first under the front session: the way in to speaking.
   const phase: TalkPhase = mic.problem ?? (state.speech.ready ? null : state.speech.reason) ? 'problem'
@@ -445,6 +463,8 @@ window.viewState = () => {
     hearing: state.hearing,
     notice: state.notice?.text ?? null,
     confirm: state.confirm,
+    drafts: shelf?.drafts ?? [],
+    direct: state.direct,
     immersive: scene.immersive,
     surfaces: [...scene.surfaces.keys()],
   };

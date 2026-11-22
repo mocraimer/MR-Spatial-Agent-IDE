@@ -40,21 +40,21 @@ test('a close waits for the owner: no answer, a no, a second request, an unknown
 
     const first = s.bridge.requestClose('sh');
     assert.equal(await s.bridge.requestClose('a2'), 'busy', 'one close waits at a time');
-    assert.deepEqual(await s.bridge.act({ kind: 'confirm-close', answer: false }), { ok: true, outcome: 'Answered no: 3 sh (alpha) stays open.' });
+    assert.deepEqual(await s.bridge.act({ kind: 'answer', answer: false }), { ok: true, outcome: 'Answered no: 3 sh (alpha) stays open.' });
     assert.equal(await first, 'declined');
     assert.equal(await s.open('sh'), true);
 
     assert.equal(await s.bridge.requestClose('no such session'), 'unknown-session');
-    assert.equal((await s.bridge.act({ kind: 'confirm-close', answer: true })).ok, false, 'a yes with nothing waiting closes nothing');
+    assert.equal((await s.bridge.act({ kind: 'answer', answer: true })).ok, false, 'a yes with nothing waiting closes nothing');
 
     const vanishing = s.bridge.requestClose('a2');
     await s.bench.waitFor(async () => true, 'the request to be shown', 50);
     await s.bench.client.call('pane.close', { pane_id: s.bench.pane('a2') });
-    await s.bridge.act({ kind: 'confirm-close', answer: true });
+    await s.bridge.act({ kind: 'answer', answer: true });
     assert.equal(await vanishing, 'failed', 'a session that closed meanwhile is reported, not mistaken');
 
     const yes = s.bridge.requestClose('sh');
-    await s.bridge.act({ kind: 'confirm-close', answer: true });
+    await s.bridge.act({ kind: 'answer', answer: true });
     assert.equal(await yes, 'closed');
     assert.equal(await s.open('sh'), false);
   } finally { await s.stop(); }
@@ -86,13 +86,19 @@ test('an utterance sent twice is carried out once; "show" naming no session is a
     s.speech.queue.push('only once please');
     const [one, two] = await Promise.all([s.bridge.utterance('u1', audio, s.bench.pane('a1')), s.bridge.utterance('u1', audio, s.bench.pane('a1'))]);
     assert.deepEqual(one, two);
+    const typed = async () => plain(await s.bench.client.read(s.bench.pane('a1'), 60)).split('only once please').length - 1;
+    await s.bench.waitFor(async () => (await typed()) > 0, 'the words typed');
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.equal(await typed(), 1, 'typed once');
+    s.speech.queue.push('go');
+    assert.equal((await s.bridge.utterance('u1b', audio, s.bench.pane('a1'))).ok, true);
     await s.bench.waitFor(async () => plain(await s.bench.client.read(s.bench.pane('a1'), 40)).includes('received: only once please'), 'the prompt');
     await new Promise(resolve => setTimeout(resolve, 300));
     assert.equal(plain(await s.bench.client.read(s.bench.pane('a1'), 60)).split('received: only once please').length - 1, 1, 'delivered once');
 
     s.speech.queue.push('show me the failing test');
     const u = await s.bridge.utterance('u2', audio, s.bench.pane('a1'));
-    assert.deepEqual([u.as, u.ok, u.outcome], ['prompt', true, 'Sent to a1']);
+    assert.deepEqual([u.as, u.ok, u.outcome], ['prompt', true, 'Draft in a1. Say “go” to send it, or “scratch that” to clear it.']);
 
     await s.bench.type('a2', '/block');
     await s.bench.waitFor(async () => s.mirror.shelf().sessions.some(x => x.id === s.bench.pane('a2') && x.status === 'blocked'), 'a2 waiting');
@@ -157,7 +163,7 @@ test('a close names exactly one session: a shared name or a project label is ref
     const pending = bridge.requestClose(bench.pane('logs'));
     await bench.waitFor(async () => confirms.at(-1) !== null, 'the confirmation');
     assert.equal(confirms.at(-1), '2 logs (alpha)');
-    await bridge.act({ kind: 'confirm-close', answer: false });
+    await bridge.act({ kind: 'answer', answer: false });
     assert.equal(await pending, 'declined');
     assert.equal(mirror.shelf().sessions.length, 3, 'nothing closed');
   } finally { mirror.stop(); await bench.stop(); }

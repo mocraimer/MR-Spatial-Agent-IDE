@@ -67,6 +67,8 @@ test('a real project agent knows its project, acts only on order and within its 
     }, join(data, 'helper.sock')),
   }));
   await pair(page, r);
+  // This test is about what the agents do with an order, not about "go": prompts are sent as heard.
+  expect((await utter(page, 'send at once')).ok).toBe(true);
   // The tester waits on a marked question; the builder has worked on something marked.
   await r.bench.type('builder', 'refactor the ZEBRA-PARSER module');
   await r.bench.type('tester', '/block');

@@ -60,6 +60,9 @@ test('a spoken order to the helper starts, renames and closes sessions, closing 
   await pair(page, r);
   await page.evaluate(() => window.viewTest.fakeMic());
   await r.bench.client.call('pane.focus', { pane_id: r.bench.pane('a1') });
+  // This test is about what the helper does with an order, not about "go": orders are sent as heard.
+  await say(page, slug('send at once'));
+  await expect.poll(async () => (await viewState(page)).direct).toBe(true);
 
   // The helper is started the first time it is needed, as a session on the shelf.
   await say(page, slug('overview'));

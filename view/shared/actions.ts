@@ -18,7 +18,14 @@ export type BridgeAction =
   | { kind: 'next-waiting' }
   | { kind: 'back' }
   | { kind: 'key'; key: KeyName }
-  | { kind: 'confirm-close'; answer: boolean };
+  /** Sends the draft in front: presses Enter there. */
+  | { kind: 'send' }
+  /** Clears the draft in front without sending it. */
+  | { kind: 'scratch' }
+  /** Turns direct sending on or off: spoken prompts sent as soon as they are heard. */
+  | { kind: 'direct'; on: boolean }
+  /** Answers the one question that waits for the owner: a close, or a command heard while listening is off. */
+  | { kind: 'answer'; answer: boolean };
 
 export interface Command {
   id: string;
@@ -27,7 +34,9 @@ export interface Command {
   /** Whole utterances that perform it, lower case without punctuation (see bridge/heard.ts). */
   say: string[];
   run: { page: PageAction } | { bridge: BridgeAction };
-  /** Only offered while a close waits for the owner's answer. */
+  /** Only changes how the view is shown, so it runs at once even while listening is off. */
+  viewOnly?: true;
+  /** Only offered while a question waits for the owner's answer. */
   whenConfirming?: true;
 }
 
@@ -36,7 +45,7 @@ const key = (id: string, label: string, k: KeyName, say: string[]): Command => (
 export const COMMANDS: readonly Command[] = [
   { id: 'next', label: 'Next waiting', say: ['next waiting', 'next', 'whats waiting'], run: { bridge: { kind: 'next-waiting' } } },
   { id: 'back', label: 'Back', say: ['back', 'go back'], run: { bridge: { kind: 'back' } } },
-  key('enter', 'Enter', 'enter', ['press enter', 'enter', 'submit']),
+  key('enter', 'Enter', 'enter', ['press enter', 'enter']),
   key('escape', 'Esc', 'escape', ['press escape', 'escape']),
   key('interrupt', 'Ctrl-C', 'ctrl+c', ['interrupt', 'press control c', 'control c']),
   key('up', '↑', 'up', ['press up', 'arrow up']),
@@ -47,19 +56,23 @@ export const COMMANDS: readonly Command[] = [
   key('one', '1', '1', ['press one', 'press 1', 'option one', 'option 1']),
   key('two', '2', '2', ['press two', 'press 2', 'option two', 'option 2']),
   key('three', '3', '3', ['press three', 'press 3', 'option three', 'option 3']),
-  { id: 'scroll-up', label: 'Scroll up', say: ['scroll up', 'page up'], run: { page: 'scroll-up' } },
-  { id: 'scroll-down', label: 'Scroll down', say: ['scroll down', 'page down'], run: { page: 'scroll-down' } },
-  { id: 'bottom', label: 'Latest', say: ['scroll bottom', 'bottom', 'go bottom', 'scroll to bottom', 'latest'], run: { page: 'scroll-bottom' } },
-  { id: 'recenter', label: 'Recenter', say: ['recenter', 're center', 'center'], run: { page: 'recenter' } },
+  { id: 'send', label: 'Go', say: ['go', 'submit', 'send it'], run: { bridge: { kind: 'send' } } },
+  { id: 'scratch', label: 'Scratch that', say: ['scratch that', 'clear that'], run: { bridge: { kind: 'scratch' } } },
+  { id: 'direct-on', label: 'Send at once', say: ['send at once'], run: { bridge: { kind: 'direct', on: true } } },
+  { id: 'direct-off', label: 'Wait for go', say: ['wait for go', 'way for go'], run: { bridge: { kind: 'direct', on: false } } },
+  { id: 'scroll-up', label: 'Scroll up', say: ['scroll up', 'page up'], run: { page: 'scroll-up' }, viewOnly: true },
+  { id: 'scroll-down', label: 'Scroll down', say: ['scroll down', 'page down'], run: { page: 'scroll-down' }, viewOnly: true },
+  { id: 'bottom', label: 'Latest', say: ['scroll bottom', 'bottom', 'go bottom', 'scroll to bottom', 'latest'], run: { page: 'scroll-bottom' }, viewOnly: true },
+  { id: 'recenter', label: 'Recenter', say: ['recenter', 're center', 'center'], run: { page: 'recenter' }, viewOnly: true },
   { id: 'listening-off', label: 'Mic off', say: ['stop listening', 'mic off', 'microphone off'], run: { page: 'listening-off' } },
   { id: 'mode-hold', label: 'Hold to talk', say: ['hold to talk'], run: { page: 'mode-hold' } },
-  { id: 'mode-switch', label: 'Keep listening', say: ['keep listening', 'listening switch'], run: { page: 'mode-switch' } },
-  { id: 'bigger', label: 'A+', say: ['bigger text', 'larger text'], run: { page: 'text-bigger' } },
-  { id: 'smaller', label: 'A−', say: ['smaller text'], run: { page: 'text-smaller' } },
+  { id: 'mode-switch', label: 'Keep listening', say: ['keep listening', 'start listening', 'listening switch'], run: { page: 'mode-switch' } },
+  { id: 'bigger', label: 'A+', say: ['bigger text', 'larger text'], run: { page: 'text-bigger' }, viewOnly: true },
+  { id: 'smaller', label: 'A−', say: ['smaller text'], run: { page: 'text-smaller' }, viewOnly: true },
   { id: 'exit', label: 'Exit MR', say: ['leave mixed reality', 'exit mixed reality', 'exit'], run: { page: 'exit-mr' } },
   { id: 'overview', label: 'Overview', say: ['overview', 'show overview', 'go to overview', 'go to the overview', 'all projects', 'show helper', 'helper'], run: { bridge: { kind: 'overview' } } },
-  { id: 'confirm', label: 'Yes, close', say: ['yes', 'confirm', 'yes close it', 'close it'], run: { bridge: { kind: 'confirm-close', answer: true } }, whenConfirming: true },
-  { id: 'decline', label: 'No', say: ['no', 'cancel', 'dont close', 'keep it'], run: { bridge: { kind: 'confirm-close', answer: false } }, whenConfirming: true },
+  { id: 'confirm', label: 'Yes', say: ['yes', 'confirm', 'yes close it', 'close it'], run: { bridge: { kind: 'answer', answer: true } }, whenConfirming: true },
+  { id: 'decline', label: 'No', say: ['no', 'cancel', 'dont close', 'keep it'], run: { bridge: { kind: 'answer', answer: false } }, whenConfirming: true },
 ];
 
 export function command(id: string): Command {

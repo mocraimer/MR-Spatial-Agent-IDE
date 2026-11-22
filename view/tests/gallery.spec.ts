@@ -114,7 +114,7 @@ test('listening with an utterance shown', async ({ page }) => {
   speech.queue.push('Summarize the ledger change.');
   const { feed, wav } = await import('./fixture.js');
   await feed(page, [...new Array<number>(4800).fill(0), ...wav('summarize-the-ledger-change'), ...new Array<number>(16000).fill(0)]);
-  await expect.poll(async () => (await viewState(page)).last?.outcome).toBe('Sent to a1');
+  await expect.poll(async () => (await viewState(page)).last?.outcome).toMatch(/^Draft in a1/);
   await shot(page, '12-listening-utterance');
 });
 

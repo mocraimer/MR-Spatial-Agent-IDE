@@ -77,12 +77,12 @@ test('a close asked for and its answer, yes or no, are logged by session name', 
   try {
     await wait(r, 'the shelf', () => r.view.bridge.shelf().sessions.length === 2);
     const no = r.view.bridge.requestClose('sh');
-    await r.view.bridge.act({ kind: 'confirm-close', answer: false });
+    await r.view.bridge.act({ kind: 'answer', answer: false });
     assert.equal(await no, 'declined');
     bothHold(r, /close of 2 sh \(alpha\)/, /asked of the owner/);
     bothHold(r, /close of 2 sh \(alpha\).*the owner said no; it stays open/);
     const yes = r.view.bridge.requestClose('sh');
-    await r.view.bridge.act({ kind: 'confirm-close', answer: true });
+    await r.view.bridge.act({ kind: 'answer', answer: true });
     assert.equal(await yes, 'closed');
     bothHold(r, /closed 2 sh \(alpha\).*on the owner's yes/);
   } finally { await r.stop(); }

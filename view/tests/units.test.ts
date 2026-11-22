@@ -67,7 +67,7 @@ test('inside a project: its sessions beside the front, every other project a chi
     projects: ['w1', 'w2', 'w3', 'ov'].map(id => ({ id, label: id === 'ov' ? 'helper' : `project ${id}` })),
     sessions: [session('w3:p1', 'w3'), session('w1:p1', 'w1'), session('w1:p2', 'w1'), session('w2:p1', 'w2'), session('w2:p2', 'w2', 'project-agent'), session('w2:p3', 'w2'), session('ov:p1', 'ov', 'overview-agent')],
     focusedId: 'w2:p1',
-    overviewId: 'ov', starting: [], failed: [],
+    overviewId: 'ov', starting: [], failed: [], drafts: [],
   };
   const { front, place, columns, chips } = arrange(shelf, [{ session: session('w2:p9', 'w2'), projectId: 'w2', project: 'project w2' }, { session: session('w1:p9', 'w1'), projectId: 'w1', project: 'project w1' }]);
   assert.equal(front?.id, 'w2:p1');
@@ -88,7 +88,7 @@ test('chips and nodes stay within 90 degrees either side, at 7 projects and at 1
     const projects = Array.from({ length: count }, (_, i) => ({ id: `w${i}`, label: `a rather long project name number ${i}` }));
     const sessions = projects.map(p => ({ id: `${p.id}:p1`, workspaceId: p.id, role: 'task' as const, agent: 'claude', status: 'idle' as const, name: 'x' }));
     for (const focusedId of [null, 'w0:p1']) {
-      const { chips } = arrange({ herdr: { state: 'up' }, projects, sessions, focusedId, overviewId: null, starting: [], failed: [] });
+      const { chips } = arrange({ herdr: { state: 'up' }, projects, sessions, focusedId, overviewId: null, starting: [], failed: [], drafts: [] });
       const widest = Math.max(...chips.map(c => Math.abs(c.angle) + (c.width / 2) / CHIP_ARC * 180 / Math.PI));
       assert.ok(widest < 90, `${count} projects, ${focusedId ? 'inside one' : 'at the overview'}: the farthest chip edge is at ${widest.toFixed(1)} degrees`);
     }
@@ -110,7 +110,7 @@ test('a spoken session reference resolves by tile number, name or project', () =
       { id: 'w1:p1', workspaceId: 'w1', role: 'task', agent: 'claude', status: 'idle', name: 'ledger' },
       { id: 'w2:p1', workspaceId: 'w2', role: 'task', agent: null, status: 'unknown', name: 'logs' },
     ],
-    focusedId: null, overviewId: null, starting: [], failed: [],
+    focusedId: null, overviewId: null, starting: [], failed: [], drafts: [],
   };
   assert.equal(resolve(shelf, 1)?.id, 'w2:p1', 'numbers follow project order, not pane order');
   assert.equal(resolve(shelf, 'Ledger')?.id, 'w1:p1');

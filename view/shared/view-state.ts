@@ -28,6 +28,10 @@ export interface ViewState {
   hearing: number;
   notice: string | null;
   confirm: PendingClose | null;
+  /** Sessions that hold a draft, by id. */
+  drafts: string[];
+  /** Direct sending is on. */
+  direct: boolean;
   immersive: boolean;
   surfaces: string[];
 }
