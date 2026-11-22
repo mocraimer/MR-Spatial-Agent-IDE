@@ -100,7 +100,7 @@ function report(hits) {
   return 1;
 }
 
-const known = sha => { try { git('cat-file', '-e', `${sha}^{commit}`); return true; } catch { return false; } };
+const known = sha => { try { execFileSync('git', ['cat-file', '-e', `${sha}^{commit}`], { stdio: 'ignore' }); return true; } catch { return false; } };
 
 /**
  * One rev list per pushed ref: what the remote lacks. A new ref is measured against what the remote
@@ -109,7 +109,7 @@ const known = sha => { try { git('cat-file', '-e', `${sha}^{commit}`); return tr
  */
 function prePushRevs(remote, input) {
   let advertised = [];
-  try { advertised = git('ls-remote', '--refs', remote).split('\n').map(line => line.split('\t')[0]).filter(known); } catch { /* scan whole */ }
+  try { advertised = git('ls-remote', '--refs', remote).split('\n').map(line => line.split('\t')[0]).filter(sha => sha && known(sha)); } catch { /* scan whole */ }
   const revs = [];
   for (const line of lines(input).filter(Boolean)) {
     const [, local, , remoteSha] = line.split(' ');
