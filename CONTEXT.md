@@ -15,3 +15,5 @@ A personal Quest VR/MR workspace for directing real agents and reviewing their w
 - **Shelf:** the spatial view's arrangement of the owner's Herdr sessions: one session large in front (the receiver), every other session a small numbered tile with a state light, grouped by project to the left and right.
 - **Waiting:** a session Herdr reports as `blocked`, an agent asking a question or awaiting approval. "Next waiting" brings the next one to the front and "back" returns; the spatial view has no Inbox panel.
 - **Helper:** a small, fast agent that is itself a Herdr session; spoken orders starting with "helper" start, rename and close sessions. A close happens only after the owner's yes.
+- **Project agent:** a project's own agent, a real Herdr session in that project's workspace that knows of the project's other sessions. Inside a project it is the receiver while no task session is selected.
+- **Overview:** in the spatial view, the space above all projects: each project is one node with its lights, beside the sessions that belong to no project. Its agent is the helper.

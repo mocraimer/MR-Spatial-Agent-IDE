@@ -4,7 +4,7 @@ Why this project exists, for whom, and what winning means. This document informs
 
 ## Diagnosis
 The owner's work with several agent sessions already runs and causes no sharp pain. The project exists because doing that work inside a headset, with the sessions around the owner and arranged by project, could be a better experience than one session at a time on a monitor. In the way: nobody has worked in the headset yet, so it is unknown whether hours there are readable and comfortable. The sentence that changes everything if false: the owner prefers the headset view to the monitor for desk sessions.
-— hypothesis: the owner's own answers on 2026-11-21 ("No sharp pain", "the experience would be better"); no session inside the workspace has happened. What would settle it: the owner's repeated choice of the headset for real desk sessions. 2026-11-21.
+— hypothesis: the owner's own answers on 2026-11-21 ("No sharp pain", "the experience would be better"). First look inside with real sessions on 2026-11-22: "everything is working great"; no long work session yet. What would settle it: the owner's repeated choice of the headset for real desk sessions. 2026-11-22.
 
 ## What this rests on
 — empty: no long-term assumption tested. What would fill it: real headset/workflow evidence. 2026-10-02.
