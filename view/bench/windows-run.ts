@@ -140,10 +140,16 @@ try {
   browserHwnd = titles.find(([, t]) => t.includes('Spatial run page') || t.includes(`localhost:${pagePort}`))?.[0] ?? null;
 
   // ── B.9: window fitting ──────────────────────────────────────────────────────────────────────
-  // Open an isolated Windows Terminal window that runs a bench Herdr TUI. The bridge's window
-  // helper must find it, narrow it on entering mixed reality, and restore it on leaving.
-  // The title includes the workspace label "fit-run" so find_terminal_window matches it.
-  const FIT_LABEL = 'fit-run';
+  // Opens a Windows Terminal window running the bench Herdr's TUI (not cmd.exe), verifies the
+  // helper finds it by its workspace label, drives the REAL bridge's MR logic, and checks all
+  // the fit scenarios: full-width → fit, layout change → re-fit, focus switch → re-fit,
+  // leave → restore, maximized → back to maximized, hand-move → stays. A second window whose
+  // title does not match must never change rect. Only the windows this run opened are closed.
+  //
+  // The bench Herdr uses an isolated HOME, so its socket and state are separate from the owner's.
+  // The WT window title is "<host>: <workspace-label>" (set by herdr); the unique label avoids
+  // collisions with the owner's windows. WSL_DISTRO_NAME is never hardcoded.
+  const FIT_LABEL = `fit-${Date.now() % 100000}`;
   const benchFit = await HerdrBench.start([
     { label: FIT_LABEL, panes: [{ name: 'fit-a', kind: 'agent' }, { name: 'fit-b', kind: 'shell' }] },
   ]);
@@ -154,78 +160,208 @@ try {
     agents: benchAgents(benchFit, dataFit),
     log: l => logs.push(`fit: ${l}`), showPairingCode: () => undefined,
   });
+  let fitHwnd: number | null = null;
+  let otherHwnd: number | null = null;
   try {
-    // Open a new Windows Terminal window (wt -w new) running cmd /k echo, so its title has
-    // ": fit-run". On real run this would attach to the Herdr TUI; for the bench test we just
-    // need a WT window the helper can find. We set a custom title via wt's --title flag.
-    // The window title format WT uses is "<profile>: <tab-title>", but for findWindow we match
-    // the suffix ": fit-run", so we set the initial tab title to match.
-    // wt.exe is in C:\Windows\System32\WindowsApps or on PATH in cmd.
-    const wtProc = spawn('/mnt/c/Windows/System32/cmd.exe', ['/c', `start wt.exe -w new --title "fit-run" cmd.exe /k "title fit-run"`], { cwd: '/mnt/c', stdio: 'ignore', detached: true });
-    wtProc.unref();
-    // Wait for the WT window to appear.
-    let fitHwnd: number | null = null;
-    const wtDeadline = Date.now() + 20_000;
-    while (Date.now() < wtDeadline) {
-      await sleep(500);
-      const listResult = JSON.parse(execFileSync(py, ['-3.12', '-c',
-        `import json,win32gui;r=[];win32gui.EnumWindows(lambda h,_: r.append([h,win32gui.GetWindowText(h)]),None);print(json.dumps(r))`
-      ], { cwd: '/mnt/c', encoding: 'utf8' })) as [number, string][];
-      const match = listResult.find(([, t]) => t.endsWith(': fit-run') || t === 'fit-run');
-      if (match) { fitHwnd = match[0]; break; }
-    }
-    check('fit: wt window found', fitHwnd !== null, { fitHwnd });
-    if (!fitHwnd) throw new Error('fit: WT window not found within 20 s');
+    const benchHome = join(benchFit.directory, 'home');
+    const distro = process.env.WSL_DISTRO_NAME;
+    if (!distro) throw new Error('fit: WSL_DISTRO_NAME is not set; cannot start herdr in WT');
 
-    // The window should start full-width (≥180 cols is assumed for a typical monitor).
-    // Read the initial rect via the Python helper.
-    const fitHelperScript = winPath(join(REPO, 'view', 'windows', 'window_helper.py'));
+    // Enumerate all visible windows (hwnd, title).
+    const listWindows = () => JSON.parse(execFileSync(py, ['-3.12', '-c',
+      `import json,win32gui;r=[];win32gui.EnumWindows(lambda h,_: r.append([h,win32gui.GetWindowText(h)]),None);print(json.dumps(r))`
+    ], { cwd: '/mnt/c', encoding: 'utf8' })) as [number, string][];
+
+    // Window rect helpers.
     const getRect = (hwnd: number) => JSON.parse(execFileSync(py, ['-3.12', '-c',
       `import json,ctypes,ctypes.wintypes as wt;r=wt.RECT();ctypes.windll.user32.GetWindowRect(${hwnd},ctypes.byref(r));print(json.dumps({'l':r.left,'t':r.top,'r':r.right,'b':r.bottom}))`,
     ], { cwd: '/mnt/c', encoding: 'utf8' })) as { l: number; t: number; r: number; b: number };
-    const setRect = (hwnd: number, l: number, t: number, r: number, b: number) => execFileSync(py, ['-3.12', '-c',
+    const setWinRect = (hwnd: number, l: number, t: number, r: number, b: number) => execFileSync(py, ['-3.12', '-c',
       `import ctypes;ctypes.windll.user32.MoveWindow(${hwnd},${l},${t},${r-l},${b-t},True)`
     ], { cwd: '/mnt/c' });
+    const isMaximized = (hwnd: number) => Boolean(JSON.parse(execFileSync(py, ['-3.12', '-c',
+      `import ctypes,json;print(json.dumps(ctypes.windll.user32.IsZoomed(${hwnd})))`
+    ], { cwd: '/mnt/c', encoding: 'utf8' })));
 
-    // Measure initial rect.
+    // Bench pane.layout helper: returns column count for a pane.
+    const getPaneCols = async (paneId: string) => {
+      const layout = await benchFit.client.call('pane.layout', { pane_id: paneId });
+      const panes = (layout.layout as { panes?: { pane_id?: unknown; rect?: { width?: number } }[] } | undefined)?.panes ?? [];
+      const rect = panes.find(p => p.pane_id === paneId)?.rect;
+      return typeof rect?.width === 'number' ? rect.width : null;
+    };
+
+    // Open a second WT window whose title does NOT match the workspace label; its rect must
+    // never change. Use a unique title so we can find it.
+    const otherLabel = `fit-other-${Date.now() % 100000}`;
+    const wtOther = spawn('/mnt/c/Windows/System32/cmd.exe', ['/c',
+      `start wt.exe -w new cmd.exe /k "title ${otherLabel}"`
+    ], { cwd: '/mnt/c', stdio: 'ignore', detached: true });
+    wtOther.unref();
+
+    // Open the main WT window running the bench Herdr TUI with isolated HOME.
+    // herdr connects to the already-running server and sets the title to "<host>: <label>".
+    const wtFit = spawn('/mnt/c/Windows/System32/cmd.exe', ['/c',
+      `start wt.exe -w new wsl.exe -d ${distro} -- env HOME=${benchHome} herdr`
+    ], { cwd: '/mnt/c', stdio: 'ignore', detached: true });
+    wtFit.unref();
+
+    // Wait for the WT window with title ending ": <FIT_LABEL>".
+    // This confirms herdr TUI connected and set the workspace title.
+    const expectedSuffix = `: ${FIT_LABEL}`;
+    const wtDeadline = Date.now() + 20_000;
+    while (Date.now() < wtDeadline) {
+      await sleep(500);
+      const wins = listWindows();
+      if (fitHwnd === null) {
+        const m = wins.find(([, t]) => t.endsWith(expectedSuffix));
+        if (m) fitHwnd = m[0];
+      }
+      if (otherHwnd === null) {
+        const m = wins.find(([, t]) => t === otherLabel || t.endsWith(`: ${otherLabel}`));
+        if (m) otherHwnd = m[0];
+      }
+      if (fitHwnd !== null) break; // main window found; enough to proceed
+    }
+    check('fit: WT window found with ": <label>" suffix', fitHwnd !== null, { label: FIT_LABEL, fitHwnd });
+    if (!fitHwnd) throw new Error('fit: WT window not found within 20 s');
+
+    // Record the other window's rect before any fit to verify it never changes.
+    const otherR0 = otherHwnd ? getRect(otherHwnd) : null;
+
+    // Record the initial rect of the fit window (before any MR fit).
     const r0 = getRect(fitHwnd);
-    const initWidth = r0.r - r0.l;
-    check('fit: initial width ≥180 col-widths', initWidth >= 180 * 7, { initWidthPx: initWidth });
+    report['fit-initial-rect'] = r0;
 
-    // Split the window to ~85%: set width to 85% of initial, so the right 15% is gone.
-    const narrowed85pct = Math.round(initWidth * 0.85);
-    setRect(fitHwnd, r0.l, r0.t, r0.l + narrowed85pct, r0.b);
-    await sleep(400);
-    const r85 = getRect(fitHwnd);
-    check('fit: 85% width set', Math.abs((r85.r - r85.l) - narrowed85pct) < 20, { actual: r85.r - r85.l, target: narrowed85pct });
+    // Wait for herdr TUI to sync terminal dimensions with the server.
+    await sleep(1500);
 
-    // The bridge should narrow it to ≤120 cols × charPx when in MR. We use setMixedReality
-    // to simulate the page entering MR. The bridge's window helper must find it.
-    // For this check we confirm the helper finds the window for the fit-run workspace.
-    const helperFindResult = execFileSync(py, ['-3.12', fitHelperScript, '--op=find', `--label=${FIT_LABEL}`], { cwd: '/mnt/c', encoding: 'utf8' }).trim();
-    check('fit: helper finds window for label', helperFindResult.includes(String(fitHwnd)) || helperFindResult.length > 2, { result: helperFindResult.slice(0, 200) });
-
-    // Restore normal.
-    setRect(fitHwnd, r0.l, r0.t, r0.r, r0.b);
+    const fitFrontPaneId = benchFit.pane('fit-a');
+    const fitBackPaneId = benchFit.pane('fit-b');
+    await benchFit.client.call('pane.focus', { pane_id: fitFrontPaneId });
     await sleep(300);
-    const rRestored = getRect(fitHwnd);
-    check('fit: restore normal', Math.abs((rRestored.r - rRestored.l) - initWidth) < 20, { restoredWidth: rRestored.r - rRestored.l, original: initWidth });
 
-    // Hand-resize: move the window so the bridge should NOT overwrite it on restore.
-    setRect(fitHwnd, r0.l + 50, r0.t, r0.r + 50, r0.b);
-    await sleep(300);
-    const rHandResized = getRect(fitHwnd);
-    check('fit: hand-resize offset', rHandResized.l !== r0.l, { left: rHandResized.l, original: r0.l });
+    const cols0 = await getPaneCols(fitFrontPaneId);
+    report['fit-cols-initial'] = cols0;
 
-    // Restore the WT window to its original position for clean shutdown.
-    setRect(fitHwnd, r0.l, r0.t, r0.r, r0.b);
-    report['fit-wt-hwnd'] = fitHwnd;
-    report['fit-initial-width-px'] = initWidth;
+    // If the WT window started at ≤120 cols, widen it so the initial fit has something to do.
+    if ((cols0 ?? 0) <= 120) {
+      setWinRect(fitHwnd, r0.l, r0.t, r0.l + (r0.r - r0.l) * 2, r0.b);
+      await sleep(1200); // give herdr time to report the new width
+    }
+    const colsBeforeFit = await getPaneCols(fitFrontPaneId);
+    report['fit-cols-before-fit'] = colsBeforeFit;
 
-    // Close the WT window.
-    execFileSync(py, ['-3.12', '-c', `import win32gui,win32con;win32gui.PostMessage(${fitHwnd},win32con.WM_CLOSE,0,0)`], { cwd: '/mnt/c' });
+    // Connect a page to the view to get a pageId for setMixedReality.
+    let fitPageId: string | null = null;
+    const fitDisconnect = viewFit.bridge.connect((event: BridgeEvent) => {
+      if (event.type === 'instance') fitPageId = event.pageId;
+    });
+    await sleep(200);
+    if (!fitPageId) throw new Error('fit: no instance event from bridge');
+
+    // ── Scenario 1: full-width → fit → 116-120 cols within 3 s ─────────────────────────────
+    const t1 = Date.now();
+    viewFit.bridge.setMixedReality(fitPageId, true);
+    let colsAfterFit: number | null = null;
+    const fitEnd = Date.now() + 3000;
+    while (Date.now() < fitEnd) {
+      await sleep(200);
+      colsAfterFit = await getPaneCols(fitFrontPaneId);
+      if (colsAfterFit !== null && colsAfterFit >= 116 && colsAfterFit <= 120) break;
+    }
+    const rAfterFit = getRect(fitHwnd);
+    report['fit-cols-after-fit'] = colsAfterFit;
+    report['fit-rect-after-fit'] = rAfterFit;
+    report['fit-ms'] = Date.now() - t1;
+    check('fit: cols 116-120 after MR enter', colsAfterFit !== null && colsAfterFit >= 116 && colsAfterFit <= 120, { colsAfterFit, ms: Date.now() - t1 });
+
+    // ── Scenario 2: layout change → layout poll re-fits (Fix 4) ─────────────────────────────
+    // Widen the WT window so the front pane grows above 120 cols.
+    const rBeforeWiden = getRect(fitHwnd);
+    setWinRect(fitHwnd, r0.l, r0.t, r0.l + (rBeforeWiden.r - rBeforeWiden.l) * 2, rBeforeWiden.b);
+    await sleep(1200);
+    const colsAfterWiden = await getPaneCols(fitFrontPaneId);
+    report['fit-cols-after-widen'] = colsAfterWiden;
+    // The layout poll (every 2 s) detects > FRONT_COLS and re-fits.
+    let colsAfterRefit: number | null = null;
+    const refitEnd = Date.now() + 4000;
+    while (Date.now() < refitEnd) {
+      await sleep(200);
+      colsAfterRefit = await getPaneCols(fitFrontPaneId);
+      if (colsAfterRefit !== null && colsAfterRefit >= 116 && colsAfterRefit <= 120) break;
+    }
+    report['fit-cols-after-refit'] = colsAfterRefit;
+    check('fit: layout poll re-fits when pane grows above 120', colsAfterRefit !== null && colsAfterRefit >= 116 && colsAfterRefit <= 120, { colsAfterRefit, colsAfterWiden });
+
+    // ── Scenario 3: focus switch → re-fit ────────────────────────────────────────────────────
+    await benchFit.client.call('pane.focus', { pane_id: fitBackPaneId });
+    await sleep(1500);
+    const colsBack = await getPaneCols(fitBackPaneId);
+    report['fit-cols-after-focus-switch'] = colsBack;
+    check('fit: re-fit after focus switch', colsBack !== null && colsBack >= 116 && colsBack <= 120, { colsBack });
+    await benchFit.client.call('pane.focus', { pane_id: fitFrontPaneId });
     await sleep(1000);
+
+    // ── Scenario 4: explicit leave → rect restored promptly ──────────────────────────────────
+    viewFit.bridge.setMixedReality(fitPageId, false);
+    await sleep(600);
+    const rAfterLeave = getRect(fitHwnd);
+    report['fit-rect-after-leave'] = rAfterLeave;
+    // Rect should be close to the pre-fit original (within ±30 px; WT may snap to grid).
+    check('fit: rect restored on explicit leave', Math.abs(rAfterLeave.l - r0.l) < 30 && Math.abs((rAfterLeave.r - rAfterLeave.l) - (r0.r - r0.l)) < 30, { r0, rAfterLeave });
+
+    // ── Scenario 5: maximized window → fit → leave → back to maximized ───────────────────────
+    setWinRect(fitHwnd, r0.l, r0.t, r0.r, r0.b);
+    await sleep(300);
+    execFileSync(py, ['-3.12', '-c', `import ctypes;ctypes.windll.user32.ShowWindow(${fitHwnd},3)`], { cwd: '/mnt/c' }); // SW_MAXIMIZE
+    await sleep(600);
+    const maxBefore = isMaximized(fitHwnd);
+    report['fit-maximized-before'] = maxBefore;
+    viewFit.bridge.setMixedReality(fitPageId, true);
+    await sleep(2000);
+    viewFit.bridge.setMixedReality(fitPageId, false);
+    await sleep(600);
+    const maxAfter = isMaximized(fitHwnd);
+    report['fit-maximized-after'] = maxAfter;
+    check('fit: maximized window restored to maximized after leave', maxAfter, { maxBefore, maxAfter });
+
+    // ── Scenario 6: hand-move between fit and leave → stays where moved ──────────────────────
+    execFileSync(py, ['-3.12', '-c', `import ctypes;ctypes.windll.user32.ShowWindow(${fitHwnd},9)`], { cwd: '/mnt/c' }); // SW_RESTORE
+    setWinRect(fitHwnd, r0.l, r0.t, r0.r, r0.b);
+    await sleep(400);
+    viewFit.bridge.setMixedReality(fitPageId, true);
+    await sleep(2000);
+    // "Hand-move": shift the window 100 px to the right after fit.
+    const rFit2 = getRect(fitHwnd);
+    const movedL = rFit2.l + 100;
+    setWinRect(fitHwnd, movedL, rFit2.t, movedL + (rFit2.r - rFit2.l), rFit2.b);
+    await sleep(400);
+    viewFit.bridge.setMixedReality(fitPageId, false);
+    await sleep(600);
+    const rAfterHandMove = getRect(fitHwnd);
+    report['fit-rect-after-hand-move'] = rAfterHandMove;
+    check('fit: hand-moved window stays where moved on leave', Math.abs(rAfterHandMove.l - movedL) < 20, { movedL, actual: rAfterHandMove.l });
+
+    // ── Second window: rect never changed ────────────────────────────────────────────────────
+    if (otherHwnd && otherR0) {
+      const otherRAfter = getRect(otherHwnd);
+      check('fit: second window (non-matching title) rect unchanged', otherRAfter.l === otherR0.l && otherRAfter.r === otherR0.r, { otherR0, otherRAfter });
+    }
+
+    // Disconnect the page connection.
+    fitDisconnect();
+
+    report['fit-wt-hwnd'] = fitHwnd;
+    report['fit-label'] = FIT_LABEL;
   } finally {
+    // Close only the windows this run opened.
+    for (const hwnd of [fitHwnd, otherHwnd]) {
+      if (hwnd) {
+        try { execFileSync(py, ['-3.12', '-c', `import win32gui,win32con;win32gui.PostMessage(${hwnd},win32con.WM_CLOSE,0,0)`], { cwd: '/mnt/c' }); } catch { /* already closed */ }
+      }
+    }
+    await sleep(800);
     await viewFit.stop();
     await benchFit.stop();
     rmSync(dataFit, { recursive: true, force: true });
