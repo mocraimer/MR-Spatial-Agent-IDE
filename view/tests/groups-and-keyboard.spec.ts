@@ -2,7 +2,7 @@
  * Tests for Deliverable 4 (two movable groups) and Deliverable 5 (typing from the headset).
  */
 import { expect, test } from '@playwright/test';
-import { emulateQuest, enterMixedReality, pair, rig, viewState, type Rig } from './fixture.js';
+import { aim, emulateQuest, enterMixedReality, pair, rig, setPressed, viewState, type Rig } from './fixture.js';
 
 test.use({ ignoreHTTPSErrors: true, viewport: { width: 1600, height: 1000 } });
 
@@ -84,6 +84,54 @@ test('AC-4.1: recenter resets group positions to zero (localStorage reflects [0,
   // Both entries must have at least 2 elements (the [az, dy] pair).
   expect(Array.isArray(d[0]) && d[0].length >= 2).toBe(true);
   expect(Array.isArray(d[1]) && d[1].length >= 2).toBe(true);
+});
+
+test('AC-4.1: controller drag of bar:screens moves the screens group; controls group stays put', async ({ page }) => {
+  test.setTimeout(90_000);
+  r = await rig([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' as const }] }]);
+  await emulateQuest(page);
+  await pair(page, r);
+  await enterMixedReality(page);
+  await expect.poll(async () => (await viewState(page)).surfaces).toContain('bar:screens');
+  await expect.poll(async () => (await viewState(page)).surfaces).toContain('bar:controls');
+
+  // Record world positions of the front panel (screens) and talk panel (controls) before drag.
+  const frontBefore = await page.evaluate(() => window.viewTest.worldPoint('front', 0.5, 0.5));
+  const talkBefore = await page.evaluate(() => window.viewTest.worldPoint('talk', 0.5, 0.5));
+  expect(frontBefore).not.toBeNull();
+  expect(talkBefore).not.toBeNull();
+
+  // Grab the screens bar center, then aim at a point well to the right on the same bar.
+  await aim(page, 'controller', 'bar:screens', 0.5, 0.5);
+  await setPressed(page, 'controller', 1);
+  await page.waitForTimeout(100);
+
+  // Move to x=0.9 on the bar to drag it rightward.  The cylindrical projection converts
+  // this ray change into an azimuth delta, rotating the screens group.
+  await aim(page, 'controller', 'bar:screens', 0.9, 0.5);
+  await page.waitForTimeout(200);
+  await setPressed(page, 'controller', 0);
+  await page.waitForTimeout(150);
+
+  // The screens group moved: the front panel should be at a different world position.
+  const frontAfter = await page.evaluate(() => window.viewTest.worldPoint('front', 0.5, 0.5)) as [number, number, number] | null;
+  expect(frontAfter).not.toBeNull();
+  const fb = frontBefore as [number, number, number], fa = frontAfter as [number, number, number];
+  const dist = Math.hypot(fa[0] - fb[0], fa[2] - fb[2]);
+  expect(dist, 'screens group moved after bar drag').toBeGreaterThan(0.01);
+
+  // The controls group must not have moved.
+  const talkAfter = await page.evaluate(() => window.viewTest.worldPoint('talk', 0.5, 0.5)) as [number, number, number] | null;
+  const tb = talkBefore as [number, number, number], ta = talkAfter as [number, number, number];
+  const talkDist = Math.hypot(ta[0] - tb[0], ta[2] - tb[2]);
+  expect(talkDist, 'controls group did not move').toBeLessThan(0.01);
+
+  // The localStorage offset is non-zero in azimuth.
+  const stored = await page.evaluate(() => localStorage.getItem('spatial-view-group-offsets'));
+  expect(stored).not.toBeNull();
+  const d = JSON.parse(stored as string) as [[number, number], [number, number]];
+  expect(Math.abs(d[0][0]), 'screensAz is non-zero after drag').toBeGreaterThan(0.01);
+  expect(Math.abs(d[1][0]), 'controlsAz unchanged').toBeLessThan(0.001);
 });
 
 // ---- Deliverable 5: typing from the headset -----------------------------------------------------------
