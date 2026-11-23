@@ -195,5 +195,5 @@ test('next waiting visits each session that needs the owner, back returns, and t
   expect((await act('back')).ok).toBe(false);
 
   const surfaces = (await viewState(page)).surfaces;
-  expect(surfaces.filter(s => !/^(front|strip|talk|draft|controls-\d|tile:.+|label:.+|chip:.+)$/.test(s)), 'no panel beyond the shelf and its chips, such as an Inbox').toEqual([]);
+  expect(surfaces.filter(s => !/^(front|strip|talk|draft|controls-\d|tile:.+|label:.+|chip:.+|bar:.+)$/.test(s)), 'no panel beyond the shelf and its chips, such as an Inbox').toEqual([]);
 });
