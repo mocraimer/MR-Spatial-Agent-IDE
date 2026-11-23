@@ -96,6 +96,14 @@ export function startServer(options: ServerOptions): Promise<Server> {
       res.writeHead(200, { 'Content-Type': 'audio/wav', 'Cache-Control': 'no-store', 'Content-Length': wav.length });
       return void res.end(wav);
     }
+    if (req.method === 'POST' && path === '/api/log') {
+      const body = await json(req, 512);
+      if (typeof body.line === 'string') {
+        log(`[page] ${body.line.replace(/[\r\n]+/g, ' ').slice(0, 200)}`);
+        return send(res, 200, { ok: true });
+      }
+      return send(res, 400, { error: 'Need a "line" string.' });
+    }
     if (req.method === 'POST' && path === '/api/action') {
       const body = await json(req, 4096);
       if (typeof body.focus === 'string') return send(res, 200, await bridge.act({ kind: 'focus', sessionId: body.focus }));

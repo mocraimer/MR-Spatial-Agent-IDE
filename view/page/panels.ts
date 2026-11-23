@@ -522,18 +522,22 @@ export function drawStrip(canvas: HTMLCanvasElement, st: StripState): Region[] {
     ctx.fillText(st.mic.standby ? 'Commands only: each asks “yes”' : st.mic.mode === 'hold' ? 'Hold to talk' : 'Keep listening until “stop listening”', tx, 98);
   }
 
-  // The standing chips, drawn from the right edge first: what is heard gets the room that is left.
+  // The standing chips, drawn from the right edge first; what is heard gets what remains.
+  // With 3+ chips use compact labels so the heard text always keeps at least MIN_SAY_W pixels.
+  const MIN_SAY_W = 350;
+  const chipCount = (st.link ? 1 : 0) + (st.direct ? 1 : 0) + (st.voiceProblem ? 1 : 0) + ((st.voiceOff || st.reading) ? 1 : 0);
+  const compact = chipCount >= 3;
   let right = w - 40;
   if (st.link) right -= chip(ctx, st.link, right, h / 2, 28, AMBER, 'right') + 16;
   // Direct sending is a standing exception to "say go": it shows whenever it is on.
-  if (st.direct) right -= chip(ctx, 'Sending at once', right, h / 2, 32, AMBER, 'right') + 16;
+  if (st.direct) right -= chip(ctx, compact ? 'Direct' : 'Sending at once', right, h / 2, 32, AMBER, 'right') + 16;
   // The voice is a standing setting too: off, or reading each reply, it shows whenever it holds; a voice that failed shows until it works again.
-  if (st.voiceProblem) right -= chip(ctx, 'Voice problem', right, h / 2, 32, AMBER, 'right') + 16;
+  if (st.voiceProblem) right -= chip(ctx, compact ? 'Voice!' : 'Voice problem', right, h / 2, 32, AMBER, 'right') + 16;
   if (st.voiceOff) right -= chip(ctx, 'Voice off', right, h / 2, 32, AMBER, 'right') + 16;
-  else if (st.reading) right -= chip(ctx, 'Reading replies', right, h / 2, 32, ACCENT, 'right') + 16;
-  // The speech area gets what is left of the right half after the chips; it may collapse to nothing.
-  const sayX = 1250, sayW = Math.max(0, right - sayX);
-  if (sayW > 0) {
+  else if (st.reading) right -= chip(ctx, compact ? 'Reading' : 'Reading replies', right, h / 2, 32, ACCENT, 'right') + 16;
+  // The speech area always keeps at least MIN_SAY_W pixels so heard text is readable.
+  const sayX = 1250, sayW = Math.max(MIN_SAY_W, right - sayX);
+  {
     ctx.font = `600 34px ${SANS}`; ctx.fillStyle = st.last || st.pendingHeard ? PAPER : DIM;
     const said = st.pendingHeard ? 'Hearing…' : st.last ? `”${st.last.heard || '…'}”` : 'Nothing said yet';
     ctx.fillText(fit(ctx, said, sayW), sayX, 48);
