@@ -197,7 +197,7 @@ export class Bridge {
           if (seat.state === 'ready') { await this.order(seat.paneId, taken.order); return { as: 'helper', ok: true, outcome: this.settings.direct ? 'Sent to the helper' : HELPER_DRAFT }; }
           // The helper is starting: the order waits for it beside this queue, so speech goes on.
           void this.agents.ready(seat.paneId)
-            .then(() => this.order(seat.paneId, taken.order))
+            .then(() => this.inOrder(() => this.order(seat.paneId, taken.order)))
             .then(
               () => this.broadcast({ type: 'notice', text: this.settings.direct ? `The helper is ready and got your order: "${taken.order}"` : `The helper is ready. Your order waits as a draft: ${HELPER_DRAFT_HOW}` }),
               (error: unknown) => this.broadcast({ type: 'notice', text: `The helper did not get "${taken.order}": ${error instanceof RefusedError ? error.message : this.problem('an order to the helper', error)}` }),
@@ -372,15 +372,25 @@ export class Bridge {
     } catch (error) { return { ok: false, outcome: this.problem(`the ${run.kind === 'key' ? `${run.key} key` : run.kind === 'send' ? '"go"' : '"scratch that"'}`, error) }; }
   }
 
+  /** Runs `step` after the utterances already queued, so a held order never interleaves with one being carried out. */
+  private inOrder<T>(step: () => Promise<T>): Promise<T> {
+    const done = this.queue.then(step);
+    this.queue = done.catch(() => undefined);
+    return done;
+  }
+
   /** Types spoken words into a session's input after any draft already there, without sending. */
   private async typeInto(id: string, text: string): Promise<void> {
     const typed = typeable(text);
     if (!typed) throw new RefusedError('There was nothing to type.');
     // Typed into an agent that waits on a question, words would be keys answering it.
     if (this.shelf().sessions.find(s => s.id === id)?.status === 'blocked') throw new RefusedError(`it is waiting on a question: answer it with a key first.`);
-    await this.herdr.call('pane.send_text', { pane_id: id, text: this.drafts.has(id) ? ` ${typed}` : typed });
+    // Marked before the call: a second utterance meeting this one sees the draft and adds a space, and
+    // a call whose answer is lost may still have typed the words, so they stay a draft to send or clear.
+    const piece = this.drafts.has(id) ? ` ${typed}` : typed;
     this.drafts.mark(id);
     this.broadcast({ type: 'shelf', shelf: this.shelf() });
+    await this.herdr.call('pane.send_text', { pane_id: id, text: piece });
   }
 
   /** An order for the helper: typed into its input to wait for "go", or sent at once when direct sending is on. */
@@ -404,9 +414,9 @@ export class Bridge {
   /** "scratch that": empties the session's input with Ctrl-U, sending nothing. */
   private async scratchDraft(shelf: Shelf, target: string | null): Promise<{ ok: boolean; outcome: string }> {
     if (!target || !this.drafts.has(target)) return { ok: false, outcome: 'No draft waits in the session in front. Nothing was cleared.' };
-    await this.herdr.call('pane.send_keys', { pane_id: target, keys: ['ctrl+u'] });
+    // Taken before the key goes, as for "go"; put back if the call fails, so the owner can say it again.
     this.drafts.clear(target);
-    this.broadcast({ type: 'shelf', shelf: this.shelf() });
+    try { await this.herdr.call('pane.send_keys', { pane_id: target, keys: ['ctrl+u'] }); } catch (error) { this.drafts.mark(target); throw error; } finally { this.broadcast({ type: 'shelf', shelf: this.shelf() }); }
     return { ok: true, outcome: `Cleared the draft in ${name(shelf, target)}` };
   }
 

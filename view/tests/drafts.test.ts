@@ -211,3 +211,19 @@ test('words never press a key: control characters are not typed, a waiting agent
     assert.deepEqual(await s.received(), []);
   } finally { await s.stop(); }
 });
+
+test('two prompts at the same moment are both typed, with a space between; a "scratch that" that fails leaves the draft to be cleared again', async () => {
+  const s = await setup(LAYOUT);
+  try {
+    const a1 = s.bench.pane('a1');
+    await front(s, 'a1');
+    await s.bench.waitFor(async () => s.mirror.shelf().focusedId === a1, 'a1 in front');
+    await Promise.all([s.bridge.act({ kind: 'direct', on: false }), s.say('alpha words'), s.say('beta words')]);
+    await shows(s, a1, 'alpha words');
+    await s.bench.waitFor(async () => /(alpha words beta words|beta words alpha words)/.test(await s.text(a1)), 'both typed with a space between');
+    await s.bench.stopServer();
+    const failed = await s.bridge.act({ kind: 'scratch' });
+    assert.equal(failed.ok, false);
+    assert.deepEqual(drafts(s), [a1], 'the clear did not happen, so the draft is still there to clear');
+  } finally { await s.stop(); }
+});

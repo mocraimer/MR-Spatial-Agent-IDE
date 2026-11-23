@@ -79,6 +79,8 @@ export class Mic {
     this.holding = true;
     this.talking = true;
     this.recording = { receiver: this.receiverNow(), chunks: [], length: 0, standby: false };
+    // Already open on standby: the press changes what the microphone is doing, so the page must hear of it.
+    this.onChange();
     await this.start();
     if (!this.holding) this.stop();
   }

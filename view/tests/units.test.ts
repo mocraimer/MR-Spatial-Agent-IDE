@@ -194,3 +194,17 @@ test('terminal text: each run of three or more blank rows is one blank row, shor
   assert.deepEqual(terminalLines(rows(5, 'a')), ['', 'a'], 'leading blanks too');
   assert.deepEqual(terminalLines(''), []);
 });
+
+test('the microphone: pressing hold to talk while it is open on standby tells the page', async () => {
+  let changes = 0;
+  const mic = new Mic(async () => ({ close() { /* nothing to release */ } }), () => null, () => undefined, () => { changes += 1; });
+  await mic.arm();
+  assert.deepEqual([mic.standby, mic.open], [true, false]);
+  const before = changes;
+  const press = mic.holdStart();
+  assert.deepEqual([mic.standby, mic.open], [false, true], 'listening now, not standby');
+  assert.ok(changes > before, 'the page was told at the press, not only when the microphone opens');
+  await press;
+  mic.holdEnd();
+  assert.deepEqual([mic.standby, mic.open], [true, false], 'back to standby after the release');
+});

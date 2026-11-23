@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-/** Herdr's rule for an agent name, from its own error: `agent.start` refuses anything else. */
+/** Herdr's rule for an agent name, from its own error: `agent.start` refuses anything else. (agentName makes letters, digits and "-" only, which the rule allows.) */
 export const AGENT_NAME_RULE = /^[a-z][a-z0-9_-]{0,31}$/;
 
 const MAX = 32;
