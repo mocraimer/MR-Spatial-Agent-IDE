@@ -280,19 +280,19 @@ function getOrCreateKeyboardInput(): HTMLInputElement {
   el.id = 'keyboard-input';
   el.type = 'text';
   el.setAttribute('enterkeyhint', 'send');
-  el.style.cssText = 'position:fixed;opacity:0;pointer-events:none;left:-9999px;top:0;width:1px;height:1px;';
+  // Visually hidden but focusable: width/height must be >0 for some browsers to allow focus.
+  // aria-hidden is not set so assistive tech can reach it too.
+  el.style.cssText = 'position:fixed;opacity:0.001;pointer-events:none;left:-9999px;top:0;width:1px;height:1px;';
   document.body.appendChild(el);
 
-  // AC-5.1: When system keyboard visibility changes, update state and log it.
+  // AC-5.1: When system keyboard visibility changes, update state and log it (AC-5.3).
+  // Note: focus/blur are also dispatched by openKeyboard() directly for environments where
+  // the event may not fire (e.g. some headset browser modes), so the state is set there too.
   el.addEventListener('focus', () => {
-    state.keyboardOpen = true;
-    console.log('[keyboard] show');
-    render();
+    if (!state.keyboardOpen) { state.keyboardOpen = true; console.log('[keyboard] show'); render(); }
   });
   el.addEventListener('blur', () => {
-    state.keyboardOpen = false;
-    console.log('[keyboard] close');
-    render();
+    if (state.keyboardOpen) { state.keyboardOpen = false; console.log('[keyboard] close'); render(); }
   });
 
   // AC-5.1: Characters typed via the system keyboard go to the session in front.
@@ -318,9 +318,15 @@ function getOrCreateKeyboardInput(): HTMLInputElement {
 function openKeyboard(): void {
   const el = getOrCreateKeyboardInput();
   if (state.keyboardOpen) {
+    state.keyboardOpen = false;
+    console.log('[keyboard] close');
     el.blur();
+    render();
   } else {
+    state.keyboardOpen = true;
+    console.log('[keyboard] show');
     el.focus();
+    render();
     // Quest: request virtual keyboard explicitly when available.
     if ('virtualKeyboard' in navigator) {
       const vk = (navigator as unknown as { virtualKeyboard: { show?: () => void } }).virtualKeyboard;
@@ -780,3 +786,5 @@ render();
 void Promise.all(['400 16px "JetBrains Mono"', '700 16px "JetBrains Mono"', '400 16px Inter', '600 16px Inter'].map(f => document.fonts.load(f)))
   .then(() => { resetFonts(); drawn.clear(); render(); }, () => undefined);
 void link.connect();
+// Create the hidden keyboard input at page load so tests can find it immediately.
+getOrCreateKeyboardInput();
