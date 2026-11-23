@@ -43,6 +43,10 @@ The view shows your real sessions. Herdr owns them: the view asks Herdr to bring
 
 To stop, press Ctrl-C in the terminal running `npm run view`. The view changes nothing in Herdr's own configuration.
 
+**Automatic restart on rebuild.** `npm run view` runs a supervisor. When `npm run build` finishes writing a new build, the supervisor kills the old bridge and starts the new one; "The view restarted." appears in the headset. If a new build crashes within 10 seconds, the supervisor waits for the next build instead of looping.
+
+**Terminal window fitting.** When you enter mixed reality, the view narrows the Windows Terminal window running Herdr so the session in front fits within 120 columns (the width of the front panel). When you leave, the view restores the window to its original size after a 30-second grace period. If it cannot find the terminal window, a notice says how many columns were cut instead.
+
 ## Where you are: the overview and the projects
 
 A **project** is a Herdr workspace. The view shows one place at a time, and the place follows Herdr's focus: when you or the desk keyboard bring a session forward, you are in that session's project.
@@ -206,7 +210,7 @@ Say **"model sonnet"** (or haiku, opus) or **"effort high"** (low, medium, high,
 
 It works only on a Claude Code session that is idle or done and has nothing typed in its input. It refuses, and says why, for a shell, another kind of agent, a session that is working or waits on a question, and a session that holds a draft: say "go" or "scratch that" first. With listening off it is asked first ("Do “Set the model to sonnet in a1”?") and done only after your "yes".
 
-Claude Code saves a model you choose with `/model` as your default for new sessions too: the session's own line says so ("… saved as your default for new sessions"), and it is Claude Code that does it, not this view.
+The view restores your default model and effort after each command, so only the session in front changes. Claude Code writes `~/.claude/settings.json` when you type `/model` or `/effort`; the view writes it back immediately after. The session's own confirmation line ("… saved as your default for new sessions") still shows; the view's restore comes after. If the restore cannot finish (file permission, disk full), the answer says "The default for new sessions may have changed".
 
 ### The voice
 

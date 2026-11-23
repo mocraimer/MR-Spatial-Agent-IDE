@@ -84,6 +84,9 @@ export class Mirrors {
     return problemText(a.problem);
   }
 
+  /** The underlying Windows helper, for direct calls (window fitting). */
+  windowHelper(): Windows { return this.windows; }
+
   /** The PC's open windows. */
   list(): Promise<PcWindow[]> { return this.windows.list(); }
 

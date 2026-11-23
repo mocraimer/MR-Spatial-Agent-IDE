@@ -22,6 +22,11 @@ export type InputEvent =
   | { type: 'text'; text: string }
   | { type: 'key'; key: string; mods?: ('ctrl' | 'alt' | 'shift')[] };
 
+/** A window's position and whether it is maximized. */
+export interface WindowRect { left: number; top: number; right: number; bottom: number }
+/** A terminal window found by workspace label, with its current rect. */
+export interface FoundWindow extends PcWindow { rect: WindowRect; maximized: boolean }
+
 export interface WindowListener {
   frame(frame: Frame): void;
   problem(hwnd: number, problem: WindowProblem): void;
@@ -36,6 +41,14 @@ export interface Windows {
   stop(hwnd: number): Promise<void>;
   input(hwnd: number, events: InputEvent[]): Promise<WindowProblem>;
   open(url: string): Promise<PcWindow>;
+  /** Finds the terminal window for the given Herdr workspace label. */
+  findWindow(workspaceLabel: string): Promise<FoundWindow | null>;
+  /** Reads the current rect and maximized state of a window. */
+  getRect(hwnd: number): Promise<{ rect: WindowRect; maximized: boolean }>;
+  /** Sets the window to the given rect (restoring from maximized first). */
+  setRect(hwnd: number, rect: WindowRect): Promise<void>;
+  /** Maximizes the window. */
+  maximize(hwnd: number): Promise<void>;
   listen(listener: WindowListener): void;
   close(): void;
 }
@@ -101,6 +114,30 @@ export class HelperWindows implements Windows {
     const r = await this.request({ op: 'open', url }, OPEN_MS);
     if (!isWindow(r.window)) throw new Error('The helper did not say which window it opened.');
     return r.window;
+  }
+
+  async findWindow(workspaceLabel: string): Promise<FoundWindow | null> {
+    const r = await this.request({ op: 'find-window', workspaceLabel });
+    if (r.window === null || r.window === undefined) return null;
+    if (!isWindow(r.window)) return null;
+    const w = r.window as unknown as Record<string, unknown>;
+    const rect = isRect(w.rect) ? w.rect : null;
+    if (!rect) return null;
+    return { hwnd: Number(w.hwnd), title: String(w.title), app: String(w.app), rect, maximized: w.maximized === true };
+  }
+
+  async getRect(hwnd: number): Promise<{ rect: WindowRect; maximized: boolean }> {
+    const r = await this.request({ op: 'get-rect', hwnd });
+    if (!isRect(r.rect)) throw new Error('The helper did not return a rect.');
+    return { rect: r.rect, maximized: r.maximized === true };
+  }
+
+  async setRect(hwnd: number, rect: WindowRect): Promise<void> {
+    await this.request({ op: 'set-rect', hwnd, rect });
+  }
+
+  async maximize(hwnd: number): Promise<void> {
+    await this.request({ op: 'maximize', hwnd });
   }
 
   close(): void {
@@ -169,6 +206,11 @@ export class HelperWindows implements Windows {
 function isWindow(v: unknown): v is PcWindow {
   const w = v as Partial<PcWindow> | null;
   return typeof w === 'object' && w !== null && typeof w.hwnd === 'number' && typeof w.title === 'string' && typeof w.app === 'string';
+}
+
+function isRect(v: unknown): v is WindowRect {
+  const r = v as Partial<WindowRect> | null;
+  return typeof r === 'object' && r !== null && typeof r.left === 'number' && typeof r.top === 'number' && typeof r.right === 'number' && typeof r.bottom === 'number';
 }
 
 /** What a helper's error output means for the owner, when it is one of the known setup gaps. */

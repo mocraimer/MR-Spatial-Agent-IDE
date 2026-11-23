@@ -332,6 +332,47 @@ def open_page(url, extra):
     raise RuntimeError('The browser window did not appear within 10 seconds.')
 
 
+# ---- Window rect and maximized state -------------------------------------------------------------
+
+WINDOWPLACEMENT = None  # resolved lazily below
+
+
+def get_rect_and_maximized(hwnd):
+    """Returns the window's rect (left, top, right, bottom) and whether it is maximized."""
+    placement = win32gui.GetWindowPlacement(hwnd)
+    # placement[1] is showCmd; SW_SHOWMAXIMIZED = 3
+    maximized = placement[1] == win32con.SW_SHOWMAXIMIZED
+    if maximized:
+        # Use the normal (restore) rect so the caller can put the window back there.
+        normal = placement[4]  # (left, top, right, bottom)
+        return {'left': normal[0], 'top': normal[1], 'right': normal[2], 'bottom': normal[3]}, True
+    rect = win32gui.GetWindowRect(hwnd)
+    return {'left': rect[0], 'top': rect[1], 'right': rect[2], 'bottom': rect[3]}, False
+
+
+def set_rect(hwnd, left, top, right, bottom):
+    """Resizes the window to the given rect (restoring from maximized first)."""
+    placement = win32gui.GetWindowPlacement(hwnd)
+    if placement[1] == win32con.SW_SHOWMAXIMIZED:
+        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        time.sleep(0.1)
+    win32gui.SetWindowPos(hwnd, 0, left, top, right - left, bottom - top,
+                         win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE)
+
+
+def find_terminal_window(workspace_label):
+    """
+    Finds the Windows Terminal (or ConHost) window that is running Herdr for the given workspace.
+    Matches windows whose app is WindowsTerminal.exe and whose title ends with ': <workspace_label>'.
+    Returns the first match, or None.
+    """
+    suffix = f': {workspace_label}'
+    for w in windows():
+        if w['app'].lower() == 'windowsterminal.exe' and w['title'].endswith(suffix):
+            return w
+    return None
+
+
 # ---- The loop ------------------------------------------------------------------------------------
 
 def handle(request):
@@ -358,6 +399,25 @@ def handle(request):
     if op == 'open':
         extra = [a for a in os.environ.get('SPATIAL_BROWSER_ARGS', '').split('|') if a]
         return {'window': open_page(str(request['url']), extra)}
+    if op == 'find-window':
+        w = find_terminal_window(str(request['workspaceLabel']))
+        if not w:
+            return {'window': None}
+        rect, maximized = get_rect_and_maximized(int(w['hwnd']))
+        return {'window': {**w, 'rect': rect, 'maximized': maximized}}
+    if op == 'get-rect':
+        hwnd = int(request['hwnd'])
+        rect, maximized = get_rect_and_maximized(hwnd)
+        return {'rect': rect, 'maximized': maximized}
+    if op == 'set-rect':
+        hwnd = int(request['hwnd'])
+        r = request['rect']
+        set_rect(hwnd, int(r['left']), int(r['top']), int(r['right']), int(r['bottom']))
+        return {}
+    if op == 'maximize':
+        hwnd = int(request['hwnd'])
+        win32gui.ShowWindow(hwnd, win32con.SW_SHOWMAXIMIZED)
+        return {}
     raise ValueError(f'unknown op {op!r}')
 
 

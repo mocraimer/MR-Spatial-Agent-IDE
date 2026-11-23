@@ -3,6 +3,7 @@
  * The app draws the text itself: a picture of a terminal is not legible in the headset.
  */
 import { ANSI, CONTROL, plain } from '../shared/ansi.js';
+import { FRONT_COLS } from '../shared/front-cols.js';
 import type { AgentStatus, PendingAsk, PendingClose, Picker, Session, Utterance } from '../shared/messages.js';
 
 export const INK = '#0b1017';
@@ -21,7 +22,7 @@ const SANS = 'Inter, system-ui, "Segoe UI", Roboto, sans-serif';
 /** Pixel size of one terminal character on the front panel's canvas. */
 export const CHAR_PX = 20;
 export const LINE_PX = 34;
-export const FRONT_COLS = 120;
+export { FRONT_COLS } from '../shared/front-cols.js';
 export const FRONT_ROWS = 32;
 
 export type Light = AgentStatus | 'shell';

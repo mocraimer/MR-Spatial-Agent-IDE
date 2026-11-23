@@ -11,12 +11,13 @@ import { appendFileSync, existsSync, readFileSync, rmSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { deflateSync } from 'node:zlib';
 
-interface W { hwnd: number; title: string; app: string; state: 'ok' | 'minimized' | 'gone' }
-const windows: W[] = (JSON.parse(process.env.SPATIAL_FAKE_WINDOWS ?? 'null') as Omit<W, 'state'>[] | null ?? [
+interface Rect { left: number; top: number; right: number; bottom: number }
+interface W { hwnd: number; title: string; app: string; state: 'ok' | 'minimized' | 'gone'; rect: Rect; maximized: boolean }
+const windows: W[] = (JSON.parse(process.env.SPATIAL_FAKE_WINDOWS ?? 'null') as Omit<W, 'state' | 'rect' | 'maximized'>[] | null ?? [
   { hwnd: 101, title: 'Storefront — localhost:3000 - Google Chrome', app: 'chrome.exe' },
   { hwnd: 102, title: 'Untitled - Notepad', app: 'notepad.exe' },
   { hwnd: 103, title: 'A window with a rather long title that goes on well past what a card can hold - Visual Studio Code', app: 'Code.exe' },
-]).map(w => ({ ...w, state: 'ok' as const }));
+]).map((w, i) => ({ ...w, state: 'ok' as const, rect: { left: 100 + i * 20, top: 100, right: 1200 + i * 20, bottom: 900 }, maximized: false }));
 const log = process.env.SPATIAL_FAKE_WINDOWS_LOG;
 const ctl = process.env.SPATIAL_FAKE_WINDOWS_CTL;
 const captures = new Map<number, NodeJS.Timeout>();
@@ -70,10 +71,38 @@ function handle(r: Record<string, unknown>): Record<string, unknown> {
       return { problem: problemOf(w) };
     }
     case 'open': {
-      const w: W = { hwnd: 200 + windows.length, title: `${String(r.url)} - Google Chrome`, app: 'chrome.exe', state: 'ok' };
+      const w: W = { hwnd: 200 + windows.length, title: `${String(r.url)} - Google Chrome`, app: 'chrome.exe', state: 'ok', rect: { left: 200, top: 200, right: 1400, bottom: 1000 }, maximized: false };
       windows.push(w);
       if (log) appendFileSync(log, `${JSON.stringify({ open: r.url })}\n`);
       return { window: { hwnd: w.hwnd, title: w.title, app: w.app } };
+    }
+    case 'find-window': {
+      const label = String(r.workspaceLabel);
+      const w = windows.find(x => x.state !== 'gone' && x.app.toLowerCase() === 'windowsterminal.exe' && x.title.endsWith(`: ${label}`));
+      if (!w) return { window: null };
+      if (log) appendFileSync(log, `${JSON.stringify({ 'find-window': label, hwnd: w.hwnd })}\n`);
+      return { window: { hwnd: w.hwnd, title: w.title, app: w.app, rect: w.rect, maximized: w.maximized } };
+    }
+    case 'get-rect': {
+      const w = windows.find(x => x.hwnd === Number(r.hwnd));
+      if (!w) throw new Error(`no window ${String(r.hwnd)}`);
+      return { rect: w.rect, maximized: w.maximized };
+    }
+    case 'set-rect': {
+      const w = windows.find(x => x.hwnd === Number(r.hwnd));
+      if (!w) throw new Error(`no window ${String(r.hwnd)}`);
+      const rect = r.rect as Rect;
+      w.rect = { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+      w.maximized = false;
+      if (log) appendFileSync(log, `${JSON.stringify({ 'set-rect': r.hwnd, rect: w.rect })}\n`);
+      return {};
+    }
+    case 'maximize': {
+      const w = windows.find(x => x.hwnd === Number(r.hwnd));
+      if (!w) throw new Error(`no window ${String(r.hwnd)}`);
+      w.maximized = true;
+      if (log) appendFileSync(log, `${JSON.stringify({ maximize: r.hwnd })}\n`);
+      return {};
     }
     default: throw new Error(`unknown op ${String(r.op)}`);
   }

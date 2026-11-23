@@ -124,6 +124,11 @@ export function startServer(options: ServerOptions): Promise<Server> {
       if (!audio.every(Number.isFinite)) return send(res, 400, { error: 'Audio samples must be finite numbers.' });
       return send(res, 200, await bridge.utterance(id, audio, receiver, standby));
     }
+    if (req.method === 'POST' && path === '/api/mr') {
+      const body2 = await json(req, 256);
+      bridge.setMixedReality(body2.inMR === true);
+      return send(res, 200, { ok: true });
+    }
     return send(res, 404, { error: 'Not found.' });
   }
 
