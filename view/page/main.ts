@@ -19,6 +19,8 @@ import { onArc, Scene, type Hit, type Pointer, type Rect } from './scene.js';
 
 /** The bridge instance id from the last connect; a change means the bridge restarted. */
 let lastBridgeInstance: string | null = null;
+/** The per-connection page id from the bridge; sent in /api/mr requests. */
+let bridgePageId: string | null = null;
 
 const state = {
   shelf: null as Shelf | null,
@@ -132,6 +134,7 @@ function apply(event: BridgeEvent): void {
         player.stop();
       }
       lastBridgeInstance = event.id;
+      bridgePageId = event.pageId;
       break;
     default: return assertNever(event);
   }
@@ -526,10 +529,10 @@ enterButton.addEventListener('click', () => {
     // Leaving mixed reality turns listening off: the owner can no longer see the microphone.
     // In mixed reality the microphone stays open for commands while listening is off; leaving closes it.
     try {
-      await scene.enter(() => { stopListening(); mic.disarm(); void link.post('/api/mr', { inMR: false }).catch(() => undefined); updatePage(); });
+      await scene.enter(() => { stopListening(); mic.disarm(); void link.post('/api/mr', { inMR: false, pageId: bridgePageId }).catch(() => undefined); updatePage(); });
       scene.recenter();
       void mic.arm();
-      void link.post('/api/mr', { inMR: true }).catch(() => undefined);
+      void link.post('/api/mr', { inMR: true, pageId: bridgePageId }).catch(() => undefined);
     } catch (error) { enterProblem = `Mixed reality did not start: ${(error as Error).message}`; }
     updatePage();
   })();

@@ -131,8 +131,14 @@ export class Bridge {
   private readonly settingsFilePath: string | null;
   /** State for the terminal window fitting (Deliverable 1). */
   private readonly fitState: FitState = newFitState();
-  /** Timer that restores the terminal window after all pages disconnect. */
+  /** Timer that restores the terminal window after all pages leave mixed reality. */
   private restoreTimer: NodeJS.Timeout | null = null;
+  /** Pages currently in mixed reality, by per-connection pageId. */
+  private readonly mrPages = new Set<string>();
+  /** The last focused session id during a fit session, so re-fits happen on change. */
+  private lastFitFocusId: string | null = null;
+  /** Serialization: the pending fit promise (newer call supersedes an in-flight one). */
+  private fitSeq = 0;
 
   constructor(
     private readonly herdr: HerdrClient,
@@ -163,6 +169,11 @@ export class Bridge {
         for (const id of [...this.frames.keys()]) if (!shelf.sessions.some(s => s.id === id)) { const f = this.frames.get(id); if (f?.timer) clearTimeout(f.timer); this.frames.delete(id); }
         this.broadcast({ type: 'shelf', shelf: this.shelf() });
         this.refreshNotes();
+        // B.1: Re-fit when the focused session changes while in MR.
+        if (this.mrPages.size > 0 && shelf.focusedId !== this.lastFitFocusId) {
+          this.lastFitFocusId = shelf.focusedId ?? null;
+          void this.doFit().catch(() => undefined);
+        }
       },
       text: (id, text) => this.broadcast({ type: 'text', id, text }),
     });
@@ -194,7 +205,8 @@ export class Bridge {
 
   /** Adds a page. It first gets everything it needs to draw, then each change. */
   connect(send: Send): () => void {
-    send({ type: 'instance', id: this.instanceId });
+    const pageId = randomUUID();
+    send({ type: 'instance', id: this.instanceId, pageId });
     const shelf = this.shelf();
     send({ type: 'shelf', shelf });
     for (const s of shelf.sessions) { const text = this.mirror.text(s.id); if (text !== undefined) send({ type: 'text', id: s.id, text }); }
@@ -210,34 +222,62 @@ export class Bridge {
       if (f) send({ type: 'frame', id: s.id, w: f.frame.w, h: f.frame.h, mime: f.frame.mime, data: f.frame.data });
     }
     this.clients.add(send);
-    return () => { this.clients.delete(send); };
+    return () => {
+      this.clients.delete(send);
+      // When a page disconnects, treat it as leaving MR (it may have crashed without sending).
+      if (this.mrPages.delete(pageId) && this.mrPages.size === 0) {
+        this.scheduleMrRestore();
+      }
+    };
   }
 
   broadcast(event: BridgeEvent): void { for (const send of this.clients) send(event); }
 
   /**
-   * Called by the server when the page enters or leaves mixed reality. When entering, fits the
-   * terminal window; when leaving, starts a grace-period timer and restores when it fires.
+   * Called by the server when a page enters or leaves mixed reality. Tracks per-page MR state.
+   * Fits while any page is in MR; restores (after grace) when none are.
+   * Re-entering within grace period cancels the restore timer.
+   * Re-fits when the focused session changes while in MR.
    */
-  setMixedReality(inMR: boolean): void {
+  setMixedReality(pageId: string, inMR: boolean): void {
     if (inMR) {
+      const wasInMR = this.mrPages.size > 0;
+      this.mrPages.add(pageId);
       // Cancel any pending restore.
       if (this.restoreTimer) { clearTimeout(this.restoreTimer); this.restoreTimer = null; }
-      const shelf = this.shelf();
-      const front = shelf.sessions.find(s => s.id === shelf.focusedId);
-      if (!front) return;
-      const workspaceLabel = shelf.projects.find(p => p.id === front.workspaceId)?.label ?? '';
-      const notice = (text: string) => this.broadcast({ type: 'notice', text });
-      void fitWindow(front.id, workspaceLabel, this.fitState, { log: this.log, notice, herdr: this.herdr, windows: this.mirrors.windowHelper() }).catch(() => undefined);
+      void this.doFit().catch(() => undefined);
+      if (!wasInMR) this.lastFitFocusId = this.shelf().focusedId ?? null;
     } else {
-      // Grace period before restoring: the page may reconnect shortly (e.g. handset sleep).
-      if (this.restoreTimer) clearTimeout(this.restoreTimer);
-      this.restoreTimer = setTimeout(() => {
-        this.restoreTimer = null;
-        void restoreWindow(this.fitState, { log: this.log, windows: this.mirrors.windowHelper() }).catch(() => undefined);
-      }, RESTORE_GRACE_MS);
-      this.restoreTimer.unref();
+      this.mrPages.delete(pageId);
+      if (this.mrPages.size === 0) this.scheduleMrRestore();
     }
+  }
+
+  /** Schedules a window restore after the grace period. */
+  private scheduleMrRestore(): void {
+    if (this.restoreTimer) clearTimeout(this.restoreTimer);
+    this.restoreTimer = setTimeout(() => {
+      this.restoreTimer = null;
+      this.lastFitFocusId = null;
+      void restoreWindow(this.fitState, { log: this.log, windows: this.mirrors.windowHelper() }).catch(() => undefined);
+    }, RESTORE_GRACE_MS);
+    this.restoreTimer.unref();
+  }
+
+  /**
+   * Runs a window fit for the current focused session. Serialized: each call gets a sequence
+   * number; the promise abandons work if superseded by a newer call.
+   */
+  private async doFit(): Promise<void> {
+    if (this.mrPages.size === 0) return;
+    const seq = ++this.fitSeq;
+    const shelf = this.shelf();
+    const front = shelf.sessions.find(s => s.id === shelf.focusedId);
+    if (!front) return;
+    if (seq !== this.fitSeq) return; // Superseded.
+    const workspaceLabel = shelf.projects.find(p => p.id === front.workspaceId)?.label ?? '';
+    const notice = (text: string) => this.broadcast({ type: 'notice', text });
+    await fitWindow(front.id, workspaceLabel, this.fitState, { log: this.log, notice, herdr: this.herdr, windows: this.mirrors.windowHelper() });
   }
 
   /** The audio of a spoken phrase, for the page to fetch. */

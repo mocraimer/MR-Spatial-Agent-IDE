@@ -4,18 +4,21 @@
  *
  * The fit reads pane.layout for the front pane's column count, derives the target window width in
  * pixels (simple proportional scaling), sets the window, and re-reads up to MAX_CORRECTIONS times
- * to converge. If the minimum window width prevents a fit, it logs once and shows a notice.
+ * to converge. If the window ends up below MIN_FIT_COLS after a correction, the next pass widens
+ * it back toward TARGET_COLS. If the minimum window width prevents a fit, it logs once.
  *
  * The original rect is saved on the first fit and restored when the page leaves or after a grace
  * period with no page connected. If the owner resizes the window by hand during the session, the
- * bridge detects the change and keeps that size on restore instead of its own.
+ * bridge detects the change and keeps that size on restore instead of its own (B.4).
  */
 import type { HerdrClient } from './herdr.js';
 import type { Windows, WindowRect } from './windows.js';
 import { FRONT_COLS } from '../shared/front-cols.js';
 
-/** Target front-pane columns: aim for this, accept down to FRONT_COLS. */
+/** Target front-pane columns: aim for this, accept down to MIN_FIT_COLS. */
 const TARGET_COLS = FRONT_COLS;
+/** Lower bound: if a correction pass lands below this, widen toward TARGET_COLS. */
+const MIN_FIT_COLS = TARGET_COLS - 4; // 116 when TARGET_COLS=120
 /** Maximum number of correction passes after the first resize. */
 const MAX_CORRECTIONS = 3;
 /** How long (ms) to wait for the terminal to reflow after a resize. */
@@ -75,7 +78,8 @@ export async function fitWindow(paneId: string, workspaceLabel: string, state: F
   let currentWidth: number;
   let currentHeight: number;
   if (state.hwnd !== null) {
-    // We already have the window; re-read its rect.
+    // We already have the window; check for hand-resize and re-read its rect.
+    await checkHandResize(state, opts);
     try {
       const { rect, maximized } = await opts.windows.getRect(state.hwnd);
       if (maximized) {
@@ -87,12 +91,6 @@ export async function fitWindow(paneId: string, workspaceLabel: string, state: F
         currentHeight = after.rect.bottom - after.rect.top;
         hwnd = state.hwnd;
       } else {
-        // Detect hand-resize: if the rect differs from what the bridge last set, the owner
-        // moved or resized it; treat the new rect as the restore target.
-        if (state.lastFitRect && !rectEq(rect, state.lastFitRect)) {
-          opts.log(`window-fit: owner resized the window; will restore to new size`);
-          state.restoreRect = rect;
-        }
         currentWidth = rect.right - rect.left;
         currentHeight = rect.bottom - rect.top;
         hwnd = state.hwnd;
@@ -118,9 +116,9 @@ export async function fitWindow(paneId: string, workspaceLabel: string, state: F
     }
     hwnd = found.hwnd;
     if (found.maximized) {
-      // Save the restore rect (normal rect before maximizing), then restore so we can resize.
+      // Remember that the window was maximized so we can re-maximize on restore (B.3).
       state.restoreRect = found.rect;
-      state.restoreMaximized = false; // We will not re-maximize; we'll restore to the normal rect.
+      state.restoreMaximized = true;
       await opts.windows.setRect(hwnd, found.rect);
       await sleep(REFLOW_WAIT_MS);
       const after = await opts.windows.getRect(hwnd);
@@ -136,10 +134,10 @@ export async function fitWindow(paneId: string, workspaceLabel: string, state: F
     opts.log(`window-fit: found terminal window hwnd=${hwnd} for workspace "${workspaceLabel}" (${currentWidth}×${currentHeight})`);
   }
 
-  // 4. Resize and correct.
+  // 4. Resize and correct (B.6: also widen when below MIN_FIT_COLS).
   let cols = frontCols;
   for (let pass = 0; pass <= MAX_CORRECTIONS; pass += 1) {
-    if (cols <= TARGET_COLS) break;
+    if (cols <= TARGET_COLS && cols >= MIN_FIT_COLS) break;
     // Scale the window width proportionally to the target column count.
     const targetWidth = Math.round(currentWidth * TARGET_COLS / cols);
     const newRect: WindowRect = {
@@ -153,7 +151,6 @@ export async function fitWindow(paneId: string, workspaceLabel: string, state: F
       state.lastFitRect = newRect;
     } catch (error) {
       opts.log(`window-fit: could not resize window: ${(error as Error).message}`);
-      showCutNotice(cols, opts);
       return cols;
     }
     if (pass < MAX_CORRECTIONS) {
@@ -168,32 +165,48 @@ export async function fitWindow(paneId: string, workspaceLabel: string, state: F
     }
   }
 
-  if (cols > TARGET_COLS) {
+  if (cols > TARGET_COLS || cols < MIN_FIT_COLS) {
     opts.log(`window-fit: could not fit front pane to ${TARGET_COLS} cols; ended at ${cols}`);
-    showCutNotice(cols, opts);
   } else {
     opts.log(`window-fit: front pane fits at ${cols} cols`);
   }
   return cols;
 }
 
-/** Restores the terminal window to the rect it had before the first fit. */
+/**
+ * Restores the terminal window to the rect it had before the first fit.
+ * B.4: If the owner resized the window by hand (rect differs from lastFitRect), leave it as is.
+ * B.3: If the window was maximized before the first fit, re-maximize it.
+ */
 export async function restoreWindow(state: FitState, opts: Pick<FitOptions, 'log' | 'windows'>): Promise<void> {
   if (state.hwnd === null || state.restoreRect === null) return;
   const hwnd = state.hwnd;
   const rect = state.restoreRect;
+  const maximized = state.restoreMaximized;
+  const lastFit = state.lastFitRect;
   state.hwnd = null;
   state.restoreRect = null;
   state.lastFitRect = null;
+  state.restoreMaximized = false;
+  // B.4: Check for a hand-resize before restoring. If the current rect differs from the last
+  // fitted rect, the owner moved or resized the window; leave it where they put it.
   try {
-    if (state.restoreMaximized) {
+    const { rect: current } = await opts.windows.getRect(hwnd);
+    if (lastFit && !rectEq(current, lastFit)) {
+      opts.log(`window-fit: owner resized the window since last fit; skipping restore for hwnd=${hwnd}`);
+      return;
+    }
+  } catch {
+    // Could not read rect; proceed with restore anyway.
+  }
+  try {
+    if (maximized) {
       await opts.windows.maximize(hwnd);
       opts.log(`window-fit: restored window hwnd=${hwnd} (maximized)`);
     } else {
       await opts.windows.setRect(hwnd, rect);
       opts.log(`window-fit: restored window hwnd=${hwnd} to ${rect.right - rect.left}×${rect.bottom - rect.top}`);
     }
-    state.restoreMaximized = false;
   } catch (error) {
     opts.log(`window-fit: could not restore window hwnd=${hwnd}: ${(error as Error).message}`);
   }

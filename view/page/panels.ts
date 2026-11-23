@@ -307,6 +307,19 @@ function fit(ctx: CanvasRenderingContext2D, text: string, width: number): string
 
 // ---- Surfaces ---------------------------------------------------------------------------------
 
+/**
+ * Returns how many columns are cut: the difference between the widest visible row (after
+ * stripping ANSI escape sequences and trailing spaces) and FRONT_COLS, or 0 if none are wider.
+ */
+function colsCut(rows: string[]): number {
+  let max = 0;
+  for (const row of rows) {
+    const stripped = plain(row).replace(/\s+$/, '');
+    if (stripped.length > max) max = stripped.length;
+  }
+  return Math.max(0, max - FRONT_COLS);
+}
+
 /** What the front panel says when Herdr has no session in focus. */
 export const EMPTY_FRONT = 'No session in front. Bring one forward from the shelf, or say "show" and its number.';
 /** What it says when Herdr has no sessions at all. */
@@ -344,6 +357,9 @@ export function drawFront(canvas: HTMLCanvasElement, s: Session | null, project:
   let right = w - 36;
   if (back > 0) right -= chip(ctx, `${back} rows back`, right, mid, 26, ACCENT, 'right') + 14;
   right -= chip(ctx, lightWord(light), right, mid, 26, light === 'idle' || light === 'unknown' || light === 'shell' ? DIM : LIGHTS[light].colour, 'right') + 18;
+  // B.7: Persistent "N columns cut" marker when session rows are wider than FRONT_COLS.
+  const cut = colsCut(shown);
+  if (cut > 0) right -= chip(ctx, `${cut} col${cut === 1 ? '' : 's'} cut`, right, mid, 26, AMBER, 'right') + 14;
   ctx.fillStyle = DIM; ctx.font = `28px ${SANS}`; ctx.textAlign = 'right';
   ctx.fillText(fit(ctx, project, w * 0.34), right, mid + 2);
   ctx.textAlign = 'left';

@@ -126,7 +126,8 @@ export function startServer(options: ServerOptions): Promise<Server> {
     }
     if (req.method === 'POST' && path === '/api/mr') {
       const body2 = await json(req, 256);
-      bridge.setMixedReality(body2.inMR === true);
+      const pageId = typeof body2.pageId === 'string' ? body2.pageId : randomUUID();
+      bridge.setMixedReality(pageId, body2.inMR === true);
       return send(res, 200, { ok: true });
     }
     return send(res, 404, { error: 'Not found.' });

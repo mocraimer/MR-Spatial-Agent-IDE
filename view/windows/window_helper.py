@@ -13,6 +13,7 @@ numpy, pywin32): `py -3.12 -m pip install --user windows-capture pywin32`.
 """
 import base64
 import ctypes
+import logging
 import ctypes.wintypes as wt
 import json
 import os
@@ -362,15 +363,27 @@ def set_rect(hwnd, left, top, right, bottom):
 
 def find_terminal_window(workspace_label):
     """
-    Finds the Windows Terminal (or ConHost) window that is running Herdr for the given workspace.
+    Finds the Windows Terminal window that is running Herdr for the given workspace.
     Matches windows whose app is WindowsTerminal.exe and whose title ends with ': <workspace_label>'.
-    Returns the first match, or None.
+    Returns the single match, or None when:
+      - workspace_label is empty (would match the wrong window)
+      - no match is found
+      - more than one match is found (ambiguous; log which case)
     """
+    if not workspace_label:
+        logging.warning('find_terminal_window: empty workspace_label; refusing to match')
+        return None
     suffix = f': {workspace_label}'
-    for w in windows():
-        if w['app'].lower() == 'windowsterminal.exe' and w['title'].endswith(suffix):
-            return w
-    return None
+    matches = [w for w in windows()
+               if w['app'].lower() == 'windowsterminal.exe' and w['title'].endswith(suffix)]
+    if len(matches) == 0:
+        logging.debug('find_terminal_window: no window found for label %r', workspace_label)
+        return None
+    if len(matches) > 1:
+        logging.warning('find_terminal_window: %d windows match label %r; refusing to pick one',
+                        len(matches), workspace_label)
+        return None
+    return matches[0]
 
 
 # ---- The loop ------------------------------------------------------------------------------------
