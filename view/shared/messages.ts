@@ -99,7 +99,9 @@ export type BridgeEvent =
   | { type: 'frame'; id: string; w: number; h: number; mime: string; data: string }
   /** What a window mirror says in place of its picture, or null when the picture is live. */
   | { type: 'window'; id: string; note: string | null }
-  | { type: 'picker'; picker: Picker | null };
+  | { type: 'picker'; picker: Picker | null }
+  /** Sent on each page connect; the page detects a bridge restart when this id changes. */
+  | { type: 'instance'; id: string };
 
 type Raw = Record<string, unknown>;
 const isObj = (v: unknown): v is Raw => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -174,6 +176,7 @@ export function parseEvent(text: string): BridgeEvent | null {
       const picker = parsePicker(v.picker);
       return picker ? { type: 'picker', picker } : null;
     }
+    case 'instance': return isStr(v.id) ? { type: 'instance', id: v.id } : null;
     default: return null;
   }
 }

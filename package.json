@@ -16,7 +16,7 @@
     "test": "npm run build && node --test \"build/host/tests/**/*.test.js\" \"build/view/tests/**/*.test.js\"",
     "start": "node build/host/src/main.js",
     "test:ui": "npm run build && playwright test",
-    "view": "node build/view/bridge/main.js",
+    "view": "node build/view/bridge/supervise.js",
     "view:setup": "node build/view/bridge/setup.js"
   },
   "devDependencies": {
