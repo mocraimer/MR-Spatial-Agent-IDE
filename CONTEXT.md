@@ -25,4 +25,3 @@ A personal Quest VR/MR workspace for directing real agents and reviewing their w
 - **Screens group:** the shelf surfaces the owner reads — the front session panel, the status strip, the tile columns, the project chips, and the draft bar — moved together by their grab bar.
 - **Controls group:** the shelf surfaces the owner acts on — the Talk strip, the button rows — moved together by their grab bar.
 - **Grab bar:** a low surface at the bottom of a screens or controls group; grabbing it with a controller ray or mouse moves the whole group.
-- **Group offset:** a 4×4 matrix in anchor-local space that translates and rotates a whole group relative to its default pose; persisted in localStorage.

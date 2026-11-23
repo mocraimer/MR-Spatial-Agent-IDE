@@ -16,7 +16,7 @@ import {
   CONTROLS_SIZE, LINE_PX, drawChip, drawControls, drawTalk, TALK_SIZE, type TalkPhase, drawDraft, DRAFT_SIZE, drawFront, drawStrip, drawTile, STRIP_SIZE, EMPTY_FRONT, FRONT_SIZE, NO_SESSIONS, frontRows, lightOf, regionAt, resetFonts, terminalLines, tileRows, type ControlButton, type DraftState, type Region, type StripState,
   drawBar,
 } from './panels.js';
-import { identity, multiply, onArc, pose, Scene, type Hit, type Mat, type Pointer, type Rect } from './scene.js';
+import { multiply, onArc, pose, Scene, type Hit, type Mat, type Pointer, type Rect } from './scene.js';
 
 const state = {
   shelf: null as Shelf | null,
@@ -58,16 +58,15 @@ const CONTROLS_DEFAULT_DISTANCE = 0.6;
 const CONTROLS_DEFAULT_Y = -0.35;
 
 /**
- * Group offsets are DELTA transforms applied on top of the natural world-space positions.
- * identity() = no movement from the default position.
- * Controls default positions already use CONTROLS_DEFAULT_Y / CONTROLS_DEFAULT_DISTANCE in
- * their base poses, so both groups start at identity().
+ * Group positions: azimuth in radians (positive = right of centre) and height delta in metres.
+ * Both start at zero — no offset from their natural positions.
+ * pose(0, dy, 0, -az) gives the group-offset matrix: rotates the group around Y, shifts height.
  */
-let screensOffset: Mat = identity();
-let controlsOffset: Mat = identity();
+let screensAz = 0, screensDy = 0;
+let controlsAz = 0, controlsDy = 0;
 
-/** Offset from the ray's intersection point to the group's position, captured at grab start. */
-let barGrabDelta: [number, number, number] = [0, 0, 0];
+/** State captured at bar-grab start: initial cylinder hit and group state. */
+let barGrabState: { surface: string; az0: number; y0: number; groupAz: number; groupDy: number } | null = null;
 
 const GROUP_STORAGE_KEY = 'spatial-view-group-offsets';
 
@@ -77,22 +76,21 @@ function loadGroupOffsets(): void {
     if (!raw) return;
     const data = JSON.parse(raw) as unknown;
     if (!Array.isArray(data) || data.length !== 2) return;
-    const [s, c] = data as [[number, number, number, number], [number, number, number, number]];
-    if (s.length === 4) screensOffset = pose(s[0], s[1], s[2], s[3]);
-    if (c.length === 4) controlsOffset = pose(c[0], c[1], c[2], c[3]);
+    const [s, c] = data as [[number, number], [number, number]];
+    if (Array.isArray(s) && s.length >= 2) { screensAz = Number(s[0]) || 0; screensDy = Number(s[1]) || 0; }
+    if (Array.isArray(c) && c.length >= 2) { controlsAz = Number(c[0]) || 0; controlsDy = Number(c[1]) || 0; }
   } catch { /* corrupted — use defaults */ }
 }
 
 function saveGroupOffsets(): void {
   try {
-    const enc = (m: Mat): [number, number, number, number] => [m[12] as number, m[13] as number, m[14] as number, Math.atan2(-(m[8] as number), m[10] as number)];
-    localStorage.setItem(GROUP_STORAGE_KEY, JSON.stringify([enc(screensOffset), enc(controlsOffset)]));
+    localStorage.setItem(GROUP_STORAGE_KEY, JSON.stringify([[screensAz, screensDy], [controlsAz, controlsDy]]));
   } catch { /* storage unavailable */ }
 }
 
 function resetGroupOffsets(): void {
-  screensOffset = identity();
-  controlsOffset = identity();
+  screensAz = 0; screensDy = 0;
+  controlsAz = 0; controlsDy = 0;
   saveGroupOffsets();
 }
 
@@ -106,27 +104,30 @@ const scene = new Scene(canvas, {
   // The text follows the hand: dragging down brings older lines into view.
   drag: (surface, dy) => { if (surface !== 'front') return; if (frontSession()?.window && !state.picker) windowScroll(dy / LINE_PX); else scrollBy(dy / LINE_PX); },
   groupBar: surface => surface === 'bar:screens' || surface === 'bar:controls',
-  groupBarStart: (_surface, pos) => {
-    // Record how far from the group's current anchor the grab point is.
-    barGrabDelta = [0, 0, 0]; // reset; actual delta computed in groupMove on first call
-    // Store initial position relative to the current group center.
-    barGrabDelta = pos.map(v => v) as [number, number, number];
+  groupBarStart: (surface, pos) => {
+    // pos is the bar centre in anchor-local space.  Derive its azimuth for delta tracking.
+    barGrabState = {
+      surface,
+      az0: Math.atan2(pos[0], -pos[2]),
+      y0: pos[1],
+      groupAz: surface === 'bar:screens' ? screensAz : controlsAz,
+      groupDy: surface === 'bar:screens' ? screensDy : controlsDy,
+    };
   },
   groupMove: (surface, pos) => {
-    const off = surface === 'bar:screens' ? screensOffset : controlsOffset;
-    // Move the group so the bar center follows the ray: delta from the initial grab point to the current pos.
-    const initPos = barGrabDelta;
-    const dx = pos[0] - initPos[0], dy = pos[1] - initPos[1], dz = pos[2] - initPos[2];
-    const cx = (off[12] as number) + dx, cy = (off[13] as number) + dy, cz = (off[14] as number) + dz;
-    barGrabDelta = pos;
-    const yaw = Math.atan2(-cx, -cz);
-    if (surface === 'bar:screens') screensOffset = pose(cx, cy, cz, yaw);
-    else controlsOffset = pose(cx, cy, cz, yaw);
+    // pos is the ray's cylinder intersection in anchor-local space.
+    if (!barGrabState || barGrabState.surface !== surface) return;
+    const az = Math.atan2(pos[0], -pos[2]);
+    const newAz = barGrabState.groupAz + (az - barGrabState.az0);
+    const newDy = barGrabState.groupDy + (pos[1] - barGrabState.y0);
+    if (surface === 'bar:screens') { screensAz = newAz; screensDy = newDy; }
+    else { controlsAz = newAz; controlsDy = newDy; }
     saveGroupOffsets();
     render();
   },
   frame: () => { if (renderWanted) { renderWanted = false; renderNow(); } },
   target: hit => targetRect(hit),
+  visibilityChange: state => { bridgeLog(`immersive visibility: ${state}`); },
 });
 let openSource: OpenSource = openMicrophone;
 const mic = new Mic(src => openSource(src), () => state.shelf?.focusedId ?? null, sendUtterance, render);
@@ -269,11 +270,55 @@ async function focus(sessionId: string): Promise<void> {
 
 // ---- Headset keyboard (AC-5.1 / AC-5.2 / AC-5.3) -----------------------------------------------
 
+/** Posts a diagnostic line to the bridge log (terminal + log file). Never includes typed text. */
+function bridgeLog(line: string): void {
+  void link.post('/api/log', { line });
+}
+
 /** Reusable hidden input for the Quest system keyboard. Created once; always in the DOM. */
 let keyboardInput: HTMLInputElement | null = null;
 
-/** Keys typed per minute diagnostics: timestamps of recent key events. */
+/** Tracks the last value seen from the keyboard input, to compute character diffs. */
+let lastKeyboardValue = '';
+
+/** Set in keydown when a physical key is forwarded, so the resulting input event is skipped. */
+let physicalKeyDown = false;
+
+/** Text queued for typing: batched while a request is in flight. */
+let typeQueue = '';
+let typeInFlight = false;
+
+/** Timestamps of recent key events for once-per-minute count diagnostics. */
 const keyTimestamps: number[] = [];
+let lastKeyCountMinute = 0;
+
+function updateKeyCount(n: number): void {
+  const now = Date.now();
+  for (let i = 0; i < n; i++) keyTimestamps.push(now);
+  while (keyTimestamps.length > 0 && keyTimestamps[0] !== undefined && now - keyTimestamps[0] > 60_000) keyTimestamps.shift();
+  const bucket = Math.floor(now / 60_000);
+  if (bucket !== lastKeyCountMinute) {
+    lastKeyCountMinute = bucket;
+    bridgeLog(`keys typed per minute: ${keyTimestamps.length}`);
+  }
+}
+
+async function flushTypeQueue(): Promise<void> {
+  if (typeInFlight || typeQueue === '') return;
+  typeInFlight = true;
+  const text = typeQueue;
+  typeQueue = '';
+  await link.post('/api/action', { type_text: text });
+  typeInFlight = false;
+  if (typeQueue !== '') void flushTypeQueue();
+}
+
+function queueText(text: string): void {
+  if (!text) return;
+  updateKeyCount(text.length);
+  typeQueue += text;
+  void flushTypeQueue();
+}
 
 function getOrCreateKeyboardInput(): HTMLInputElement {
   if (keyboardInput) return keyboardInput;
@@ -281,34 +326,27 @@ function getOrCreateKeyboardInput(): HTMLInputElement {
   el.id = 'keyboard-input';
   el.type = 'text';
   el.setAttribute('enterkeyhint', 'send');
-  // Visually hidden but focusable: width/height must be >0 for some browsers to allow focus.
-  // aria-hidden is not set so assistive tech can reach it too.
+  // Visually hidden but focusable: width/height must be >0 for some browsers.
   el.style.cssText = 'position:fixed;opacity:0.001;pointer-events:none;left:-9999px;top:0;width:1px;height:1px;';
   document.body.appendChild(el);
 
-  // AC-5.1: When system keyboard visibility changes, update state and log it (AC-5.3).
-  // Note: focus/blur are also dispatched by openKeyboard() directly for environments where
-  // the event may not fire (e.g. some headset browser modes), so the state is set there too.
+  // AC-5.3: Track focus/blur for state changes.
   el.addEventListener('focus', () => {
-    if (!state.keyboardOpen) { state.keyboardOpen = true; console.log('[keyboard] show'); render(); }
+    if (!state.keyboardOpen) { state.keyboardOpen = true; bridgeLog('keyboard show'); render(); }
   });
   el.addEventListener('blur', () => {
-    if (state.keyboardOpen) { state.keyboardOpen = false; console.log('[keyboard] close'); render(); }
+    if (state.keyboardOpen) { state.keyboardOpen = false; bridgeLog('keyboard close'); render(); }
   });
 
-  // AC-5.1: Characters typed via the system keyboard go to the session in front.
-  el.addEventListener('input', e => {
-    const ev = e as InputEvent;
-    const text = ev.data;
-    if (!text) return;
-    // Track key rate for diagnostics (AC-5.3).
-    const now = Date.now();
-    keyTimestamps.push(now);
-    // Keep only the last 60 seconds.
-    while (keyTimestamps.length > 0 && keyTimestamps[0] !== undefined && now - keyTimestamps[0] > 60_000) keyTimestamps.shift();
-    console.log(`[keyboard] typed "${text}" (${keyTimestamps.length} keys/min)`);
-    el.value = '';
-    void link.post('/api/action', { type_text: text });
+  // AC-5.1: Characters from the system keyboard arrive via input events.
+  // Physical keys are handled in keydown (which also calls e.preventDefault() so the field
+  // doesn't change), so an input event that follows a forwarded keydown is skipped.
+  el.addEventListener('input', () => {
+    if (physicalKeyDown) { physicalKeyDown = false; return; }
+    // Value diff: forward only what was added since last time (system keyboard appends).
+    const added = el.value.slice(lastKeyboardValue.length);
+    if (added) queueText(added);
+    lastKeyboardValue = el.value;
   });
 
   keyboardInput = el;
@@ -320,12 +358,21 @@ function openKeyboard(): void {
   const el = getOrCreateKeyboardInput();
   if (state.keyboardOpen) {
     state.keyboardOpen = false;
-    console.log('[keyboard] close');
+    bridgeLog('keyboard close');
     el.blur();
     render();
   } else {
+    // AC-5.1: When in XR, check whether the system keyboard is available.
+    if (scene.immersive && scene.sessionKeyboardSupported !== true) {
+      notice('This headset\'s browser cannot show its keyboard here. Use physical keys to type.');
+      render();
+      return;
+    }
     state.keyboardOpen = true;
-    console.log('[keyboard] show');
+    // Reset field and value tracker so the next show starts from empty.
+    el.value = '';
+    lastKeyboardValue = '';
+    bridgeLog('keyboard show');
     el.focus();
     render();
     // Quest: request virtual keyboard explicitly when available.
@@ -337,17 +384,8 @@ function openKeyboard(): void {
 }
 
 /** AC-5.2: Post a named key (from a physical keyboard) to the session in front. */
-async function forwardKey(key: 'enter' | 'escape' | 'backspace' | 'tab' | 'up' | 'down' | 'left' | 'right'): Promise<void> {
-  await link.post('/api/action', { key });
-}
-
-/** AC-5.2: Type printable text from the physical keyboard into the session in front. */
-async function forwardText(text: string): Promise<void> {
-  // Track for diagnostics.
-  const now = Date.now();
-  keyTimestamps.push(now);
-  while (keyTimestamps.length > 0 && keyTimestamps[0] !== undefined && now - keyTimestamps[0] > 60_000) keyTimestamps.shift();
-  await link.post('/api/action', { type_text: text });
+function forwardKey(key: 'enter' | 'escape' | 'backspace' | 'tab' | 'up' | 'down' | 'left' | 'right' | 'ctrl+c'): void {
+  void link.post('/api/action', { key });
 }
 
 function runPage(action: PageAction): void {
@@ -475,30 +513,31 @@ function targetRect(hit: Hit): Rect | null {
 }
 
 addEventListener('keydown', e => {
-  // The hidden keyboard input handles its own input events; skip forwarding there.
-  if (e.target === keyboardInput) return;
+  // Skip forwarding for inputs OTHER than the hidden keyboard input.
   if (e.target instanceof HTMLInputElement && e.target !== keyboardInput) return;
   if (e.code === 'Backquote' && !e.repeat) { talkStart('key'); e.preventDefault(); return; }
   const asked = state.confirm !== null || state.ask !== null;
   if (asked && (e.key === 'y' || e.key === 'Y')) { void runCommand('confirm'); return; }
   if (asked && (e.key === 'n' || e.key === 'N' || e.key === 'Escape')) { void runCommand('decline'); return; }
 
-  // AC-5.2: physical key forwarding to the session in front.
-  // Only forward when in XR (headset) so the PC keyboard is not hijacked.
+  // AC-5.2: forward physical keys to the session in front when in XR.
+  // Works even when the hidden keyboard input is focused (system keyboard open): preventDefault
+  // stops the key from modifying the field, so the input event does not re-fire for it.
   if (!scene.immersive) return;
   e.preventDefault();
   switch (e.key) {
-    case 'Enter': void forwardKey('enter'); break;
-    case 'Escape': void forwardKey('escape'); break;
-    case 'Backspace': void forwardKey('backspace'); break;
-    case 'Tab': void forwardKey('tab'); break;
-    case 'ArrowUp': void forwardKey('up'); break;
-    case 'ArrowDown': void forwardKey('down'); break;
-    case 'ArrowLeft': void forwardKey('left'); break;
-    case 'ArrowRight': void forwardKey('right'); break;
+    case 'Enter': physicalKeyDown = true; forwardKey('enter'); break;
+    case 'Escape': physicalKeyDown = true; forwardKey('escape'); break;
+    case 'Backspace': physicalKeyDown = true; forwardKey('backspace'); break;
+    case 'Tab': physicalKeyDown = true; forwardKey('tab'); break;
+    case 'ArrowUp': physicalKeyDown = true; forwardKey('up'); break;
+    case 'ArrowDown': physicalKeyDown = true; forwardKey('down'); break;
+    case 'ArrowLeft': physicalKeyDown = true; forwardKey('left'); break;
+    case 'ArrowRight': physicalKeyDown = true; forwardKey('right'); break;
     default:
-      // Printable characters: single char or string from composed input.
-      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) void forwardText(e.key);
+      if (e.ctrlKey && e.key === 'c') { physicalKeyDown = true; forwardKey('ctrl+c'); break; }
+      // Printable characters: forward via the serialised queue.
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) { physicalKeyDown = true; queueText(e.key); }
       break;
   }
 });
@@ -571,6 +610,11 @@ function renderNow(): void {
   const inGroup = (id: string, key: string, width: number, basePose: Mat, groupOff: Mat, draw: (c: HTMLCanvasElement) => void) => {
     surface(id, key, width, multiply(groupOff, basePose), draw);
   };
+
+  // Derive offset matrices from the stored azimuth/height scalars.
+  // pose(0, dy, 0, -az) rotates surfaces around the owner's Y axis and shifts height.
+  const screensOffset = pose(0, screensDy, 0, -screensAz);
+  const controlsOffset = pose(0, controlsDy, 0, -controlsAz);
 
   // ---- Screens group: front session, strip (above), tiles and chips ----
   inGroup('front', JSON.stringify(frontKey), frontWidth, onArc(0, FRONT_Y, FRONT_DISTANCE), screensOffset, c => {
@@ -660,8 +704,8 @@ function renderNow(): void {
   ].map((btns, i) => i === 0 ? btns.map(b => b.id === 'keyboard' ? { ...b, on: state.keyboardOpen } : b) : btns);
 
   // Controls group: Talk at the natural default position, rows stacking below it.
-  // Base poses use absolute world-space positions (CONTROLS_DEFAULT_Y, CONTROLS_DEFAULT_DISTANCE);
-  // controlsOffset is a delta from these defaults, starting as identity().
+  // Base poses use absolute world-space positions (CONTROLS_DEFAULT_Y, CONTROLS_DEFAULT_DISTANCE).
+  // controlsOffset (derived above) rotates and shifts the whole group from these defaults.
   const phase: TalkPhase = mic.problem ?? (state.speech.ready ? null : state.speech.reason) ? 'problem'
     : mic.open ? (mic.mode === 'hold' ? 'holding' : 'listening') : mic.standby ? 'standby' : mic.isOpening ? 'opening' : 'idle';
   const talkProblem = mic.problem ?? (state.speech.ready ? null : state.speech.reason);

@@ -31,13 +31,15 @@ export interface SceneEvents {
   drag(surface: string, dy: number): void;
   /** A group bar whose grab moves a whole group; true means the ray moves the group. */
   groupBar(surface: string): boolean;
-  /** A bar grab just started at pos (anchor-local). */
+  /** A bar grab just started at pos (anchor-local XYZ of bar centre). */
   groupBarStart(surface: string, pos: [number, number, number]): void;
   /**
-   * A bar grab moved: pos is the ray's intersection with the bar's depth plane in the
-   * anchor's local frame. main.ts uses this to reposition the group.
+   * A bar grab moved: pos is the ray's intersection with the cylinder at the group's radius,
+   * in the anchor's local frame. main.ts uses azimuth + height to reposition the group.
    */
   groupMove(surface: string, pos: [number, number, number]): void;
+  /** Immersive-AR visibility state changed (visible | visible-blurred | hidden). */
+  visibilityChange?(state: string): void;
   /** Runs before each frame is drawn, in or out of the headset: the page redraws its canvases here. */
   frame(): void;
   /** The control under a pointer, to highlight; null when there is nothing to select there. */
@@ -122,8 +124,8 @@ export class Scene {
   private mousePressed = false;
   /** Grabs in progress: which surface, and the canvas row the pointer was last at. */
   private readonly grabs = new Map<XRInputSource | 'mouse', { surface: string; y: number }>();
-  /** Group bar grabs: surface being dragged and the depth (z in anchor-local) to project onto. */
-  private readonly barGrabs = new Map<XRInputSource | 'mouse', { surface: string; z: number }>();
+  /** Group bar grabs: surface being dragged and the cylinder radius for projection. */
+  private readonly barGrabs = new Map<XRInputSource | 'mouse', { surface: string; radius: number }>();
   private lastFrame = 0;
   private mouseHit: Hit | null = null;
   private anisotropy: { ext: EXT_texture_filter_anisotropic; max: number } | null = null;
@@ -156,6 +158,12 @@ export class Scene {
   }
 
   get immersive(): boolean { return this.session !== null; }
+  /** Whether the current XR session supports the system keyboard; null when not in XR. */
+  get sessionKeyboardSupported(): boolean | null {
+    if (!this.session) return null;
+    const s = this.session as { isSystemKeyboardSupported?: boolean };
+    return typeof s.isSystemKeyboardSupported === 'boolean' ? s.isSystemKeyboardSupported : null;
+  }
 
   set(id: string, canvas: HTMLCanvasElement, width: number, at: Mat): void {
     const existing = this.surfaces.get(id);
@@ -207,6 +215,7 @@ export class Scene {
     session.addEventListener('select', e => this.events.pointer('select', this.rays.get(e.inputSource)?.hit ?? null));
     session.addEventListener('squeezestart', () => this.events.pointer('squeeze-start', null));
     session.addEventListener('squeezeend', () => this.events.pointer('squeeze-end', null));
+    session.addEventListener('visibilitychange', () => { this.events.visibilityChange?.(session.visibilityState); });
     session.addEventListener('end', () => { this.session = null; this.space = null; this.rays.clear(); this.pressing.clear(); this.buttonDown.clear(); this.grabs.clear(); this.barGrabs.clear(); this.joints = []; onEnd(); });
     session.requestAnimationFrame((t, frame) => this.frame(t, frame));
   }
@@ -373,12 +382,14 @@ export class Scene {
   private grab(by: XRInputSource | 'mouse', hit: Hit | null): void {
     if (!hit) return;
     if (this.events.groupBar(hit.surface)) {
-      // Record the bar's depth (z in anchor-local) for plane projection, then report the start.
+      // Record the bar centre in anchor-local space for azimuth/height tracking.
       const s = this.surfaces.get(hit.surface);
       if (s) {
         const toLocal = invertRigid(this.anchor);
         const lp = apply(toLocal, apply(multiply(this.anchor, s.pose), [0, 0, 0], 1), 1);
-        this.barGrabs.set(by, { surface: hit.surface, z: lp[2] });
+        // Cylinder radius = XZ distance from anchor origin to bar centre.
+        const radius = Math.sqrt(lp[0] * lp[0] + lp[2] * lp[2]);
+        this.barGrabs.set(by, { surface: hit.surface, radius });
         this.events.groupBarStart(hit.surface, [lp[0], lp[1], lp[2]]);
       }
       return;
@@ -401,17 +412,23 @@ export class Scene {
   }
 
   /**
-   * Moves a bar grab: projects the ray onto the plane z = bar.z in anchor-local space and fires
-   * groupMove so main.ts can reposition the group.
+   * Moves a bar grab: intersects the ray with the cylinder at bar.radius in anchor-local space
+   * and fires groupMove so main.ts can read azimuth + height and reposition the group.
    */
-  private followBar(by: XRInputSource | 'mouse', bar: { surface: string; z: number }, origin: [number, number, number], dir: [number, number, number]): void {
-    // Convert ray to anchor-local space.
+  private followBar(by: XRInputSource | 'mouse', bar: { surface: string; radius: number }, origin: [number, number, number], dir: [number, number, number]): void {
     const toLocal = invertRigid(this.anchor);
     const o = apply(toLocal, origin, 1), d = apply(toLocal, dir, 0);
-    if (Math.abs(d[2]) < 1e-6) return;
-    const t = (bar.z - o[2]) / d[2];
+    // Cylinder intersection (XZ plane): (ox+t·dx)²+(oz+t·dz)²=r²
+    const A = d[0] * d[0] + d[2] * d[2];
+    if (A < 1e-9) return; // ray is vertical — no azimuth change
+    const B = 2 * (o[0] * d[0] + o[2] * d[2]);
+    const C = o[0] * o[0] + o[2] * o[2] - bar.radius * bar.radius;
+    const disc = B * B - 4 * A * C;
+    if (disc < 0) return; // ray misses the cylinder
+    let t = (-B - Math.sqrt(disc)) / (2 * A); // near root
+    if (t <= 0) t = (-B + Math.sqrt(disc)) / (2 * A); // far root
     if (t <= 0) { this.barGrabs.delete(by); return; }
-    const pos: [number, number, number] = [o[0] + d[0] * t, o[1] + d[1] * t, bar.z];
+    const pos: [number, number, number] = [o[0] + d[0] * t, o[1] + d[1] * t, o[2] + d[2] * t];
     this.events.groupMove(bar.surface, pos);
   }
 
