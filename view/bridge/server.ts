@@ -97,12 +97,21 @@ export function startServer(options: ServerOptions): Promise<Server> {
       return void res.end(wav);
     }
     if (req.method === 'POST' && path === '/api/log') {
-      const body = await json(req, 512);
-      if (typeof body.line === 'string') {
-        log(`[page] ${body.line.replace(/[\r\n]+/g, ' ').slice(0, 200)}`);
+      const body = await json(req, 256);
+      if (body.event === 'visibility' && typeof body.state === 'string' &&
+          (body.state === 'visible' || body.state === 'visible-blurred' || body.state === 'hidden')) {
+        log(`[page] visibility: ${body.state}`);
         return send(res, 200, { ok: true });
       }
-      return send(res, 400, { error: 'Need a "line" string.' });
+      if (body.event === 'keyboard' && typeof body.open === 'boolean') {
+        log(`[page] keyboard: ${body.open ? 'show' : 'close'}`);
+        return send(res, 200, { ok: true });
+      }
+      if (body.event === 'keys' && typeof body.count === 'number' && Number.isFinite(body.count)) {
+        log(`[page] keys per minute: ${Math.round(body.count)}`);
+        return send(res, 200, { ok: true });
+      }
+      return send(res, 400, { error: 'Unknown event.' });
     }
     if (req.method === 'POST' && path === '/api/action') {
       const body = await json(req, 4096);

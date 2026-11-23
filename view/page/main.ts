@@ -127,7 +127,7 @@ const scene = new Scene(canvas, {
   },
   frame: () => { if (renderWanted) { renderWanted = false; renderNow(); } },
   target: hit => targetRect(hit),
-  visibilityChange: state => { bridgeLog(`immersive visibility: ${state}`); },
+  visibilityChange: state => { bridgeLog({ event: 'visibility', state: state as 'visible' | 'visible-blurred' | 'hidden' }); },
 });
 let openSource: OpenSource = openMicrophone;
 const mic = new Mic(src => openSource(src), () => state.shelf?.focusedId ?? null, sendUtterance, render);
@@ -270,9 +270,14 @@ async function focus(sessionId: string): Promise<void> {
 
 // ---- Headset keyboard (AC-5.1 / AC-5.2 / AC-5.3) -----------------------------------------------
 
-/** Posts a diagnostic line to the bridge log (terminal + log file). Never includes typed text. */
-function bridgeLog(line: string): void {
-  void link.post('/api/log', { line });
+type LogEvent =
+  | { event: 'visibility'; state: 'visible' | 'visible-blurred' | 'hidden' }
+  | { event: 'keyboard'; open: boolean }
+  | { event: 'keys'; count: number };
+
+/** Posts a structured diagnostic event to the bridge log (terminal + log file). Never includes typed text. */
+function bridgeLog(ev: LogEvent): void {
+  void link.post('/api/log', ev);
 }
 
 /** Reusable hidden input for the Quest system keyboard. Created once; always in the DOM. */
@@ -280,9 +285,6 @@ let keyboardInput: HTMLInputElement | null = null;
 
 /** Tracks the last value seen from the keyboard input, to compute character diffs. */
 let lastKeyboardValue = '';
-
-/** Set in keydown when a physical key is forwarded, so the resulting input event is skipped. */
-let physicalKeyDown = false;
 
 /** Text queued for typing: batched while a request is in flight. */
 let typeQueue = '';
@@ -299,7 +301,7 @@ function updateKeyCount(n: number): void {
   const bucket = Math.floor(now / 60_000);
   if (bucket !== lastKeyCountMinute) {
     lastKeyCountMinute = bucket;
-    bridgeLog(`keys typed per minute: ${keyTimestamps.length}`);
+    bridgeLog({ event: 'keys', count: keyTimestamps.length });
   }
 }
 
@@ -332,21 +334,29 @@ function getOrCreateKeyboardInput(): HTMLInputElement {
 
   // AC-5.3: Track focus/blur for state changes.
   el.addEventListener('focus', () => {
-    if (!state.keyboardOpen) { state.keyboardOpen = true; bridgeLog('keyboard show'); render(); }
+    if (!state.keyboardOpen) { state.keyboardOpen = true; bridgeLog({ event: 'keyboard', open: true }); render(); }
   });
   el.addEventListener('blur', () => {
-    if (state.keyboardOpen) { state.keyboardOpen = false; bridgeLog('keyboard close'); render(); }
+    if (state.keyboardOpen) { state.keyboardOpen = false; bridgeLog({ event: 'keyboard', open: false }); render(); }
   });
 
   // AC-5.1: Characters from the system keyboard arrive via input events.
-  // Physical keys are handled in keydown (which also calls e.preventDefault() so the field
-  // doesn't change), so an input event that follows a forwarded keydown is skipped.
+  // Physical keydowns call e.preventDefault(), so the field never changes for them and no
+  // input event follows — no extra flag is needed.
+  // Use a common-prefix diff so deletes and replacements are forwarded correctly.
   el.addEventListener('input', () => {
-    if (physicalKeyDown) { physicalKeyDown = false; return; }
-    // Value diff: forward only what was added since last time (system keyboard appends).
-    const added = el.value.slice(lastKeyboardValue.length);
+    const prev = lastKeyboardValue;
+    const curr = el.value;
+    // Common prefix: how many chars match from the left.
+    let pfx = 0;
+    while (pfx < prev.length && pfx < curr.length && prev[pfx] === curr[pfx]) pfx++;
+    // Send a backspace for each character deleted after the common prefix.
+    const deleted = prev.length - pfx;
+    for (let i = 0; i < deleted; i++) forwardKey('backspace');
+    // Queue the new suffix.
+    const added = curr.slice(pfx);
     if (added) queueText(added);
-    lastKeyboardValue = el.value;
+    lastKeyboardValue = curr;
   });
 
   keyboardInput = el;
@@ -358,7 +368,7 @@ function openKeyboard(): void {
   const el = getOrCreateKeyboardInput();
   if (state.keyboardOpen) {
     state.keyboardOpen = false;
-    bridgeLog('keyboard close');
+    bridgeLog({ event: 'keyboard', open: false });
     el.blur();
     render();
   } else {
@@ -372,7 +382,7 @@ function openKeyboard(): void {
     // Reset field and value tracker so the next show starts from empty.
     el.value = '';
     lastKeyboardValue = '';
-    bridgeLog('keyboard show');
+    bridgeLog({ event: 'keyboard', open: true });
     el.focus();
     render();
     // Quest: request virtual keyboard explicitly when available.
@@ -526,18 +536,18 @@ addEventListener('keydown', e => {
   if (!scene.immersive) return;
   e.preventDefault();
   switch (e.key) {
-    case 'Enter': physicalKeyDown = true; forwardKey('enter'); break;
-    case 'Escape': physicalKeyDown = true; forwardKey('escape'); break;
-    case 'Backspace': physicalKeyDown = true; forwardKey('backspace'); break;
-    case 'Tab': physicalKeyDown = true; forwardKey('tab'); break;
-    case 'ArrowUp': physicalKeyDown = true; forwardKey('up'); break;
-    case 'ArrowDown': physicalKeyDown = true; forwardKey('down'); break;
-    case 'ArrowLeft': physicalKeyDown = true; forwardKey('left'); break;
-    case 'ArrowRight': physicalKeyDown = true; forwardKey('right'); break;
+    case 'Enter': forwardKey('enter'); break;
+    case 'Escape': forwardKey('escape'); break;
+    case 'Backspace': forwardKey('backspace'); break;
+    case 'Tab': forwardKey('tab'); break;
+    case 'ArrowUp': forwardKey('up'); break;
+    case 'ArrowDown': forwardKey('down'); break;
+    case 'ArrowLeft': forwardKey('left'); break;
+    case 'ArrowRight': forwardKey('right'); break;
     default:
-      if (e.ctrlKey && e.key === 'c') { physicalKeyDown = true; forwardKey('ctrl+c'); break; }
+      if (e.ctrlKey && e.key === 'c') { forwardKey('ctrl+c'); break; }
       // Printable characters: forward via the serialised queue.
-      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) { physicalKeyDown = true; queueText(e.key); }
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) queueText(e.key);
       break;
   }
 });
