@@ -14,8 +14,9 @@ import { VoicePlayer } from './voice.js';
 import {
   bigScreen, drawPicker, drawWindowFront, drawWindowTile, type Picture,
   CONTROLS_SIZE, LINE_PX, drawChip, drawControls, drawTalk, TALK_SIZE, type TalkPhase, drawDraft, DRAFT_SIZE, drawFront, drawStrip, drawTile, STRIP_SIZE, EMPTY_FRONT, FRONT_SIZE, NO_SESSIONS, frontRows, lightOf, regionAt, resetFonts, terminalLines, tileRows, type ControlButton, type DraftState, type Region, type StripState,
+  drawBar,
 } from './panels.js';
-import { onArc, Scene, type Hit, type Pointer, type Rect } from './scene.js';
+import { identity, multiply, onArc, pose, Scene, type Hit, type Mat, type Pointer, type Rect } from './scene.js';
 
 const state = {
   shelf: null as Shelf | null,
@@ -37,6 +38,7 @@ const state = {
   pictures: new Map<string, Picture & { version: number }>(),
   notes: new Map<string, string | null>(),
   picker: null as Picker | null,
+  keyboardOpen: false,
 };
 /** Where the front window mirror's picture is drawn on the front canvas, for mapping a click into the window. */
 let windowRect: Rect | null = null;
@@ -49,6 +51,52 @@ const SCROLL_STEP = 10;
 /** Transcribing and carrying out one utterance takes well under this. */
 const UTTERANCE_TIMEOUT_MS = 20_000;
 
+// ---- Two movable groups -------------------------------------------------------------------------
+
+/** Default controls position: 0.6 m away, 0.35 m below eye height, facing the owner. */
+const CONTROLS_DEFAULT_DISTANCE = 0.6;
+const CONTROLS_DEFAULT_Y = -0.35;
+
+/**
+ * A group offset transforms from the group's default coordinate frame to the recenter frame.
+ * pose(0,0,0) is the screens default (no change from today's layout).
+ * The controls default is at CONTROLS_DEFAULT_DISTANCE away and CONTROLS_DEFAULT_Y below eye.
+ */
+let screensOffset: Mat = identity();
+let controlsOffset: Mat = pose(0, CONTROLS_DEFAULT_Y, -CONTROLS_DEFAULT_DISTANCE);
+
+/** Offset from the ray's intersection point to the group's position, captured at grab start. */
+let barGrabDelta: [number, number, number] = [0, 0, 0];
+
+const GROUP_STORAGE_KEY = 'spatial-view-group-offsets';
+
+function loadGroupOffsets(): void {
+  try {
+    const raw = localStorage.getItem(GROUP_STORAGE_KEY);
+    if (!raw) return;
+    const data = JSON.parse(raw) as unknown;
+    if (!Array.isArray(data) || data.length !== 2) return;
+    const [s, c] = data as [[number, number, number, number], [number, number, number, number]];
+    if (s.length === 4) screensOffset = pose(s[0], s[1], s[2], s[3]);
+    if (c.length === 4) controlsOffset = pose(c[0], c[1], c[2], c[3]);
+  } catch { /* corrupted — use defaults */ }
+}
+
+function saveGroupOffsets(): void {
+  try {
+    const enc = (m: Mat): [number, number, number, number] => [m[12] as number, m[13] as number, m[14] as number, Math.atan2(-(m[8] as number), m[10] as number)];
+    localStorage.setItem(GROUP_STORAGE_KEY, JSON.stringify([enc(screensOffset), enc(controlsOffset)]));
+  } catch { /* storage unavailable */ }
+}
+
+function resetGroupOffsets(): void {
+  screensOffset = identity();
+  controlsOffset = pose(0, CONTROLS_DEFAULT_Y, -CONTROLS_DEFAULT_DISTANCE);
+  saveGroupOffsets();
+}
+
+loadGroupOffsets();
+
 const canvas = document.getElementById('scene') as HTMLCanvasElement;
 const scene = new Scene(canvas, {
   pointer,
@@ -56,6 +104,26 @@ const scene = new Scene(canvas, {
   draggable: surface => surface === 'front',
   // The text follows the hand: dragging down brings older lines into view.
   drag: (surface, dy) => { if (surface !== 'front') return; if (frontSession()?.window && !state.picker) windowScroll(dy / LINE_PX); else scrollBy(dy / LINE_PX); },
+  groupBar: surface => surface === 'bar:screens' || surface === 'bar:controls',
+  groupBarStart: (_surface, pos) => {
+    // Record how far from the group's current anchor the grab point is.
+    barGrabDelta = [0, 0, 0]; // reset; actual delta computed in groupMove on first call
+    // Store initial position relative to the current group center.
+    barGrabDelta = pos.map(v => v) as [number, number, number];
+  },
+  groupMove: (surface, pos) => {
+    const off = surface === 'bar:screens' ? screensOffset : controlsOffset;
+    // Move the group so the bar center follows the ray: delta from the initial grab point to the current pos.
+    const initPos = barGrabDelta;
+    const dx = pos[0] - initPos[0], dy = pos[1] - initPos[1], dz = pos[2] - initPos[2];
+    const cx = (off[12] as number) + dx, cy = (off[13] as number) + dy, cz = (off[14] as number) + dz;
+    barGrabDelta = pos;
+    const yaw = Math.atan2(-cx, -cz);
+    if (surface === 'bar:screens') screensOffset = pose(cx, cy, cz, yaw);
+    else controlsOffset = pose(cx, cy, cz, yaw);
+    saveGroupOffsets();
+    render();
+  },
   frame: () => { if (renderWanted) { renderWanted = false; renderNow(); } },
   target: hit => targetRect(hit),
 });
@@ -198,18 +266,96 @@ async function focus(sessionId: string): Promise<void> {
   render();
 }
 
+// ---- Headset keyboard (AC-5.1 / AC-5.2 / AC-5.3) -----------------------------------------------
+
+/** Reusable hidden input for the Quest system keyboard. Created once; always in the DOM. */
+let keyboardInput: HTMLInputElement | null = null;
+
+/** Keys typed per minute diagnostics: timestamps of recent key events. */
+const keyTimestamps: number[] = [];
+
+function getOrCreateKeyboardInput(): HTMLInputElement {
+  if (keyboardInput) return keyboardInput;
+  const el = document.createElement('input');
+  el.id = 'keyboard-input';
+  el.type = 'text';
+  el.setAttribute('enterkeyhint', 'send');
+  el.style.cssText = 'position:fixed;opacity:0;pointer-events:none;left:-9999px;top:0;width:1px;height:1px;';
+  document.body.appendChild(el);
+
+  // AC-5.1: When system keyboard visibility changes, update state and log it.
+  el.addEventListener('focus', () => {
+    state.keyboardOpen = true;
+    console.log('[keyboard] show');
+    render();
+  });
+  el.addEventListener('blur', () => {
+    state.keyboardOpen = false;
+    console.log('[keyboard] close');
+    render();
+  });
+
+  // AC-5.1: Characters typed via the system keyboard go to the session in front.
+  el.addEventListener('input', e => {
+    const ev = e as InputEvent;
+    const text = ev.data;
+    if (!text) return;
+    // Track key rate for diagnostics (AC-5.3).
+    const now = Date.now();
+    keyTimestamps.push(now);
+    // Keep only the last 60 seconds.
+    while (keyTimestamps.length > 0 && keyTimestamps[0] !== undefined && now - keyTimestamps[0] > 60_000) keyTimestamps.shift();
+    console.log(`[keyboard] typed "${text}" (${keyTimestamps.length} keys/min)`);
+    el.value = '';
+    void link.post('/api/action', { type_text: text });
+  });
+
+  keyboardInput = el;
+  return el;
+}
+
+/** AC-5.1: Toggle the Quest system keyboard for the session in front. */
+function openKeyboard(): void {
+  const el = getOrCreateKeyboardInput();
+  if (state.keyboardOpen) {
+    el.blur();
+  } else {
+    el.focus();
+    // Quest: request virtual keyboard explicitly when available.
+    if ('virtualKeyboard' in navigator) {
+      const vk = (navigator as unknown as { virtualKeyboard: { show?: () => void } }).virtualKeyboard;
+      if (typeof vk.show === 'function') vk.show();
+    }
+  }
+}
+
+/** AC-5.2: Post a named key (from a physical keyboard) to the session in front. */
+async function forwardKey(key: 'enter' | 'escape' | 'backspace' | 'tab' | 'up' | 'down' | 'left' | 'right'): Promise<void> {
+  await link.post('/api/action', { key });
+}
+
+/** AC-5.2: Type printable text from the physical keyboard into the session in front. */
+async function forwardText(text: string): Promise<void> {
+  // Track for diagnostics.
+  const now = Date.now();
+  keyTimestamps.push(now);
+  while (keyTimestamps.length > 0 && keyTimestamps[0] !== undefined && now - keyTimestamps[0] > 60_000) keyTimestamps.shift();
+  await link.post('/api/action', { type_text: text });
+}
+
 function runPage(action: PageAction): void {
   switch (action) {
     case 'scroll-up': if (frontSession()?.window) windowInput({ type: 'wheel', delta: 3 }); else scroll(1); return;
     case 'scroll-down': if (frontSession()?.window) windowInput({ type: 'wheel', delta: -3 }); else scroll(-1); return;
     case 'scroll-bottom': state.scroll = 0; scrollExact = 0; break;
-    case 'recenter': scene.recenter(); notice('Shelf recentred in front of you.'); break;
+    case 'recenter': scene.recenter(); resetGroupOffsets(); notice('Shelf recentred in front of you.'); break;
     case 'listening-off': stopListening(); break;
     case 'mode-hold': stopListening(); mic.setMode('hold'); notice('Hold Talk to speak; tap it to keep listening.'); break;
     case 'mode-switch': mic.setMode('switch'); void mic.switchOn(); notice('Keep listening: tap Talk or say "stop listening" to stop.'); break;
     case 'text-bigger': state.scale = Math.min(1.6, Math.round((state.scale + 0.1) * 10) / 10); break;
     case 'text-smaller': state.scale = Math.max(0.7, Math.round((state.scale - 0.1) * 10) / 10); break;
     case 'exit-mr': void scene.exit(); break;
+    case 'keyboard': openKeyboard(); break;
     default: return assertNever(action);
   }
   render();
@@ -322,11 +468,32 @@ function targetRect(hit: Hit): Rect | null {
 }
 
 addEventListener('keydown', e => {
-  if (e.target instanceof HTMLInputElement) return;
+  // The hidden keyboard input handles its own input events; skip forwarding there.
+  if (e.target === keyboardInput) return;
+  if (e.target instanceof HTMLInputElement && e.target !== keyboardInput) return;
   if (e.code === 'Backquote' && !e.repeat) { talkStart('key'); e.preventDefault(); return; }
   const asked = state.confirm !== null || state.ask !== null;
-  if (asked && (e.key === 'y' || e.key === 'Y')) void runCommand('confirm');
-  if (asked && (e.key === 'n' || e.key === 'N' || e.key === 'Escape')) void runCommand('decline');
+  if (asked && (e.key === 'y' || e.key === 'Y')) { void runCommand('confirm'); return; }
+  if (asked && (e.key === 'n' || e.key === 'N' || e.key === 'Escape')) { void runCommand('decline'); return; }
+
+  // AC-5.2: physical key forwarding to the session in front.
+  // Only forward when in XR (headset) so the PC keyboard is not hijacked.
+  if (!scene.immersive) return;
+  e.preventDefault();
+  switch (e.key) {
+    case 'Enter': void forwardKey('enter'); break;
+    case 'Escape': void forwardKey('escape'); break;
+    case 'Backspace': void forwardKey('backspace'); break;
+    case 'Tab': void forwardKey('tab'); break;
+    case 'ArrowUp': void forwardKey('up'); break;
+    case 'ArrowDown': void forwardKey('down'); break;
+    case 'ArrowLeft': void forwardKey('left'); break;
+    case 'ArrowRight': void forwardKey('right'); break;
+    default:
+      // Printable characters: single char or string from composed input.
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) void forwardText(e.key);
+      break;
+  }
 });
 addEventListener('keyup', e => { if (e.code === 'Backquote') talkEnd('key'); });
 // A key released in another window never reaches this one.
@@ -393,7 +560,13 @@ function renderNow(): void {
   const frontKey = state.picker ? ['picker', state.picker, frontStale]
     : front?.window ? ['window', front, picture?.version, windowNote, frontStale, placeName]
     : [front, front && state.textVersion.get(front.id), state.scroll, frontStale, empty, placeName];
-  surface('front', JSON.stringify(frontKey), frontWidth, onArc(0, FRONT_Y, FRONT_DISTANCE), c => {
+  /** Place a surface with a group offset applied to its base pose. */
+  const inGroup = (id: string, key: string, width: number, basePose: Mat, groupOff: Mat, draw: (c: HTMLCanvasElement) => void) => {
+    surface(id, key, width, multiply(groupOff, basePose), draw);
+  };
+
+  // ---- Screens group: front session, strip (above), tiles and chips ----
+  inGroup('front', JSON.stringify(frontKey), frontWidth, onArc(0, FRONT_Y, FRONT_DISTANCE), screensOffset, c => {
     if (state.picker) { regions.set('front', drawPicker(c, state.picker)); windowRect = null; return; }
     regions.delete('front');
     if (front?.window) { windowRect = drawWindowFront(c, front, placeName, picture, windowNote, frontStale); return; }
@@ -420,7 +593,7 @@ function renderNow(): void {
     confirm: state.confirm,
     ask: state.ask,
   };
-  surface('strip', JSON.stringify(strip), stripWidth, onArc(0, FRONT_Y + frontHeight / 2 + 0.06, FRONT_DISTANCE), c => { regions.set('strip', drawStrip(c, strip)); });
+  inGroup('strip', JSON.stringify(strip), stripWidth, onArc(0, FRONT_Y + frontHeight / 2 + 0.06, FRONT_DISTANCE), screensOffset, c => { regions.set('strip', drawStrip(c, strip)); });
   used.add('strip');
 
   // A draft that waits says where, and the words that send or clear it, just above the strip.
@@ -432,43 +605,15 @@ function renderNow(): void {
   };
   if (draft) {
     const barHeight = stripWidth * DRAFT_SIZE.h / DRAFT_SIZE.w;
-    surface('draft', JSON.stringify(draft), stripWidth, onArc(0, FRONT_Y + frontHeight / 2 + 0.06 + stripHeight / 2 + 0.014 + barHeight / 2, FRONT_DISTANCE), c => drawDraft(c, draft));
+    inGroup('draft', JSON.stringify(draft), stripWidth, onArc(0, FRONT_Y + frontHeight / 2 + 0.06 + stripHeight / 2 + 0.014 + barHeight / 2, FRONT_DISTANCE), screensOffset, c => drawDraft(c, draft));
     used.add('draft');
   }
-
-  // Each inner list is a group: what belongs together sits together.
-  const row = (groups: string[][], key: boolean): ControlButton[] => groups.flatMap(ids => ids.map((id, i) => ({ id, label: command(id).label, key, group: i === 0 })));
-  const rows: ControlButton[][] = [
-    row([['next', 'back'], ['scroll-up', 'scroll-down', 'bottom'], ['smaller', 'bigger', 'recenter'], ['overview', 'mirror', 'new-project'], ['exit']], false),
-    row([['enter', 'escape', 'interrupt'], ['up', 'down', 'tab'], ['y', 'n'], ['one', 'two', 'three']], true),
-    // Words: send or clear the draft in front, and how spoken prompts are sent. The one in force is lit.
-    row([['send', 'scratch'], ['direct-on', 'direct-off']], false).map(b => ({ ...b, on: b.id === (state.direct ? 'direct-on' : 'direct-off') })),
-    // Words for the session in front: its model and effort (typed into it as /model and /effort).
-    row([['model-haiku', 'model-sonnet', 'model-opus'], ['effort-low', 'effort-medium', 'effort-high', 'effort-xhigh', 'effort-max']], false),
-    // The voice: whether answers are spoken and replies read, reading the last reply now, and stopping.
-    row([['voice-on', 'voice-off'], ['read-on', 'read-off'], ['read-last', 'voice-stop']], false).map(b => ({ ...b, on: b.id === (state.voice.feedback ? 'voice-on' : 'voice-off') || b.id === (state.voice.reading ? 'read-on' : 'read-off') })),
-  ];
-  // Talk, wide and first under the front session: the way in to speaking.
-  const phase: TalkPhase = mic.problem ?? (state.speech.ready ? null : state.speech.reason) ? 'problem'
-    : mic.open ? (mic.mode === 'hold' ? 'holding' : 'listening') : mic.standby ? 'standby' : mic.isOpening ? 'opening' : 'idle';
-  const talkProblem = mic.problem ?? (state.speech.ready ? null : state.speech.reason);
-  const talkHeight = stripWidth * TALK_SIZE.h / TALK_SIZE.w;
-  const talkY = FRONT_Y - frontHeight / 2 - 0.02 - talkHeight / 2;
-  surface('talk', JSON.stringify([phase, talkProblem]), stripWidth, onArc(0, talkY, FRONT_DISTANCE), c => { regions.set('talk', drawTalk(c, phase, talkProblem)); });
-  used.add('talk');
-  const controlsHeight = stripWidth * CONTROLS_SIZE.h / CONTROLS_SIZE.w;
-  rows.forEach((buttons, i) => {
-    const id = `controls-${i}`;
-    const y = talkY - talkHeight / 2 - 0.012 - controlsHeight / 2 - i * (controlsHeight + 0.008);
-    surface(id, JSON.stringify(buttons), stripWidth, onArc(0, y, FRONT_DISTANCE), c => { regions.set(id, drawControls(c, buttons)); });
-    used.add(id);
-  });
 
   chipTargets.clear();
   for (const chip of chips) {
     const id = `chip:${chip.projectId}`;
     chipTargets.set(id, chip.overview ? 'overview' : `go:${chip.projectId}`);
-    surface(id, JSON.stringify([chip.project, chip.overview, chip.sessions.map(s => [s.agent, s.status])]), chip.width, onArc(chip.angle, chip.y, CHIP_ARC), c => drawChip(c, chip.project, chip.sessions, chip.overview));
+    inGroup(id, JSON.stringify([chip.project, chip.overview, chip.sessions.map(s => [s.agent, s.status])]), chip.width, onArc(chip.angle, chip.y, CHIP_ARC), screensOffset, c => drawChip(c, chip.project, chip.sessions, chip.overview));
     used.add(id);
   }
 
@@ -480,13 +625,55 @@ function renderNow(): void {
       const inFront = t.session.id === front?.id;
       const tilePicture = t.session.window && !inFront ? state.pictures.get(t.session.id) ?? null : null;
       const tileNote = t.session.window ? state.notes.get(t.session.id) ?? null : null;
-      surface(id, JSON.stringify([t.n, t.session, inFront, tileStale, inFront ? 0 : t.session.window ? [tilePicture?.version, tileNote] : state.textVersion.get(t.session.id)]), width, onArc(column.angle, TOP - i * step, ARC), c => {
+      inGroup(id, JSON.stringify([t.n, t.session, inFront, tileStale, inFront ? 0 : t.session.window ? [tilePicture?.version, tileNote] : state.textVersion.get(t.session.id)]), width, onArc(column.angle, TOP - i * step, ARC), screensOffset, c => {
         if (t.session.window && !inFront) drawWindowTile(c, t.n, t.session, tilePicture, tileNote, tileStale);
         else drawTile(c, t.n, t.session, state.texts.get(t.session.id), inFront, tileStale);
       });
       used.add(id);
     });
   }
+
+  // Grab bar for the screens group: at the bottom of the front panel.
+  const barPhysH = stripWidth * 80 / 2464; // 80px canvas height at stripWidth metres wide
+  inGroup('bar:screens', JSON.stringify('screens'), stripWidth, onArc(0, FRONT_Y - frontHeight / 2 - 0.012 - barPhysH / 2, FRONT_DISTANCE), screensOffset, c => drawBar(c, 'Screens'));
+  used.add('bar:screens');
+
+  // ---- Controls group: Talk, button rows, draft bar ----
+  // Each inner list is a group: what belongs together sits together.
+  const row = (groups: string[][], key: boolean): ControlButton[] => groups.flatMap(ids => ids.map((id, i) => ({ id, label: command(id).label, key, group: i === 0 })));
+  const rows: ControlButton[][] = [
+    row([['next', 'back'], ['scroll-up', 'scroll-down', 'bottom'], ['smaller', 'bigger', 'recenter'], ['overview', 'mirror', 'new-project'], ['keyboard', 'exit']], false),
+    row([['enter', 'escape', 'interrupt'], ['up', 'down', 'tab'], ['y', 'n'], ['one', 'two', 'three']], true),
+    // Words: send or clear the draft in front, and how spoken prompts are sent. The one in force is lit.
+    row([['send', 'scratch'], ['direct-on', 'direct-off']], false).map(b => ({ ...b, on: b.id === (state.direct ? 'direct-on' : 'direct-off') })),
+    // Words for the session in front: its model and effort (typed into it as /model and /effort).
+    row([['model-haiku', 'model-sonnet', 'model-opus'], ['effort-low', 'effort-medium', 'effort-high', 'effort-xhigh', 'effort-max']], false),
+    // The voice: whether answers are spoken and replies read, reading the last reply now, and stopping.
+    row([['voice-on', 'voice-off'], ['read-on', 'read-off'], ['read-last', 'voice-stop']], false).map(b => ({ ...b, on: b.id === (state.voice.feedback ? 'voice-on' : 'voice-off') || b.id === (state.voice.reading ? 'read-on' : 'read-off') })),
+  ].map((btns, i) => i === 0 ? btns.map(b => b.id === 'keyboard' ? { ...b, on: state.keyboardOpen } : b) : btns);
+
+  // The controls group sits at y=0 relative to its own offset; Talk is the topmost element.
+  const phase: TalkPhase = mic.problem ?? (state.speech.ready ? null : state.speech.reason) ? 'problem'
+    : mic.open ? (mic.mode === 'hold' ? 'holding' : 'listening') : mic.standby ? 'standby' : mic.isOpening ? 'opening' : 'idle';
+  const talkProblem = mic.problem ?? (state.speech.ready ? null : state.speech.reason);
+  const talkHeight = stripWidth * TALK_SIZE.h / TALK_SIZE.w;
+  // Talk sits at y=0 in controls-local space; rows stack below it.
+  const talkY = 0;
+  inGroup('talk', JSON.stringify([phase, talkProblem]), stripWidth, onArc(0, talkY, CONTROLS_DEFAULT_DISTANCE), controlsOffset, c => { regions.set('talk', drawTalk(c, phase, talkProblem)); });
+  used.add('talk');
+  const controlsHeight = stripWidth * CONTROLS_SIZE.h / CONTROLS_SIZE.w;
+  rows.forEach((buttons, i) => {
+    const id = `controls-${i}`;
+    const y = talkY - talkHeight / 2 - 0.012 - controlsHeight / 2 - i * (controlsHeight + 0.008);
+    inGroup(id, JSON.stringify(buttons), stripWidth, onArc(0, y, CONTROLS_DEFAULT_DISTANCE), controlsOffset, c => { regions.set(id, drawControls(c, buttons)); });
+    used.add(id);
+  });
+
+  // Grab bar for the controls group: below the last controls row.
+  const lastControlY = talkY - talkHeight / 2 - 0.012 - controlsHeight / 2 - (rows.length - 1) * (controlsHeight + 0.008);
+  const ctrlBarY = lastControlY - controlsHeight / 2 - 0.012 - barPhysH / 2;
+  inGroup('bar:controls', JSON.stringify('controls'), stripWidth, onArc(0, ctrlBarY, CONTROLS_DEFAULT_DISTANCE), controlsOffset, c => drawBar(c, 'Controls'));
+  used.add('bar:controls');
   for (const id of [...scene.surfaces.keys()]) if (!used.has(id)) { scene.remove(id); canvases.delete(id); drawn.delete(id); }
   updatePage();
 }
@@ -567,6 +754,7 @@ window.viewState = () => {
     direct: state.direct,
     voice: { feedback: state.voice.feedback, reading: state.voice.reading, trouble: state.voice.trouble, playing: player.playing, played: player.played, problem: player.problem },
     immersive: scene.immersive,
+    keyboardOpen: state.keyboardOpen,
     surfaces: [...scene.surfaces.keys()],
   };
 };

@@ -29,6 +29,15 @@ export interface SceneEvents {
   draggable(surface: string): boolean;
   /** A grabbed surface moved this many of its canvas pixels; positive is down. */
   drag(surface: string, dy: number): void;
+  /** A group bar whose grab moves a whole group; true means the ray moves the group. */
+  groupBar(surface: string): boolean;
+  /** A bar grab just started at pos (anchor-local). */
+  groupBarStart(surface: string, pos: [number, number, number]): void;
+  /**
+   * A bar grab moved: pos is the ray's intersection with the bar's depth plane in the
+   * anchor's local frame. main.ts uses this to reposition the group.
+   */
+  groupMove(surface: string, pos: [number, number, number]): void;
   /** Runs before each frame is drawn, in or out of the headset: the page redraws its canvases here. */
   frame(): void;
   /** The control under a pointer, to highlight; null when there is nothing to select there. */
@@ -46,6 +55,7 @@ export function multiply(a: Mat, b: Mat): Mat {
   }
   return o;
 }
+export function identity(): Mat { const m = new Float32Array(16); m[0] = m[5] = m[10] = m[15] = 1; return m; }
 /** Rotation about Y by `yaw` radians, then translation. */
 export function pose(x: number, y: number, z: number, yaw = 0): Mat {
   const c = Math.cos(yaw), s = Math.sin(yaw);
@@ -112,6 +122,8 @@ export class Scene {
   private mousePressed = false;
   /** Grabs in progress: which surface, and the canvas row the pointer was last at. */
   private readonly grabs = new Map<XRInputSource | 'mouse', { surface: string; y: number }>();
+  /** Group bar grabs: surface being dragged and the depth (z in anchor-local) to project onto. */
+  private readonly barGrabs = new Map<XRInputSource | 'mouse', { surface: string; z: number }>();
   private lastFrame = 0;
   private mouseHit: Hit | null = null;
   private anisotropy: { ext: EXT_texture_filter_anisotropic; max: number } | null = null;
@@ -134,7 +146,7 @@ export class Scene {
     const ext = gl.getExtension('EXT_texture_filter_anisotropic');
     if (ext) this.anisotropy = { ext, max: gl.getParameter(ext.MAX_TEXTURE_MAX_ANISOTROPY_EXT) as number };
     canvas.addEventListener('pointerdown', e => { this.mousePressed = true; this.mouse(e, 'select-start'); this.grab('mouse', this.mouseHit); });
-    canvas.addEventListener('pointerup', e => { this.mousePressed = false; this.grabs.delete('mouse'); this.mouse(e, 'select-end'); this.events.pointer('select', this.mouseHit); });
+    canvas.addEventListener('pointerup', e => { this.mousePressed = false; this.grabs.delete('mouse'); this.barGrabs.delete('mouse'); this.mouse(e, 'select-end'); this.events.pointer('select', this.mouseHit); });
     canvas.addEventListener('pointermove', e => { this.mouse(e, null); this.dragMouse(e); });
     canvas.addEventListener('wheel', e => this.events.scroll(-Math.sign(e.deltaY) * 3), { passive: true });
     // Outside the headset the window's frames drive drawing. In immersive mode the Quest stops
@@ -191,11 +203,11 @@ export class Scene {
       this.grab(e.inputSource, hit);
       this.events.pointer('select-start', hit);
     });
-    session.addEventListener('selectend', e => { this.pressing.delete(e.inputSource); this.grabs.delete(e.inputSource); this.events.pointer('select-end', this.rays.get(e.inputSource)?.hit ?? null); });
+    session.addEventListener('selectend', e => { this.pressing.delete(e.inputSource); this.grabs.delete(e.inputSource); this.barGrabs.delete(e.inputSource); this.events.pointer('select-end', this.rays.get(e.inputSource)?.hit ?? null); });
     session.addEventListener('select', e => this.events.pointer('select', this.rays.get(e.inputSource)?.hit ?? null));
     session.addEventListener('squeezestart', () => this.events.pointer('squeeze-start', null));
     session.addEventListener('squeezeend', () => this.events.pointer('squeeze-end', null));
-    session.addEventListener('end', () => { this.session = null; this.space = null; this.rays.clear(); this.pressing.clear(); this.buttonDown.clear(); this.grabs.clear(); this.joints = []; onEnd(); });
+    session.addEventListener('end', () => { this.session = null; this.space = null; this.rays.clear(); this.pressing.clear(); this.buttonDown.clear(); this.grabs.clear(); this.barGrabs.clear(); this.joints = []; onEnd(); });
     session.requestAnimationFrame((t, frame) => this.frame(t, frame));
   }
 
@@ -241,6 +253,8 @@ export class Scene {
       if (Math.abs(stick) > STICK_DEAD) this.events.scroll(-Math.sign(stick) * (Math.abs(stick) - STICK_DEAD) / (1 - STICK_DEAD) * STICK_ROWS_PER_S * dt);
       const grab = this.grabs.get(source);
       if (grab) this.follow(source, grab, origin, dir);
+      const bar = this.barGrabs.get(source);
+      if (bar) this.followBar(source, bar, origin, dir);
       // A/X (the lower face button) held is talk, like holding the Talk button.
       const down = source.gamepad?.buttons[4]?.pressed === true;
       if (down && !this.buttonDown.has(source)) { this.buttonDown.add(source); this.events.pointer('button-start', null); }
@@ -355,9 +369,21 @@ export class Scene {
     return best ? { hit: best.hit, point: best.point } : null;
   }
 
-  /** Starts a grab when a press lands on draggable content rather than on a control. */
+  /** Starts a scroll grab (draggable surface) or a group-bar grab depending on what was hit. */
   private grab(by: XRInputSource | 'mouse', hit: Hit | null): void {
-    if (hit && this.events.draggable(hit.surface) && !this.events.target(hit)) this.grabs.set(by, { surface: hit.surface, y: hit.y });
+    if (!hit) return;
+    if (this.events.groupBar(hit.surface)) {
+      // Record the bar's depth (z in anchor-local) for plane projection, then report the start.
+      const s = this.surfaces.get(hit.surface);
+      if (s) {
+        const toLocal = invertRigid(this.anchor);
+        const lp = apply(toLocal, apply(multiply(this.anchor, s.pose), [0, 0, 0], 1), 1);
+        this.barGrabs.set(by, { surface: hit.surface, z: lp[2] });
+        this.events.groupBarStart(hit.surface, [lp[0], lp[1], lp[2]]);
+      }
+      return;
+    }
+    if (this.events.draggable(hit.surface) && !this.events.target(hit)) this.grabs.set(by, { surface: hit.surface, y: hit.y });
   }
 
   /** Moves a grab to where its ray now meets the grabbed surface's plane, even past its edge. */
@@ -374,10 +400,26 @@ export class Scene {
     if (y !== grab.y) { this.events.drag(grab.surface, y - grab.y); grab.y = y; }
   }
 
+  /**
+   * Moves a bar grab: projects the ray onto the plane z = bar.z in anchor-local space and fires
+   * groupMove so main.ts can reposition the group.
+   */
+  private followBar(by: XRInputSource | 'mouse', bar: { surface: string; z: number }, origin: [number, number, number], dir: [number, number, number]): void {
+    // Convert ray to anchor-local space.
+    const toLocal = invertRigid(this.anchor);
+    const o = apply(toLocal, origin, 1), d = apply(toLocal, dir, 0);
+    if (Math.abs(d[2]) < 1e-6) return;
+    const t = (bar.z - o[2]) / d[2];
+    if (t <= 0) { this.barGrabs.delete(by); return; }
+    const pos: [number, number, number] = [o[0] + d[0] * t, o[1] + d[1] * t, bar.z];
+    this.events.groupMove(bar.surface, pos);
+  }
+
   private dragMouse(e: PointerEvent): void {
     const grab = this.grabs.get('mouse');
-    if (!grab || this.session) return;
-    this.follow('mouse', grab, DESKTOP_EYE, this.mouseRay(e));
+    if (grab && !this.session) { this.follow('mouse', grab, DESKTOP_EYE, this.mouseRay(e)); return; }
+    const bar = this.barGrabs.get('mouse');
+    if (bar && !this.session) this.followBar('mouse', bar, DESKTOP_EYE, this.mouseRay(e));
   }
 
   private mouseRay(e: PointerEvent): [number, number, number] {
