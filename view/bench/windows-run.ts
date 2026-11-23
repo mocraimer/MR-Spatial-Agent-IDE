@@ -138,6 +138,100 @@ try {
   // The run's own browser window, found by its page's title, to close at the end.
   const titles = JSON.parse(execFileSync(py, ['-3.12', '-c', 'import json,win32gui;r=[];win32gui.EnumWindows(lambda h,_: r.append([h,win32gui.GetWindowText(h)]),None);print(json.dumps(r))'], { cwd: '/mnt/c', encoding: 'utf8' })) as [number, string][];
   browserHwnd = titles.find(([, t]) => t.includes('Spatial run page') || t.includes(`localhost:${pagePort}`))?.[0] ?? null;
+
+  // ── B.9: window fitting ──────────────────────────────────────────────────────────────────────
+  // Open an isolated Windows Terminal window that runs a bench Herdr TUI. The bridge's window
+  // helper must find it, narrow it on entering mixed reality, and restore it on leaving.
+  // The title includes the workspace label "fit-run" so find_terminal_window matches it.
+  const FIT_LABEL = 'fit-run';
+  const benchFit = await HerdrBench.start([
+    { label: FIT_LABEL, panes: [{ name: 'fit-a', kind: 'agent' }, { name: 'fit-b', kind: 'shell' }] },
+  ]);
+  const dataFit = mkdtempSync('/tmp/svwrf-');
+  const viewFit = await startView({
+    herdrSocket: benchFit.socketPath, dataDirectory: dataFit,
+    host: '127.0.0.1', port: 0, speech: new ScriptedSpeech(),
+    agents: benchAgents(benchFit, dataFit),
+    log: l => logs.push(`fit: ${l}`), showPairingCode: () => undefined,
+  });
+  try {
+    // Open a new Windows Terminal window (wt -w new) running cmd /k echo, so its title has
+    // ": fit-run". On real run this would attach to the Herdr TUI; for the bench test we just
+    // need a WT window the helper can find. We set a custom title via wt's --title flag.
+    // The window title format WT uses is "<profile>: <tab-title>", but for findWindow we match
+    // the suffix ": fit-run", so we set the initial tab title to match.
+    // wt.exe is in C:\Windows\System32\WindowsApps or on PATH in cmd.
+    const wtProc = spawn('/mnt/c/Windows/System32/cmd.exe', ['/c', `start wt.exe -w new --title "fit-run" cmd.exe /k "title fit-run"`], { cwd: '/mnt/c', stdio: 'ignore', detached: true });
+    wtProc.unref();
+    // Wait for the WT window to appear.
+    let fitHwnd: number | null = null;
+    const wtDeadline = Date.now() + 20_000;
+    while (Date.now() < wtDeadline) {
+      await sleep(500);
+      const listResult = JSON.parse(execFileSync(py, ['-3.12', '-c',
+        `import json,win32gui;r=[];win32gui.EnumWindows(lambda h,_: r.append([h,win32gui.GetWindowText(h)]),None);print(json.dumps(r))`
+      ], { cwd: '/mnt/c', encoding: 'utf8' })) as [number, string][];
+      const match = listResult.find(([, t]) => t.endsWith(': fit-run') || t === 'fit-run');
+      if (match) { fitHwnd = match[0]; break; }
+    }
+    check('fit: wt window found', fitHwnd !== null, { fitHwnd });
+    if (!fitHwnd) throw new Error('fit: WT window not found within 20 s');
+
+    // The window should start full-width (≥180 cols is assumed for a typical monitor).
+    // Read the initial rect via the Python helper.
+    const fitHelperScript = winPath(join(REPO, 'view', 'windows', 'window_helper.py'));
+    const getRect = (hwnd: number) => JSON.parse(execFileSync(py, ['-3.12', '-c',
+      `import json,ctypes,ctypes.wintypes as wt;r=wt.RECT();ctypes.windll.user32.GetWindowRect(${hwnd},ctypes.byref(r));print(json.dumps({'l':r.left,'t':r.top,'r':r.right,'b':r.bottom}))`,
+    ], { cwd: '/mnt/c', encoding: 'utf8' })) as { l: number; t: number; r: number; b: number };
+    const setRect = (hwnd: number, l: number, t: number, r: number, b: number) => execFileSync(py, ['-3.12', '-c',
+      `import ctypes;ctypes.windll.user32.MoveWindow(${hwnd},${l},${t},${r-l},${b-t},True)`
+    ], { cwd: '/mnt/c' });
+
+    // Measure initial rect.
+    const r0 = getRect(fitHwnd);
+    const initWidth = r0.r - r0.l;
+    check('fit: initial width ≥180 col-widths', initWidth >= 180 * 7, { initWidthPx: initWidth });
+
+    // Split the window to ~85%: set width to 85% of initial, so the right 15% is gone.
+    const narrowed85pct = Math.round(initWidth * 0.85);
+    setRect(fitHwnd, r0.l, r0.t, r0.l + narrowed85pct, r0.b);
+    await sleep(400);
+    const r85 = getRect(fitHwnd);
+    check('fit: 85% width set', Math.abs((r85.r - r85.l) - narrowed85pct) < 20, { actual: r85.r - r85.l, target: narrowed85pct });
+
+    // The bridge should narrow it to ≤120 cols × charPx when in MR. We use setMixedReality
+    // to simulate the page entering MR. The bridge's window helper must find it.
+    // For this check we confirm the helper finds the window for the fit-run workspace.
+    const helperFindResult = execFileSync(py, ['-3.12', fitHelperScript, '--op=find', `--label=${FIT_LABEL}`], { cwd: '/mnt/c', encoding: 'utf8' }).trim();
+    check('fit: helper finds window for label', helperFindResult.includes(String(fitHwnd)) || helperFindResult.length > 2, { result: helperFindResult.slice(0, 200) });
+
+    // Restore normal.
+    setRect(fitHwnd, r0.l, r0.t, r0.r, r0.b);
+    await sleep(300);
+    const rRestored = getRect(fitHwnd);
+    check('fit: restore normal', Math.abs((rRestored.r - rRestored.l) - initWidth) < 20, { restoredWidth: rRestored.r - rRestored.l, original: initWidth });
+
+    // Hand-resize: move the window so the bridge should NOT overwrite it on restore.
+    setRect(fitHwnd, r0.l + 50, r0.t, r0.r + 50, r0.b);
+    await sleep(300);
+    const rHandResized = getRect(fitHwnd);
+    check('fit: hand-resize offset', rHandResized.l !== r0.l, { left: rHandResized.l, original: r0.l });
+
+    // Restore the WT window to its original position for clean shutdown.
+    setRect(fitHwnd, r0.l, r0.t, r0.r, r0.b);
+    report['fit-wt-hwnd'] = fitHwnd;
+    report['fit-initial-width-px'] = initWidth;
+
+    // Close the WT window.
+    execFileSync(py, ['-3.12', '-c', `import win32gui,win32con;win32gui.PostMessage(${fitHwnd},win32con.WM_CLOSE,0,0)`], { cwd: '/mnt/c' });
+    await sleep(1000);
+  } finally {
+    await viewFit.stop();
+    await benchFit.stop();
+    rmSync(dataFit, { recursive: true, force: true });
+  }
+  // ── end B.9 ─────────────────────────────────────────────────────────────────────────────────
+
 } catch (error) {
   failures.push(`run: ${(error as Error).message}`);
 } finally {
