@@ -345,6 +345,7 @@ function getOrCreateKeyboardInput(): HTMLInputElement {
   // input event follows — no extra flag is needed.
   // Use a common-prefix diff so deletes and replacements are forwarded correctly.
   el.addEventListener('input', () => {
+    if (!state.keyboardOpen) return;
     const prev = lastKeyboardValue;
     const curr = el.value;
     // Common prefix: how many chars match from the left.
