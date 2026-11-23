@@ -1,7 +1,7 @@
 # ADR: Levels ride on Herdr workspaces: an overview and one space per project
 
 ## Status
-Accepted
+Accepted; narrowed by 20261123-typing-from-the-headset: the headset keyboard and physical keys paired to the headset also type into the session in front, via the page's type-text bridge action; Herdr still owns focus for the desk keyboard
 
 ## Area
 Spatial view

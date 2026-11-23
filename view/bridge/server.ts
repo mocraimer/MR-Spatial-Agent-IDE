@@ -106,6 +106,15 @@ export function startServer(options: ServerOptions): Promise<Server> {
         if (!input) return send(res, 400, { error: 'A click is {type:"click", x, y} and a scroll {type:"wheel", x, y, delta}, with x and y from 0 to 1.' });
         return send(res, 200, await bridge.act({ kind: 'window-input', sessionId: body.window, events: [input] }));
       }
+      if (typeof body.type_text === 'string') {
+        return send(res, 200, await bridge.act({ kind: 'type-text', text: body.type_text }));
+      }
+      if (typeof body.key === 'string') {
+        const validKeys = ['enter','escape','ctrl+c','up','down','left','right','tab','backspace','y','n','1','2','3'] as const;
+        type ValidKey = typeof validKeys[number];
+        if (!validKeys.includes(body.key as ValidKey)) return send(res, 400, { error: 'Unknown key.' });
+        return send(res, 200, await bridge.act({ kind: 'key', key: body.key as ValidKey }));
+      }
       let found;
       try { found = command(String(body.command)); } catch { return send(res, 400, { error: 'Unknown action.' }); }
       if (!('bridge' in found.run)) return send(res, 400, { error: 'That action is done by the page.' });

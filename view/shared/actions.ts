@@ -3,10 +3,10 @@
  * both read this one list, so a button and its words cannot drift apart.
  */
 
-export type KeyName = 'enter' | 'escape' | 'ctrl+c' | 'up' | 'down' | 'tab' | 'y' | 'n' | '1' | '2' | '3';
+export type KeyName = 'enter' | 'escape' | 'ctrl+c' | 'up' | 'down' | 'left' | 'right' | 'tab' | 'backspace' | 'y' | 'n' | '1' | '2' | '3';
 
 /** Done by the page itself: how the view is shown. */
-export type PageAction = 'scroll-up' | 'scroll-down' | 'scroll-bottom' | 'recenter' | 'listening-off' | 'mode-hold' | 'mode-switch' | 'text-bigger' | 'text-smaller' | 'exit-mr';
+export type PageAction = 'scroll-up' | 'scroll-down' | 'scroll-bottom' | 'recenter' | 'listening-off' | 'mode-hold' | 'mode-switch' | 'text-bigger' | 'text-smaller' | 'exit-mr' | 'keyboard';
 
 /** Done by the bridge: everything that reaches Herdr. */
 export type BridgeAction =
@@ -46,7 +46,9 @@ export type BridgeAction =
   | { kind: 'picker-make' }
   | { kind: 'pick'; n: number }
   /** Clicks and scrolls for the PC window a mirror session shows. */
-  | { kind: 'window-input'; sessionId: string; events: WindowInput[] };
+  | { kind: 'window-input'; sessionId: string; events: WindowInput[] }
+  /** Types text directly into the session in front (from the headset keyboard or physical keys). */
+  | { kind: 'type-text'; text: string };
 
 /** A click or scroll on a mirrored window, at a point given as fractions of its width and height. */
 export type WindowInput = { type: 'click'; x: number; y: number } | { type: 'wheel'; x: number; y: number; delta: number };
@@ -127,6 +129,7 @@ export const COMMANDS: readonly Command[] = [
   { id: 'more', label: 'More', say: ['more', 'next page', 'show more'], run: { bridge: { kind: 'picker-page', delta: 1 } }, whenPicking: true, viewOnly: true },
   { id: 'previous', label: 'Previous', say: ['previous', 'previous page'], run: { bridge: { kind: 'picker-page', delta: -1 } }, whenPicking: true, viewOnly: true },
   { id: 'make', label: 'Make it', does: 'Make a new project folder with the name said', say: ['make it', 'make new', 'make a new folder', 'make that'], run: { bridge: { kind: 'picker-make' } }, whenPicking: true },
+  { id: 'keyboard', label: 'Keyboard', does: 'Bring up the headset keyboard to type', say: ['keyboard', 'show keyboard', 'open keyboard', 'type'], run: { page: 'keyboard' }, viewOnly: true },
 ];
 
 export function command(id: string): Command {

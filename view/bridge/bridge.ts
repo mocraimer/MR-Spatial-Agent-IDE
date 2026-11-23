@@ -255,6 +255,7 @@ export class Bridge {
           const problem = await this.mirrors.input(s.id, action.events);
           return problem ? { ok: false, outcome: problem } : { ok: true, outcome: action.events[0]?.type === 'wheel' ? `Scrolled ${s.name}` : `Clicked in ${s.name}` };
         }
+        case 'type-text': return await this.typeText(shelf, shelf.focusedId, action.text);
         default: return assertNever(action);
       }
     } catch (error) {
@@ -532,6 +533,14 @@ export class Bridge {
     const done = this.queue.then(step);
     this.queue = done.catch(() => undefined);
     return done;
+  }
+
+  /** Types raw text from the headset keyboard into the session in front. */
+  private async typeText(shelf: Shelf, target: string | null, text: string): Promise<Result> {
+    if (!target) return { ok: false, outcome: 'No session is in front to receive the text.' };
+    if (!text) return { ok: true, outcome: '', silent: true };
+    await this.herdr.call('pane.send_text', { pane_id: target, text });
+    return { ok: true, outcome: '', silent: true };
   }
 
   /** Types spoken words into a session's input after any draft already there, without sending. */

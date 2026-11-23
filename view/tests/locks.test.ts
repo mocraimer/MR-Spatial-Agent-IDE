@@ -42,6 +42,8 @@ test('spoken words reach a session in one way each: typed by typeInto, or sent b
     // The one other writer: the fixed command `/model <name>` or `/effort <level>`, never spoken words (asserted below).
     'pane.send_input in typeSetting',
     'pane.send_text in typeInto',
+    // Physical/headset keyboard text typed directly by the owner — not spoken words.
+    'pane.send_text in typeText',
   ]);
   const bridge = source('bridge.ts');
   // order() and deliver() choose between typing and sending by the setting, and nothing else calls prompt().
