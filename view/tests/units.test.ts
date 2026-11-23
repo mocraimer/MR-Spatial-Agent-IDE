@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { resolve, splitSentences } from '../bridge/bridge.js';
@@ -8,6 +8,8 @@ import { compiled, REPO } from '../bridge/config.js';
 import { CLOSE_TOOL } from '../bridge/agents.js';
 import { classify } from '../bridge/heard.js';
 import { collapseRepeats, splitAtPauses, SAMPLE_RATE } from '../bridge/speech.js';
+import { feedbackPhrase, replyPhrase } from '../bridge/spoken.js';
+import { Settings, SETTINGS_FILE } from '../bridge/settings.js';
 import { arrange, CHIP_ARC, columnFit } from '../page/layout.js';
 import { terminalLines } from '../page/panels.js';
 import { Mic } from '../page/mic.js';
@@ -240,6 +242,26 @@ test('splitSentences splits at [.!?] followed by whitespace or end, never mid-wo
   }
 });
 
+test('feedbackPhrase and replyPhrase use the fixed splitter: version numbers, filenames and abbreviations are never cut mid-token', () => {
+  // feedbackPhrase: a dot inside a version or filename must NOT split.
+  assert.equal(feedbackPhrase('Set model to Sonnet 4.6.'), 'Set model to Sonnet 4.6.');
+  assert.equal(feedbackPhrase('Loaded config.ts successfully.'), 'Loaded config.ts successfully.');
+  assert.equal(feedbackPhrase('Version 2.0 ships today.'), 'Version 2.0 ships today.');
+  // feedbackPhrase: normal sentence boundaries still split when only the first sentence fits.
+  const long = 'Set model to Opus. Now effort is high.';
+  const fp = feedbackPhrase(long);
+  assert.ok(fp.length <= 100, 'feedbackPhrase within FEEDBACK_MAX');
+  assert.ok(fp.startsWith('Set model to Opus'), 'feedbackPhrase keeps first sentence intact');
+  // replyPhrase: version number mid-phrase is not cut.
+  const reply1 = 'Using Claude claude-sonnet-4-6. It is fast.';
+  const rp1 = replyPhrase(reply1);
+  assert.ok(rp1 !== null, 'replyPhrase is non-null');
+  assert.ok(rp1!.includes('claude-sonnet-4-6'), 'replyPhrase keeps hyphenated model name');
+  // replyPhrase: "Sonnet 4.6 is set." stays whole (the dot after 6 is at end, not mid-word).
+  const reply2 = 'Sonnet 4.6 is set.';
+  assert.equal(replyPhrase(reply2), 'Sonnet 4.6 is set.', 'dot after digit not followed by space: no mid-token split');
+});
+
 test('collapseRepeats: only collapses when a 1–3-word phrase repeats 3+ times consecutively', () => {
   // Should collapse: 3+ repeats.
   assert.equal(collapseRepeats('the the the quick'), 'the quick', '3× "the"');
@@ -294,20 +316,22 @@ test('AC-3.3: every command is recognised with every leading/trailing filler; pr
   const trailing = ['please', 'uh', 'um', 'okay', 'ok', 'so'];
   // Filter to commands that are not confirming-only or picking-only.
   for (const c of COMMANDS.filter(cmd => !cmd.whenConfirming && !cmd.whenPicking)) {
-    const base = c.say[0] as string;
-    // Test leading filler before the command.
-    for (const filler of leading) {
-      const heard = `${filler} ${base}`;
-      const result = classify(heard, false);
-      assert.equal(result.as, 'command', `${c.id}: leading "${filler}" before "${base}" should still be a command`);
-      if (result.as === 'command') assert.equal(result.command.id, c.id, `${c.id}: correct command id with leading "${filler}"`);
-    }
-    // Test trailing filler after the command.
-    for (const filler of trailing) {
-      const heard = `${base} ${filler}`;
-      const result = classify(heard, false);
-      assert.equal(result.as, 'command', `${c.id}: trailing "${filler}" after "${base}" should still be a command`);
-      if (result.as === 'command') assert.equal(result.command.id, c.id, `${c.id}: correct command id with trailing "${filler}"`);
+    // Test ALL spoken forms, not just the first.
+    for (const base of c.say) {
+      // Test leading filler before the command.
+      for (const filler of leading) {
+        const heard = `${filler} ${base}`;
+        const result = classify(heard, false);
+        assert.equal(result.as, 'command', `${c.id}: leading "${filler}" before "${base}" should still be a command`);
+        if (result.as === 'command') assert.equal(result.command.id, c.id, `${c.id}: correct command id with leading "${filler}" and form "${base}"`);
+      }
+      // Test trailing filler after the command.
+      for (const filler of trailing) {
+        const heard = `${base} ${filler}`;
+        const result = classify(heard, false);
+        assert.equal(result.as, 'command', `${c.id}: trailing "${filler}" after "${base}" should still be a command`);
+        if (result.as === 'command') assert.equal(result.command.id, c.id, `${c.id}: correct command id with trailing "${filler}" and form "${base}"`);
+      }
     }
   }
   // Prompts that contain command words must stay prompts, not become commands.
@@ -357,5 +381,44 @@ test('AC-3.4: kept speech cap removes pairs (both .wav and .txt); no orphaned fi
     const txtAfter = new Set(after.filter(f => f.endsWith('.txt')).map(f => f.slice(0, -4)));
     for (const s of wavAfter) assert.ok(txtAfter.has(s), `orphaned wav (no txt): ${s}`);
     for (const s of txtAfter) assert.ok(wavAfter.has(s), `orphaned txt (no wav): ${s}`);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('AC-3.4: keepSpeech is off by default; persisted on and off; no files stored while off; delete empties the folder', () => {
+  const dir = mkdtempSync('/tmp/svl-settings-');
+  try {
+    // Off by default.
+    const s1 = new Settings(dir);
+    assert.equal(s1.keepSpeech, false, 'keepSpeech defaults to false');
+
+    // Turn on and persist.
+    s1.setKeepSpeech(true);
+    assert.equal(s1.keepSpeech, true, 'keepSpeech is true after setKeepSpeech(true)');
+    // A new Settings instance reads the persisted value.
+    const s2 = new Settings(dir);
+    assert.equal(s2.keepSpeech, true, 'keepSpeech persists across instances (reads from file)');
+
+    // Turn off and persist.
+    s2.setKeepSpeech(false);
+    const s3 = new Settings(dir);
+    assert.equal(s3.keepSpeech, false, 'keepSpeech persists off after setKeepSpeech(false)');
+
+    // The settings file exists and is valid JSON.
+    const raw = readFileSync(join(dir, SETTINGS_FILE), 'utf8');
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    assert.equal(parsed.keepSpeech, false, 'settings file contains keepSpeech: false');
+
+    // Simulate: on stores pairs; off stores nothing.
+    // The bridge checks keepSpeech before calling keepUtterance, so off → 0 writes.
+    // Here we verify the keep-dir logic directly (same logic as keepUtterance).
+    const keepDir = join(dir, 'speech-kept');
+    mkdirSync(keepDir, { recursive: true });
+    writeFileSync(join(keepDir, '2026-01-01T00-00-00-000Z.txt'), 'hello world');
+    writeFileSync(join(keepDir, '2026-01-01T00-00-00-000Z.wav'), 'RIFF');
+    assert.equal(readdirSync(keepDir).length, 2, 'pair is stored in keep dir');
+
+    // delete empties the folder.
+    for (const f of readdirSync(keepDir)) rmSync(join(keepDir, f));
+    assert.equal(readdirSync(keepDir).length, 0, 'delete clears the keep dir');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

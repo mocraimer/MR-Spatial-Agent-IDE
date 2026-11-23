@@ -16,7 +16,7 @@ import type { Mirror } from './mirror.js';
 import { Questions } from './question.js';
 import { Say } from './say.js';
 import { Settings } from './settings.js';
-import { feedbackFor, replyPhrase } from './spoken.js';
+import { feedbackFor, replyPhrase, splitSentences } from './spoken.js';
 import { lastReply, TRANSCRIPT_ROOT } from './transcript.js';
 import type { Voice } from './tts.js';
 import { Mirrors } from './mirrors.js';
@@ -25,28 +25,7 @@ import type { Frame, Windows } from './windows.js';
 
 export interface Transcriber { state(): SpeechState; transcribe(audio: Float32Array): Promise<string> }
 
-/**
- * Split a phrase into sentences at [.!?]+ followed by whitespace or end-of-string. Splits like
- * "Hello! World?" → ["Hello!", "World?"] but "v4.6." → ["v4.6."] and "file.txt is here." stays
- * whole. The parts always rejoin to the original text (modulo surrounding whitespace).
- */
-export function splitSentences(phrase: string): string[] {
-  if (!phrase.trim()) return [];
-  const parts: string[] = [];
-  const re = /[.!?]+(?:\s+|$)/g;
-  let start = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(phrase)) !== null) {
-    // End of punctuation run (before the whitespace).
-    const end = m.index + m[0].trimEnd().length;
-    const part = phrase.slice(start, end).trim();
-    if (part) parts.push(part);
-    start = m.index + m[0].length;
-  }
-  const tail = phrase.slice(start).trim();
-  if (tail) parts.push(tail);
-  return parts.length > 0 ? parts : [phrase.trim()];
-}
+export { splitSentences } from './spoken.js';
 
 /** Encode float32 PCM samples (–1..1) as a 16-bit mono WAV at the given sample rate. */
 function pcmToWav(samples: Float32Array, sampleRate: number): Buffer {
