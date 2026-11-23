@@ -3,7 +3,7 @@
  * The app draws the text itself: a picture of a terminal is not legible in the headset.
  */
 import { ANSI, CONTROL, plain } from '../shared/ansi.js';
-import type { AgentStatus, PendingAsk, PendingClose, Session, Utterance } from '../shared/messages.js';
+import type { AgentStatus, PendingAsk, PendingClose, Picker, Session, Utterance } from '../shared/messages.js';
 
 export const INK = '#0b1017';
 export const PAPER = '#e8eef4';
@@ -158,7 +158,17 @@ export function terminalLines(text: string): string[] {
 function isBlank(line: string): boolean { return plain(line).trim() === ''; }
 
 /** The rows the front panel draws: FRONT_ROWS of them, `scroll` rows back from the latest; `back` is how far back that really is. */
-export function frontRows(text: string | undefined, scroll: number): { rows: string[]; back: number; total: number } {
+/** A full-screen viewer (lazygit, glow…) larger than the front panel: its screen size, else null. */
+export function bigScreen(s: Session | null): { rows: number; cols: number } | null {
+  return s?.screen && (s.screen.rows > FRONT_ROWS || s.screen.cols > FRONT_COLS) ? s.screen : null;
+}
+
+export function frontRows(text: string | undefined, scroll: number, screen: { rows: number; cols: number } | null = null): { rows: string[]; back: number; total: number } {
+  if (screen) {
+    // The whole screen as it stands, blank rows kept: a viewer places its text by row.
+    const raw = (text ?? '').split(/\r?\n/).slice(-screen.rows);
+    return { rows: raw, back: 0, total: raw.length };
+  }
   const lines = terminalLines(text ?? '');
   const back = Math.min(scroll, Math.max(0, lines.length - FRONT_ROWS));
   return { rows: lines.slice(Math.max(0, lines.length - FRONT_ROWS - back), lines.length - back), back, total: lines.length };
@@ -323,8 +333,9 @@ export function drawFront(canvas: HTMLCanvasElement, s: Session | null, project:
   const light = lightOf(s);
   // The front session is the receiver: its edge says so, in amber when it waits on the owner.
   panel(ctx, w, h, { radius: FRONT_RADIUS, edge: light === 'blocked' ? AMBER : ACCENT, edgeWidth: light === 'blocked' ? 6 : 4 });
-  const { rows: shown, back, total } = frontRows(text, scroll);
-  const maxScroll = Math.max(0, total - FRONT_ROWS);
+  const screen = bigScreen(s);
+  const { rows: shown, back, total } = frontRows(text, scroll, screen);
+  const maxScroll = screen ? 0 : Math.max(0, total - FRONT_ROWS);
   const top = stale ? 2 * LINE_PX : 0, mid = top + HEADER / 2 + 2;
   drawLight(ctx, light, 58, mid, 17);
   ctx.fillStyle = PAPER; ctx.font = `600 38px ${SANS}`; ctx.textBaseline = 'middle';
@@ -337,7 +348,11 @@ export function drawFront(canvas: HTMLCanvasElement, s: Session | null, project:
   ctx.textAlign = 'left';
   if (!stale) hairline(ctx, 28, HEADER, w - 28, HEADER);
   // The band takes two rows' height: the two oldest rows shown make room for it.
-  drawLines(ctx, stale ? shown.slice(2) : shown, 32, (stale ? 2 * LINE_PX : 0) + 100, CHAR_PX, LINE_PX, FRONT_COLS, stale ? 0.4 : 1);
+  if (screen) {
+    // Smaller text, the whole screen: as many columns and rows as the viewer draws.
+    const k = Math.min(FRONT_COLS / screen.cols, FRONT_ROWS / screen.rows);
+    drawLines(ctx, stale ? shown.slice(2) : shown, 32, (stale ? 2 * LINE_PX : 0) + 100, CHAR_PX * k, LINE_PX * k, screen.cols, stale ? 0.4 : 1);
+  } else drawLines(ctx, stale ? shown.slice(2) : shown, 32, (stale ? 2 * LINE_PX : 0) + 100, CHAR_PX, LINE_PX, FRONT_COLS, stale ? 0.4 : 1);
   if (maxScroll > 0) {
     // Where the shown rows sit in the session's history.
     const track = h - 100 - 28, thumb = Math.max(48, track * FRONT_ROWS / total);
@@ -618,4 +633,137 @@ export function drawDraft(canvas: HTMLCanvasElement, d: DraftState): void {
   const how = d.inFront ? 'Say “go” to send it, “scratch that” to clear it. More words are added to it.' : 'Bring it forward, then say “go”.';
   ctx.fillText(fit(ctx, how, w - 1250 - 44), w - 44, h / 2 + 2);
   ctx.textAlign = 'left';
+}
+
+// ---- Window mirrors -------------------------------------------------------------------------------
+
+export interface Picture { image: CanvasImageSource; w: number; h: number }
+export interface Rect { x: number; y: number; w: number; h: number }
+
+/** Where a picture of w by h sits, whole and centred, in a box. */
+export function fitRect(w: number, h: number, box: Rect): Rect {
+  const k = Math.min(box.w / w, box.h / h);
+  const fw = w * k, fh = h * k;
+  return { x: box.x + (box.w - fw) / 2, y: box.y + (box.h - fh) / 2, w: fw, h: fh };
+}
+
+/** The picture's box on the front panel, below its header. */
+export const WINDOW_BOX: Rect = { x: 24, y: 96, w: FRONT_SIZE.w - 48, h: FRONT_SIZE.h - 96 - 20 };
+
+/** A window mirror in front: the window's live picture, whole. Returns where the picture is drawn. */
+export function drawWindowFront(canvas: HTMLCanvasElement, s: Session, project: string, picture: Picture | null, note: string | null, stale: Staleness): Rect | null {
+  const { w, h } = FRONT_SIZE;
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d') as CanvasRenderingContext2D;
+  panel(ctx, w, h, { radius: FRONT_RADIUS, edge: ACCENT, edgeWidth: 4 });
+  const top = stale ? 2 * LINE_PX : 0, mid = top + HEADER / 2 + 2;
+  windowGlyph(ctx, 58, mid, 20, ACCENT);
+  ctx.fillStyle = PAPER; ctx.font = `600 38px ${SANS}`; ctx.textBaseline = 'middle';
+  ctx.fillText(fit(ctx, s.name.replace(/^window: /, ''), w * 0.5), 94, mid + 2);
+  let right = w - 36;
+  right -= chip(ctx, 'PC window', right, mid, 26, ACCENT, 'right') + 18;
+  ctx.fillStyle = DIM; ctx.font = `28px ${SANS}`; ctx.textAlign = 'right';
+  ctx.fillText(fit(ctx, project, w * 0.3), right, mid + 2);
+  ctx.textAlign = 'left';
+  let drawn: Rect | null = null;
+  if (picture) {
+    drawn = fitRect(picture.w, picture.h, WINDOW_BOX);
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+    ctx.globalAlpha = note ? 0.35 : 1;
+    ctx.drawImage(picture.image, drawn.x, drawn.y, drawn.w, drawn.h);
+    ctx.globalAlpha = 1;
+  }
+  const say = note ?? (picture ? null : 'Waiting for the window\'s picture from the PC…');
+  if (say) {
+    ctx.fillStyle = picture ? 'rgba(11,16,23,0.72)' : 'transparent';
+    ctx.fillRect(WINDOW_BOX.x, WINDOW_BOX.y + WINDOW_BOX.h / 2 - 90, WINDOW_BOX.w, 180);
+    ctx.fillStyle = note && note !== 'Starting the mirror…' ? AMBER : DIM; ctx.font = `600 36px ${SANS}`; ctx.textAlign = 'center';
+    wrap(ctx, say, WINDOW_BOX.w - 120, 3).forEach((line, i, all) => ctx.fillText(line, w / 2, WINDOW_BOX.y + WINDOW_BOX.h / 2 + (i - (all.length - 1) / 2) * 46));
+    ctx.textAlign = 'left';
+  }
+  if (stale) staleBand(ctx, w, h, FRONT_RADIUS, stale, 30);
+  return note ? null : drawn;
+}
+
+/** A window mirror's tile: its number, name and a small picture. */
+export function drawWindowTile(canvas: HTMLCanvasElement, number: number, s: Session, picture: Picture | null, note: string | null, stale: Staleness): void {
+  const { w, h } = TILE_SIZE;
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d') as CanvasRenderingContext2D;
+  panel(ctx, w, h, { radius: TILE_RADIUS, edge: EDGE, edgeWidth: 3 });
+  const top = stale ? 50 : 0;
+  if (number > 0) badge(ctx, number, 22, top + 50, DIM);
+  windowGlyph(ctx, 104, top + 50, 17, ACCENT);
+  ctx.fillStyle = PAPER; ctx.font = `600 32px ${SANS}`; ctx.textBaseline = 'middle';
+  ctx.fillText(fit(ctx, s.name.replace(/^window: /, ''), w - 160), 134, top + 52);
+  const box = { x: 22, y: top + 96, w: w - 44, h: h - top - 112 };
+  if (picture) { const r = fitRect(picture.w, picture.h, box); ctx.globalAlpha = note ? 0.3 : 0.9; ctx.drawImage(picture.image, r.x, r.y, r.w, r.h); ctx.globalAlpha = 1; }
+  if (note || !picture) {
+    ctx.fillStyle = note && note !== 'Starting the mirror…' ? AMBER : DIM; ctx.font = `600 24px ${SANS}`; ctx.textAlign = 'center';
+    wrap(ctx, note ?? 'Waiting for the picture…', box.w - 40, 3).forEach((line, i) => ctx.fillText(line, w / 2, box.y + 40 + i * 32));
+    ctx.textAlign = 'left';
+  }
+  if (stale) staleBand(ctx, w, h, TILE_RADIUS, stale, 22);
+}
+
+/** A small window: a frame with a title bar, so a mirror reads as a window before its words do. */
+function windowGlyph(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, colour: string): void {
+  ctx.strokeStyle = colour; ctx.lineWidth = 3;
+  roundRect(ctx, x - r, y - r * 0.8, r * 2, r * 1.6, 4); ctx.stroke();
+  ctx.fillStyle = colour; ctx.fillRect(x - r, y - r * 0.8, r * 2, r * 0.45);
+}
+
+// ---- Lists to pick from ---------------------------------------------------------------------------
+
+/** A list of windows or folders in place of the front session: numbered cards, and its buttons. */
+export function drawPicker(canvas: HTMLCanvasElement, p: Picker): Region[] {
+  const { w, h } = FRONT_SIZE;
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d') as CanvasRenderingContext2D;
+  panel(ctx, w, h, { radius: FRONT_RADIUS, edge: ACCENT, edgeWidth: 4 });
+  const regions: Region[] = [];
+  ctx.fillStyle = PAPER; ctx.font = `600 40px ${SANS}`; ctx.textBaseline = 'middle';
+  ctx.fillText(fit(ctx, p.title, w * 0.55), 40, 50);
+  let right = w - 36;
+  if (p.pages > 1) right -= chip(ctx, `page ${p.page + 1} of ${p.pages}`, right, 50, 26, DIM, 'right') + 14;
+  if (p.filter) chip(ctx, `“${p.filter}”`, right, 50, 26, ACCENT, 'right');
+  ctx.fillStyle = DIM; ctx.font = `28px ${SANS}`;
+  ctx.fillText(fit(ctx, p.kind === 'windows' ? 'Pick by hand or say its number. Say a name to narrow the list.' : 'Pick by hand or say its number. Say a name to narrow the list; then "make it" makes a new folder with that name.', w - 80), 40, 104);
+  hairline(ctx, 28, 132, w - 28, 132);
+  const gridTop = 150, footer = 120, cols = 2, rows = 6, gap = 16;
+  const cw = (w - 56 - gap * (cols - 1)) / cols, ch = (h - gridTop - footer - gap * (rows - 1)) / rows;
+  p.items.forEach((item, i) => {
+    const r = { id: `pick:${item.n}`, x: 28 + (i % cols) * (cw + gap), y: gridTop + Math.floor(i / cols) * (ch + gap), w: cw, h: ch };
+    ctx.fillStyle = RAISED; roundRect(ctx, r.x, r.y, r.w, r.h, 16); ctx.fill();
+    ctx.strokeStyle = EDGE; ctx.lineWidth = 2; roundRect(ctx, r.x, r.y, r.w, r.h, 16); ctx.stroke();
+    ctx.fillStyle = ACCENT; ctx.font = `700 44px ${SANS}`; ctx.textAlign = 'center';
+    ctx.fillText(String(item.n), r.x + 52, r.y + r.h / 2);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = PAPER; ctx.font = `600 32px ${SANS}`;
+    ctx.fillText(fit(ctx, item.label, r.w - 130), r.x + 104, r.y + r.h * 0.36);
+    ctx.fillStyle = DIM; ctx.font = `24px ${SANS}`;
+    ctx.fillText(fit(ctx, item.detail, r.w - 130), r.x + 104, r.y + r.h * 0.7);
+    regions.push(r);
+  });
+  if (p.items.length === 0 && p.empty) {
+    ctx.fillStyle = DIM; ctx.font = `600 36px ${SANS}`; ctx.textAlign = 'center';
+    wrap(ctx, p.empty, w - 200, 3).forEach((line, i) => ctx.fillText(line, w / 2, gridTop + 160 + i * 48));
+    ctx.textAlign = 'left';
+  }
+  const buttons: { id: string; label: string; look: 'plain' | 'on' }[] = [];
+  if (p.page > 0) buttons.push({ id: 'previous', label: 'Previous', look: 'plain' });
+  if (p.page < p.pages - 1) buttons.push({ id: 'more', label: 'More', look: 'plain' });
+  if (p.make) buttons.push({ id: 'make', label: `Make new: ${p.make}`, look: 'on' });
+  buttons.push({ id: 'cancel', label: 'Cancel', look: 'plain' });
+  ctx.font = `600 32px ${SANS}`;
+  let x = w - 28;
+  for (const b of [...buttons].reverse()) {
+    const bw = Math.min(700, ctx.measureText(b.label).width + 80);
+    x -= bw;
+    const r = { id: b.id, x, y: h - footer + 24, w: bw, h: footer - 48 };
+    button(ctx, r, b.label, 32, b.look);
+    regions.push(r);
+    x -= 16;
+  }
+  return regions;
 }

@@ -25,7 +25,19 @@ export type BridgeAction =
   /** Turns direct sending on or off: spoken prompts sent as soon as they are heard. */
   | { kind: 'direct'; on: boolean }
   /** Answers the one question that waits for the owner: a close, or a command heard while listening is off. */
-  | { kind: 'answer'; answer: boolean };
+  | { kind: 'answer'; answer: boolean }
+  /** Open a list to pick from: the PC's windows to mirror here, or folders to make a project of. */
+  | { kind: 'picker'; list: 'windows' | 'folders' }
+  | { kind: 'picker-cancel' }
+  | { kind: 'picker-page'; delta: 1 | -1 }
+  /** Make a new project folder named by what was said into the folder list. */
+  | { kind: 'picker-make' }
+  | { kind: 'pick'; n: number }
+  /** Clicks and scrolls for the PC window a mirror session shows. */
+  | { kind: 'window-input'; sessionId: string; events: WindowInput[] };
+
+/** A click or scroll on a mirrored window, at a point given as fractions of its width and height. */
+export type WindowInput = { type: 'click'; x: number; y: number } | { type: 'wheel'; x: number; y: number; delta: number };
 
 export interface Command {
   id: string;
@@ -40,6 +52,8 @@ export interface Command {
   viewOnly?: true;
   /** Only offered while a question waits for the owner's answer. */
   whenConfirming?: true;
+  /** Only offered while a list to pick from is open. */
+  whenPicking?: true;
 }
 
 const key = (id: string, label: string, k: KeyName, say: string[]): Command => ({ id, label, does: `Press ${label}`, say, run: { bridge: { kind: 'key', key: k } } });
@@ -75,6 +89,13 @@ export const COMMANDS: readonly Command[] = [
   { id: 'overview', label: 'Overview', does: 'Go to the overview', say: ['overview', 'show overview', 'go to overview', 'go to the overview', 'all projects', 'show helper', 'helper'], run: { bridge: { kind: 'overview' } } },
   { id: 'confirm', label: 'Yes', say: ['yes', 'confirm', 'yes close it', 'close it'], run: { bridge: { kind: 'answer', answer: true } }, whenConfirming: true },
   { id: 'decline', label: 'No', say: ['no', 'cancel', 'dont close', 'keep it'], run: { bridge: { kind: 'answer', answer: false } }, whenConfirming: true },
+  // Opening, paging and closing a list only change what is shown; making something asks first while listening is off.
+  { id: 'mirror', label: 'Mirror', does: 'Show the PC\'s windows to mirror one here', say: ['mirror', 'mirror a window', 'show windows', 'show pc windows', 'pc windows'], run: { bridge: { kind: 'picker', list: 'windows' } }, viewOnly: true },
+  { id: 'new-project', label: 'New project', does: 'Show folders to make a project of', say: ['new project', 'add project', 'add a project', 'make a project'], run: { bridge: { kind: 'picker', list: 'folders' } }, viewOnly: true },
+  { id: 'cancel', label: 'Cancel', say: ['cancel', 'close list', 'close the list', 'never mind'], run: { bridge: { kind: 'picker-cancel' } }, whenPicking: true, viewOnly: true },
+  { id: 'more', label: 'More', say: ['more', 'next page', 'show more'], run: { bridge: { kind: 'picker-page', delta: 1 } }, whenPicking: true, viewOnly: true },
+  { id: 'previous', label: 'Previous', say: ['previous', 'previous page'], run: { bridge: { kind: 'picker-page', delta: -1 } }, whenPicking: true, viewOnly: true },
+  { id: 'make', label: 'Make it', does: 'Make a new project folder with the name said', say: ['make it', 'make new', 'make a new folder', 'make that'], run: { bridge: { kind: 'picker-make' } }, whenPicking: true },
 ];
 
 export function command(id: string): Command {

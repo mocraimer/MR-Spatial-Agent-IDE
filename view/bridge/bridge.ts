@@ -2,8 +2,9 @@
  * What the view does, apart from how it is reached: the shelf, the actions, speech routing and
  * the yes before a close. The HTTP server (server.ts) only authenticates and forwards here.
  */
+import { homedir } from 'node:os';
 import { shelfOrder, type BridgeAction, type Command, type KeyName } from '../shared/actions.js';
-import type { BridgeEvent, Project, Session, Shelf, SpeechState, Utterance } from '../shared/messages.js';
+import { currentProject, type BridgeEvent, type Picker, type Project, type Session, type Shelf, type SpeechState, type Utterance } from '../shared/messages.js';
 import { OVERVIEW, type Level, type LevelAgents } from './agents.js';
 import { Drafts, typeable } from './drafts.js';
 import { classify, type Heard } from './heard.js';
@@ -11,6 +12,9 @@ import { HerdrError, type HerdrClient } from './herdr.js';
 import type { Mirror } from './mirror.js';
 import { Questions } from './question.js';
 import { Settings } from './settings.js';
+import { Mirrors } from './mirrors.js';
+import { addProject, folders, loose as squeezed, makeProject, newProjectRoot, projectRoots, takenFolders } from './projects.js';
+import type { Frame, Windows } from './windows.js';
 
 export interface Transcriber { state(): SpeechState; transcribe(audio: Float32Array): Promise<string> }
 
@@ -28,8 +32,33 @@ export interface BridgeOptions {
   log?: (line: string) => void;
   /** The owner's settings; by default in memory, with direct sending off. */
   settings?: Settings;
+  /** How long a list to pick from stays open without use (tests make it short). */
+  pickerIdleMs?: number | undefined;
+  /** The window mirrors; without them, the PC's windows are not offered. */
+  mirrors?: Mirrors | undefined;
 }
+/** Where no window helper is set up: every request says so. */
+const NO_WINDOWS: Windows = {
+  list: () => Promise.reject(new Error('Window mirrors are not set up in this view.')),
+  capture: () => Promise.reject(new Error('Window mirrors are not set up in this view.')),
+  stop: () => Promise.resolve(),
+  input: () => Promise.reject(new Error('Window mirrors are not set up in this view.')),
+  open: () => Promise.reject(new Error('Window mirrors are not set up in this view.')),
+  listen: () => undefined,
+  close: () => undefined,
+};
 const UTTERANCES_KEPT = 200;
+/** Items on one page of a list to pick from. */
+export const PICKER_PAGE = 12;
+/** A list left open this long closes by itself, so it does not go on taking speech as a filter. */
+export const PICKER_IDLE_MS = 180_000;
+/** The session in front gets a window's picture this often at most; other mirrors' tiles less often. */
+const FRONT_FRAME_MS = 66;
+const TILE_FRAME_MS = 1000;
+
+type PickerEntry = { kind: 'windows'; label: string; detail: string; hwnd: number } | { kind: 'folders'; label: string; detail: string; path: string };
+interface PickerState { kind: Picker['kind']; filter: string; page: number; entries: PickerEntry[]; timer: NodeJS.Timeout }
+
 
 export class Bridge {
   private readonly clients = new Set<Send>();
@@ -46,6 +75,14 @@ export class Bridge {
   private readonly drafts = new Drafts();
   /** The level agents' starts as last logged, so each change is logged once. */
   private logged = { starting: new Set<string>(), failed: new Map<string, string>() };
+  private picker: PickerState | null = null;
+  /** Each mirror's latest picture, when it was last sent, and a later send waiting for its turn. */
+  private readonly frames = new Map<string, { frame: Frame; sent: number; timer: NodeJS.Timeout | null }>();
+  /** What each mirror session last said in place of its picture. */
+  private readonly notes = new Map<string, string | null>();
+  private readonly noteTimer: NodeJS.Timeout;
+  private readonly mirrors: Mirrors;
+  private readonly pickerIdleMs: number;
 
   constructor(
     private readonly herdr: HerdrClient,
@@ -59,15 +96,35 @@ export class Bridge {
     this.questions = new Questions(() => this.broadcastQuestion());
     this.log = options.log ?? (() => undefined);
     this.settings = options.settings ?? new Settings();
+    this.mirrors = options.mirrors ?? new Mirrors(herdr, NO_WINDOWS, '');
+    this.pickerIdleMs = options.pickerIdleMs ?? PICKER_IDLE_MS;
     agents.onChange(() => { this.logAgentStarts(); this.broadcast({ type: 'shelf', shelf: this.shelf() }); });
     mirror.listen({
       shelf: shelf => {
         if (this.jump && shelf.focusedId !== this.jump.current) this.jump = null;
         this.drafts.prune(new Set(shelf.sessions.map(x => x.id)));
+        this.mirrors.sweep(new Set(shelf.sessions.map(s => s.id)));
+        for (const id of [...this.frames.keys()]) if (!shelf.sessions.some(s => s.id === id)) { const f = this.frames.get(id); if (f?.timer) clearTimeout(f.timer); this.frames.delete(id); }
         this.broadcast({ type: 'shelf', shelf: this.shelf() });
+        this.refreshNotes();
       },
       text: (id, text) => this.broadcast({ type: 'text', id, text }),
     });
+    this.mirrors.listen({
+      frame: (id, frame) => this.frame(id, frame),
+      problem: () => this.refreshNotes(),
+      notice: text => this.broadcast({ type: 'notice', text }),
+    });
+    // A new mirror that never attaches says so once its time is up.
+    this.noteTimer = setInterval(() => this.refreshNotes(), 3000);
+    this.noteTimer.unref();
+  }
+
+  /** Clears the bridge's own timers. The view stops the mirror and the window mirrors itself. */
+  stop(): void {
+    clearInterval(this.noteTimer);
+    if (this.picker) clearTimeout(this.picker.timer);
+    for (const f of this.frames.values()) if (f.timer) clearTimeout(f.timer);
   }
 
   /** Herdr's sessions as the mirror holds them, with which level agents are starting or failed. */
@@ -88,6 +145,12 @@ export class Bridge {
     send({ type: 'ask', ask: this.questions.commandView() });
     send({ type: 'direct', on: this.settings.direct });
     send({ type: 'speech', speech: this.speech.state() });
+    send({ type: 'picker', picker: this.pickerView() });
+    for (const s of shelf.sessions.filter(x => x.window)) {
+      send({ type: 'window', id: s.id, note: this.mirrors.note(s.id) });
+      const f = this.frames.get(s.id);
+      if (f) send({ type: 'frame', id: s.id, w: f.frame.w, h: f.frame.h, mime: f.frame.mime, data: f.frame.data });
+    }
     this.clients.add(send);
     return () => { this.clients.delete(send); };
   }
@@ -127,6 +190,29 @@ export class Bridge {
           return await this.goTo({ project: project.id }, project.label, `${project.label}'s agent`);
         }
         case 'overview': return await this.goTo(OVERVIEW, 'the overview', 'The helper');
+        case 'picker': return await this.openPicker(shelf, action.list);
+        case 'picker-cancel': {
+          if (!this.picker) return { ok: false, outcome: 'No list is open.' };
+          this.closePicker();
+          return { ok: true, outcome: 'List closed; nothing was made.' };
+        }
+        case 'picker-page': {
+          if (!this.picker) return { ok: false, outcome: 'No list is open.' };
+          const pages = Math.max(1, Math.ceil(this.filtered().length / PICKER_PAGE));
+          const page = this.picker.page + action.delta;
+          if (page < 0 || page >= pages) return { ok: false, outcome: action.delta > 0 ? 'This is the last page.' : 'This is the first page.' };
+          this.picker.page = page;
+          this.touchPicker();
+          return { ok: true, outcome: `Page ${page + 1} of ${pages}` };
+        }
+        case 'picker-make': return await this.makeFromPicker(null);
+        case 'pick': return await this.pick(shelf, action.n);
+        case 'window-input': {
+          const s = shelf.sessions.find(x => x.id === action.sessionId);
+          if (!s?.window) return { ok: false, outcome: 'That session is not a window mirror.' };
+          const problem = await this.mirrors.input(s.id, action.events);
+          return problem ? { ok: false, outcome: problem } : { ok: true, outcome: action.events[0]?.type === 'wheel' ? `Scrolled ${s.name}` : `Clicked in ${s.name}` };
+        }
         default: return assertNever(action);
       }
     } catch (error) {
@@ -163,7 +249,7 @@ export class Bridge {
       return record('', { as: 'nothing', ok: false, outcome: `Speech could not be read: ${(error as Error).message}` });
     }
     const shelf = this.shelf();
-    const taken = classify(heard, this.questions.waiting);
+    const taken = classify(heard, this.questions.waiting, this.picker !== null);
     // A command waiting for its yes is dropped by anything the owner says but a yes or a no. Noise that came to no words is not something said.
     if (this.questions.kind === 'command' && taken.as !== 'nothing' && !(taken.as === 'command' && taken.command.whenConfirming)) this.dropCommand('something else was said instead');
     return record(heard, standby ? await this.inStandby(taken, heard, shelf, receiver) : await this.execute(taken, heard, shelf, receiver));
@@ -206,6 +292,16 @@ export class Bridge {
         } catch (error) { return { as: 'helper', ok: false, outcome: `The helper did not get it: ${error instanceof RefusedError ? error.message : this.problem('an order to the helper', error)}` }; }
       }
       case 'prompt': return await this.deliver(heard, shelf, receiver);
+      case 'pick': return { as: 'command', ...await this.pick(this.shelf(), taken.n) };
+      case 'make': return { as: 'command', ...await this.makeFromPicker(taken.name) };
+      case 'filter': {
+        if (!this.picker) return await this.deliver(heard, shelf, receiver);
+        this.picker.filter = taken.text;
+        this.picker.page = 0;
+        this.touchPicker();
+        const n = this.filtered().length;
+        return { as: 'command', ok: true, outcome: n === 0 ? `Nothing in the list matches "${taken.text}"` : `The list shows what matches "${taken.text}" (${n})` };
+      }
       default: return assertNever(taken);
     }
   }
@@ -219,6 +315,10 @@ export class Bridge {
     switch (taken.as) {
       case 'nothing': return await this.execute(taken, heard, shelf, receiver);
       case 'helper': case 'prompt': return IGNORED;
+      // While listening is off a list is not narrowed; picking or making asks first, like any command.
+      case 'filter': return IGNORED;
+      case 'pick': return this.ask(`Pick ${taken.n} from the list`, () => this.pick(this.shelf(), taken.n));
+      case 'make': return this.ask(`Make a new project called ${taken.name}`, () => this.makeFromPicker(taken.name));
       case 'command': {
         const c = taken.command;
         // A yes or a no answers the question that waits; a view-only command changes nothing but the view.
@@ -450,6 +550,151 @@ export class Bridge {
     await this.focus(next.id);
     if (origin) this.jump = { origin, current: next.id };
     return { ok: true, outcome: `${next.name} is waiting (${waiting.length} waiting)` };
+  }
+
+  // ---- Window mirrors ----------------------------------------------------------------------------
+
+  /** An agent's order to show a page or a window in a project, as a new mirror session there. */
+  async mirrorOrder(order: { open?: string; mirror?: string; workspace: string }): Promise<string> {
+    const shelf = this.shelf();
+    const project = shelf.projects.find(p => p.id === order.workspace);
+    if (!project) throw new Error(`No project has the workspace ${order.workspace}.`);
+    let window;
+    if (order.open !== undefined) window = await this.mirrors.open(order.open);
+    else {
+      const said = (order.mirror ?? '').toLowerCase();
+      const found = (await this.mirrors.list()).filter(w => w.title.toLowerCase().includes(said) || w.app.toLowerCase().replace(/\.exe$/, '') === said);
+      if (found.length === 0) throw new Error(`No open PC window is called "${order.mirror ?? ''}".`);
+      if (found.length > 1) throw new Error(`Several PC windows match "${order.mirror ?? ''}": ${found.slice(0, 6).map(w => `"${w.title}"`).join(', ')}. Name one more closely.`);
+      window = found[0] as (typeof found)[number];
+    }
+    const id = await this.mirrors.make(project.id, window, false);
+    await this.mirror.tick();
+    this.broadcast({ type: 'notice', text: `"${window.title}" is mirrored into ${project.label}.` });
+    return `Mirrored "${window.title}" into ${project.label} as session ${id}.`;
+  }
+
+  private frame(id: string, frame: Frame): void {
+    const entry = this.frames.get(id) ?? { frame, sent: 0, timer: null };
+    entry.frame = frame;
+    this.frames.set(id, entry);
+    if (entry.timer) return;
+    const gap = this.mirror.shelf().focusedId === id ? FRONT_FRAME_MS : TILE_FRAME_MS;
+    const wait = entry.sent + gap - Date.now();
+    const send = () => {
+      entry.timer = null;
+      entry.sent = Date.now();
+      // Only the latest picture goes; one that arrived while waiting replaced the one before.
+      this.broadcast({ type: 'frame', id, w: entry.frame.w, h: entry.frame.h, mime: entry.frame.mime, data: entry.frame.data });
+    };
+    if (wait <= 0) send(); else entry.timer = setTimeout(send, wait);
+  }
+
+  private refreshNotes(): void {
+    const sessions = this.mirror.shelf().sessions.filter(s => s.window);
+    for (const id of [...this.notes.keys()]) if (!sessions.some(s => s.id === id)) this.notes.delete(id);
+    for (const s of sessions) {
+      const note = this.mirrors.note(s.id);
+      if (this.notes.has(s.id) && this.notes.get(s.id) === note) continue;
+      this.notes.set(s.id, note);
+      this.broadcast({ type: 'window', id: s.id, note });
+    }
+  }
+
+  // ---- Lists to pick from -------------------------------------------------------------------------
+
+  private async openPicker(shelf: Shelf, kind: Picker['kind']): Promise<{ ok: boolean; outcome: string }> {
+    let entries: PickerEntry[];
+    if (kind === 'windows') {
+      // A window joins the project the owner is in; at the overview it joins the overview, as sessions of no project do.
+      const list = await this.mirrors.list();
+      entries = list.map(w => ({ kind: 'windows' as const, label: w.title, detail: w.app.replace(/\.exe$/i, ''), hwnd: w.hwnd }));
+    } else {
+      entries = folders(projectRoots(), await takenFolders(this.herdr)).map(f => ({ kind: 'folders' as const, label: f.name, detail: f.path.startsWith(`${homedir()}/`) ? `~${f.path.slice(homedir().length)}` : f.path, path: f.path }));
+    }
+    if (this.picker) clearTimeout(this.picker.timer);
+    this.picker = { kind, filter: '', page: 0, entries, timer: setTimeout(() => undefined, 0) };
+    this.touchPicker();
+    return { ok: true, outcome: kind === 'windows' ? `${entries.length} PC windows: pick one by its number` : `${entries.length} folders: pick one by its number, or say "make" and a new name` };
+  }
+
+  private filtered(): PickerEntry[] {
+    if (!this.picker) return [];
+    const f = squeezed(this.picker.filter);
+    if (!f) return this.picker.entries;
+    return this.picker.entries.filter(e => squeezed(`${e.label} ${e.detail}`).includes(f));
+  }
+
+  private pickerView(): Picker | null {
+    const p = this.picker;
+    if (!p) return null;
+    const all = this.filtered();
+    const pages = Math.max(1, Math.ceil(all.length / PICKER_PAGE));
+    const items = all.slice(p.page * PICKER_PAGE, (p.page + 1) * PICKER_PAGE).map((e, i) => ({ n: i + 1, label: e.label, detail: e.detail }));
+    const empty = all.length > 0 ? null : p.kind === 'windows'
+      ? (p.filter ? `No PC window matches "${p.filter}".` : 'No PC window can be shown.')
+      : (p.filter ? `No git folder matches "${p.filter}". Say "make it" for a new folder called ${p.filter}.` : 'No git folder that is not a project yet. Say a name, then "make it", for a new one.');
+    return {
+      kind: p.kind,
+      title: p.kind === 'windows' ? 'Mirror a PC window into this project' : 'New project: pick a folder',
+      filter: p.filter, items, page: p.page, pages, empty,
+      make: p.kind === 'folders' && p.filter ? p.filter : null,
+    };
+  }
+
+  private touchPicker(): void {
+    if (!this.picker) return;
+    clearTimeout(this.picker.timer);
+    this.picker.timer = setTimeout(() => { this.closePicker(); this.broadcast({ type: 'notice', text: 'The list closed after a while unused; nothing was made.' }); }, this.pickerIdleMs);
+    this.picker.timer.unref();
+    this.broadcast({ type: 'picker', picker: this.pickerView() });
+  }
+
+  private closePicker(): void {
+    if (this.picker) clearTimeout(this.picker.timer);
+    this.picker = null;
+    this.broadcast({ type: 'picker', picker: null });
+  }
+
+  private async pick(shelf: Shelf, n: number): Promise<{ ok: boolean; outcome: string }> {
+    const p = this.picker;
+    if (!p) return { ok: false, outcome: 'No list is open.' };
+    const entry = this.filtered()[p.page * PICKER_PAGE + n - 1];
+    if (!entry || n < 1 || n > PICKER_PAGE) return { ok: false, outcome: `No item ${n} in the list.` };
+    if (entry.kind === 'windows') {
+      const workspace = currentProject(shelf) ?? shelf.overviewId;
+      if (!workspace) return { ok: false, outcome: 'Go into a project first.' };
+      this.closePicker();
+      await this.mirrors.make(workspace, { hwnd: entry.hwnd, title: entry.label, app: entry.detail }, true);
+      await this.mirror.tick();
+      return { ok: true, outcome: `Mirroring ${entry.label}` };
+    }
+    this.closePicker();
+    const made = await addProject(this.herdr, entry.path);
+    this.log(`project "${made.label}" made from ${made.folder}`);
+    return await this.goToNew(made.workspaceId, made.label);
+  }
+
+  private async makeFromPicker(name: string | null): Promise<{ ok: boolean; outcome: string }> {
+    const p = this.picker;
+    if (!p || p.kind !== 'folders') return { ok: false, outcome: 'Say "new project" first, then "make" and a name.' };
+    const said = (name ?? p.filter).trim();
+    if (!said) return { ok: false, outcome: 'Say the new project\'s name first, then "make it" (or say "make" and the name).' };
+    let made;
+    try { made = await makeProject(this.herdr, newProjectRoot(), said); } catch (error) {
+      p.filter = said; p.page = 0; this.touchPicker();
+      return { ok: false, outcome: (error as Error).message };
+    }
+    this.closePicker();
+    this.log(`project "${made.label}" made in ${made.folder}`);
+    return await this.goToNew(made.workspaceId, made.label);
+  }
+
+  /** Goes into a project just made: its agent comes to the front, as going into any project does. */
+  private async goToNew(workspaceId: string, label: string): Promise<{ ok: boolean; outcome: string }> {
+    await this.mirror.tick();
+    const r = await this.goTo({ project: workspaceId }, label, `${label}'s agent`);
+    return { ok: r.ok, outcome: `Made project ${label}. ${r.outcome}` };
   }
 
   private async prompt(target: Session, text: string): Promise<void> {

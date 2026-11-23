@@ -11,7 +11,7 @@ A personal Quest VR/MR workspace for directing real agents and reviewing their w
 - **Execution segment:** a bounded coordinator-admitted agent attempt or turn; it is not the lifetime of the logical conversation.
 - **Inbox:** owner requests across all projects, with direct destination links and a separate return to origin.
 - **Coordinator:** agent-system, authoritative for execution permissions, capacity, attempts and evidence. Product state links to those records instead of replacing them.
-- **Session:** in the spatial view, one Herdr pane: an agent or a shell. Herdr owns it; the view shows it as a tile or in front.
+- **Session:** in the spatial view, one Herdr pane: an agent, a shell, or a **Window mirror**. Herdr owns it; the view shows it as a tile or in front.
 - **Shelf:** the spatial view's arrangement of one place's sessions: one session large in front (the receiver), the place's other sessions as numbered tiles with state lights beside it, and every other project as a chip with its lights above.
 - **Waiting:** a session Herdr reports as `blocked`, an agent asking a question or awaiting approval. "Next waiting" brings the next one to the front and "back" returns; the spatial view has no Inbox panel.
 - **Helper:** the overview's agent: a small, fast agent that is itself a Herdr session; it answers across projects, and spoken orders starting with "helper" reach it from anywhere. A close happens only after the owner's yes.

@@ -5,6 +5,7 @@
  * speech; the page's microphone is tested in the browser.
  */
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { test } from 'node:test';
 import type { BenchWorkspace } from '../bench/bench.js';
 import { COMMANDS } from '../shared/actions.js';
@@ -135,7 +136,8 @@ test('every command in the registry is heard in standby, and asks before it acts
     const seen = s.watch();
     await front(s, 'a1');
     await focusedIs(s, 'a1');
-    for (const c of COMMANDS.filter(c => !c.whenConfirming)) {
+    // The list commands are heard only while a list is open: they are said below, with one open.
+    for (const c of COMMANDS.filter(c => !c.whenConfirming && !c.whenPicking)) {
       const u = await s.sayStandby(c.say[0] as string);
       assert.equal(u.as, 'command', c.id);
       if (c.viewOnly) assert.equal(seen.ask, null, `${c.id} runs at once`);
@@ -145,6 +147,24 @@ test('every command in the registry is heard in standby, and asks before it acts
       }
       assert.equal(seen.ask, null);
     }
+    const roots = mkdtempSync('/tmp/svs-roots-');
+    process.env.SPATIAL_PROJECT_ROOTS = roots;
+    try {
+      assert.equal((await s.sayStandby('new project')).as, 'command', 'a list opens at once');
+      for (const c of [...COMMANDS.filter(c => c.whenPicking && c.id !== 'cancel'), ...COMMANDS.filter(c => c.id === 'cancel')]) {
+        const u = await s.sayStandby(c.say[0] as string);
+        assert.equal(u.as, 'command', c.id);
+        if (c.viewOnly) assert.equal(seen.ask, null, `${c.id} runs at once`);
+        else { assert.notEqual(seen.ask, null, `${c.id} asks`); await s.sayStandby('no'); }
+      }
+      // With a list open on standby, other words narrow nothing and reach no session; a pick asks first.
+      await s.sayStandby('new project');
+      assert.equal((await s.sayStandby('shop')).as, 'ignored');
+      await s.sayStandby('two');
+      assert.equal(seen.ask, 'Pick 2 from the list');
+      await s.sayStandby('no');
+      await s.sayStandby('cancel');
+    } finally { delete process.env.SPATIAL_PROJECT_ROOTS; rmSync(roots, { recursive: true, force: true }); }
     await settle();
     assert.deepEqual(await s.received(), []);
     assert.equal(await s.focused(), s.bench.pane('a1'), 'no command was done');

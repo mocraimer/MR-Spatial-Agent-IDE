@@ -1,6 +1,6 @@
 # Spatial view: user guide
 
-Your Herdr sessions around you in the Quest 3, in mixed reality at your desk. You work inside one project at a time: its sessions are around you, the session you are working with large in front, and every other project is a small chip with its state lights. Each project has an agent of its own that you can ask about the project and tell to start or prompt its sessions. Above all projects is the overview, where the helper is in front. You act by voice, hand, controller or keyboard.
+Your Herdr sessions around you in the Quest 3, in mixed reality at your desk. You work inside one project at a time: its sessions are around you, the session you are working with large in front, and every other project is a small chip with its state lights. Each project has an agent of its own that you can ask about the project and tell to start or prompt its sessions. Above all projects is the overview, where the helper is in front. A window of your PC, such as the page an agent is serving, can be shown in a project like a session; diffs, pull requests, files and `.md` documents open as sessions running terminal viewers; and new projects are made from the headset. You act by voice, hand, controller or keyboard.
 
 The view shows your real sessions. Herdr owns them: the view asks Herdr to bring a session forward and shows what Herdr reports. Your desk keyboard therefore types into the same session the view shows in front. Sandboxed agents are a separate, opt-in path ([earlier Quest app guide](QUEST-APP-GUIDE.md)); nothing here uses it.
 
@@ -91,7 +91,7 @@ A **project** is a Herdr workspace. The view shows one place at a time, and the 
 | A project | the project's agent, in front when you go in | answers about the project's sessions; on your order, starts sessions in the project and gives them prompts |
 | The overview | the helper | answers across all projects; starts, renames and closes sessions; other quick tasks |
 
-**The project's agent** is a real Claude Code session in the project's workspace, in a tab labelled "project agent". It starts the first time you go into the project; going in sends it nothing. Ask it "what is waiting here?" or "what is everyone doing?", and it reads the project's sessions and answers in its window. Tell it "start an agent on the flaky test" or "tell the test session to rebase", and it does that in this project only. It never acts unasked, and it does not do the project's work itself. Anything else, such as changing a file, running a command that changes something, or acting on another project, waits for your approval: its window shows the question and its light turns amber, and you answer with the keys below the front session. It runs on Claude Code's default model and works in its own folder (see *What this rests on*).
+**The project's agent** is a real Claude Code session in the project's workspace, in a tab labelled "project agent". It starts the first time you go into the project; going in sends it nothing. Ask it "what is waiting here?" or "what is everyone doing?", and it reads the project's sessions and answers in its window. Tell it "start an agent on the flaky test" or "tell the test session to rebase", and it does that in this project only. On your order it also shows a web page or a PC window in the project ("show me localhost 3000") and opens viewers for diffs and documents ("show the diff"). It never acts unasked, and it does not do the project's work itself. Anything else, such as changing a file, running a command that changes something, or acting on another project, waits for your approval: its window shows the question and its light turns amber, and you answer with the keys below the front session. It runs on Claude Code's default model and works in its own folder (see *What this rests on*).
 
 **The helper** is in front at the overview. From inside any project, start a sentence with "helper" to reach it without leaving: "helper, start a shell in project docs". Orders with no project named start the session in the helper's workspace, so it shows at the overview.
 
@@ -119,10 +119,42 @@ Point a hand or controller at something. A ray shows where you point. Pinch (han
 | Answer a close the helper asks about | **Yes, close** / **No, keep it** in the strip, or the y / n key | "yes" / "no" |
 | Change the listening mode | the Talk button: hold it to talk, tap it to keep listening | "hold to talk", "keep listening" (also "start listening") |
 | Stop listening | Select the microphone | "stop listening" |
+| Show a PC window in this project | **Mirror** | "mirror" |
+| Make a project from a folder, or a new one | **New project** | "new project" |
+| In a list: pick | Select its card | its number: "two", "number two" |
+| In a list: narrow it | — | say a name: "notepad", "shop" |
+| In a list: next or previous page, close it | **More**, **Previous**, **Cancel** | "more", "previous", "cancel" |
+| In the folder list: a new folder | **Make new: …** (after saying its name) | "make garden", or a name then "make it" |
 
 A command must be the whole utterance. "back up the database before you migrate" is a prompt, not "back". "Go" alone sends a draft; "go to docs" goes to a project. When "next waiting" finds nothing waiting, it says so. "Next waiting" goes to the waiting session itself, in whatever project it is, and "back" returns you to the session and project you came from.
 
 To type, use the keyboard at the desk: it types into Herdr's focused session, which is the one in front.
+
+## PC windows in a project (window mirrors)
+
+A **window mirror** shows one window of your PC, such as a browser with the page an agent built, in the project you are in, like one of its sessions: a numbered tile, and large in front when you select it.
+
+- **Mirror one yourself:** select **Mirror** or say "mirror". Your PC's open windows appear as numbered cards in place of the front session. Select one, or say its number; say part of a title to narrow the list. It joins the project you are in and comes to the front.
+- **Ask an agent:** "show me localhost 3000" (to the project's agent) or "helper, show me localhost 3000 in docs". The agent opens the page in a new browser window on the PC and mirrors it into that project as a new session; what is in front does not change. An agent can also mirror an open window by its name.
+- **Use it:** point at the picture and select to click there; the thumbstick, a grab-drag or **Scroll up/Scroll down** scroll it. Keys you type at the desk go to the window while its session is in front, and to the session in front again once you bring another forward. The key buttons below the front session work on it too.
+- **What it says:** a window minimized, hidden or closed on the PC shows a band saying so and what to do; the picture comes back by itself when the window is back. A closed window's session stays until you close it.
+- **Closing** a mirror closes only its session, after your yes like any session; the window on the PC stays open.
+- The window stays on your PC's monitor while it is mirrored, and must not be minimized there to be seen in the headset.
+- Its picture is a picture: whether it is sharp enough to read in the headset is for you to judge by wearing it. If it is not, the Quest browser (after leaving mixed reality) is the fallback.
+
+The view needs Python 3.12 on Windows with the open-source `windows-capture` package, installed once for your user from a Windows terminal: `py -3.12 -m pip install --user windows-capture pywin32`. Nothing needs administrator rights. If it is missing, the view says so where the picture would be, with the command.
+
+## Diffs, pull requests, files and `.md` documents
+
+These open as ordinary sessions running terminal viewers, drawn sharp like any session. Ask the project's agent: "show the diff", "show pull request 12", "show me the README". It opens a new session named for it in the project's folder, running one viewer: `lazygit` for the changes, `git diff | delta` for the diff, `gh pr diff 12 | delta` for a pull request, `bat` for a file, `glow -p` for a document. It can open only these viewers this way. You can also run them yourself in any shell session. A full-screen viewer larger than the front panel is shown whole, with smaller text; **A+** makes everything larger.
+
+## Making a project
+
+A project is a Herdr workspace that starts in a folder, so its sessions start there.
+
+- **A new project:** say "helper, new project recipes". The helper makes `recipes` in your home folder (`~/recipes`), sets up git in it, and makes the project; say "go to recipes" to go there. A name whose folder already exists is refused, and nothing is changed.
+- **An existing folder:** say "helper, add the folder video-factory as a project". The helper names the folder it found and waits for your yes.
+- **From the shelf:** select **New project** or say "new project". The git folders one level inside your home folder, and inside each folder listed in `~/.local/share/spatial-agent-workspace/view/project-roots` (one path per line, kept on your PC only), that are not a project yet appear, most recently changed first. Select one, or say its number, and you go into the new project. To make a new folder instead, say its name and then "make it" (or select **Make new: …**), or say "make" and the name at once.
 
 ## Speaking
 
@@ -143,7 +175,7 @@ On standby the view acts on commands only, and nothing is ever sent to a session
 
 So after "stop listening" you can turn voice back on by voice: say "keep listening" (or "start listening"), then "yes". The same "yes" answers a close the helper asks about (it says "Close … ?"); only one question waits at a time, and the strip says which one you answered. While a close waits, a command heard on standby is refused until you have answered it.
 
-Anything that is not a command is a **prompt**. It goes to the session that was in front when you started speaking, even if you bring another session forward before you finish.
+While a list to pick from is open (**Mirror**, **New project**), words that are not a command narrow the list and are never sent to a session; on standby they are ignored, and a pick or a "make" is asked first like any command. Otherwise, anything that is not a command is a **prompt**. It goes to the session that was in front when you started speaking, even if you bring another session forward before you finish.
 
 ### Drafts: a prompt waits for "go"
 
@@ -187,6 +219,8 @@ A command must be the whole utterance. These are all the forms, each in quotatio
 | Overview | "overview", "show overview", "go to overview", "go to the overview", "all projects", "show helper", "helper" |
 | Go into a project, show a session | "go to" or "show" and a name or number: "go to docs", "show 3", "show logs" |
 | Answer a question that waits | "yes", "confirm", "yes close it", "close it"; "no", "cancel", "dont close", "keep it" |
+| Mirror a PC window, New project | "mirror", "mirror a window", "show windows", "show pc windows", "pc windows"; "new project", "add project", "add a project", "make a project" |
+| In a list | a number ("two", "number two", "pick two"); "more", "next page", "show more"; "previous", "previous page"; "cancel", "close list", "close the list", "never mind"; "make it", "make new", "make a new folder", "make that", or "make" and a name; any other words narrow it |
 
 ## Closing, and what the agents may do
 
@@ -196,10 +230,12 @@ The helper is a small, fast agent (Claude Code with Haiku) in a tab labelled "he
 - "helper, start a claude agent in project infra"
 - "helper, rename the shell in project docs to logs"
 - "helper, how much disk is free?"
+- "helper, new project recipes"
+- "helper, show me localhost 3000 in docs"
 
 It runs these without asking you, using your account and access, with one exception. **Closing asks first,** for the helper and for every project's agent: the agent names the session in the strip, and nothing closes until you say "yes" or select **Yes, close**. With no answer within two minutes, or a "no", it stays open. This holds even if the order says not to ask: a hook outside the agents refuses any other way of closing, and it keeps working after Herdr restarts them. You can also type orders to the helper: say "overview" or select **Overview**, and type at the desk.
 
-A project's agent has less reach than the helper: on its own it only reads the project's sessions, starts sessions in the project and gives them prompts. Everything else waits for your approval in its window.
+A project's agent has less reach than the helper: on its own it only reads the project's sessions, starts sessions in the project, gives them prompts, and mirrors a page or PC window into the project. It never types into a mirrored window. Everything else waits for your approval in its window.
 
 **To remove a project's agent,** close its "project agent" tab like any session (ask the helper, or close it in Herdr). Going into the project again starts a new one.
 
@@ -220,6 +256,10 @@ A window that is not current says so on an amber band, and says what to do. It r
 | The helper / This project's agent is starting | Wait a few seconds; the band goes when it is ready. |
 | (an amber light on an agent that just started) | It asks something, such as whether to trust its folder: answer in its window with the keys below it (↓ then Enter for "Yes, I trust this folder"). |
 | It did not start (…) | Go to the project again, or say "overview" for the helper, to retry. If it keeps failing, check that `claude` runs in a terminal. |
+| Minimized / Hidden on the PC | Restore or show the window on the PC; the picture comes back by itself. |
+| This window was closed on the PC | Close the session, or mirror the window again. |
+| This mirror is not running | Herdr or the view restarted. Close the session and mirror the window again. |
+| The PC is missing the windows-capture package (or Python) | On Windows, run `py -3.12 -m pip install --user windows-capture pywin32` (installing Python 3.12 first if needed), then select **Mirror** again. |
 | Mic unavailable: Mic refused | Allow the microphone for this page in the Quest browser's site settings, then select the microphone again. |
 | Speech unavailable: Not set up on the PC | Run `npm run view:setup` once and restart the view. |
 
@@ -245,4 +285,5 @@ Then delete the view's data directory, `~/.local/share/spatial-agent-workspace/v
 - **Herdr 0.9.3, socket protocol 22.** If Herdr's protocol changes, the view says so and shows no sessions until they match.
 - **Quest browser:** a WebXR `immersive-ar` session, hand tracking, controllers, and the microphone, on a page with a self-signed certificate. The text is drawn by the view itself onto WebGL quads; compositor layers are not used.
 - **Speech:** Moonshine tiny, English, 8-bit weights, about 31 MB, on the PC's CPU through `@huggingface/transformers` and ONNX Runtime. About 0.1 s per utterance on this PC.
+- **Window mirrors:** a small helper on Windows (`view/windows/window_helper.py`), started by the view through WSL and talking to it over its own input and output (it listens on no port). It uses Windows' own window capture through the open-source `windows-capture` package, at most 15 pictures a second, and passes clicks and keys by bringing the window forward for a moment. Each mirror is a Herdr session running `mirror-session.js`, labelled "window: " and the window's title.
 - **Level agents:** Claude Code, using your existing Claude login: the helper with `--model haiku`, each project's agent on Claude Code's default model. Their settings, the closing hook and their instructions live in `~/.local/share/spatial-agent-workspace/view/agents` (one folder for the helper, one shared by all project agents), which is also where they work, so an agent Herdr restarts by itself keeps them. A project agent is found again by its tab label "project agent", the helper by its label "helper"; renaming those tabs makes the view start new ones.

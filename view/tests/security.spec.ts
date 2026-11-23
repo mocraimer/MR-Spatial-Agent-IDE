@@ -55,6 +55,8 @@ test('only a paired headset reads or drives sessions; nothing logs a secret or s
     ['POST', '/api/action', JSON.stringify({ focus: r.bench.pane('sh') })], ['POST', '/api/action', JSON.stringify({ go: r.bench.workspaces.get('alpha') })],
     // Every action the bridge carries out, as the registry lists them.
     ...COMMANDS.filter(c => 'bridge' in c.run).map(c => ['POST', '/api/action', JSON.stringify({ command: c.id })] as const),
+    // Window mirrors and lists: a pick, and a click into a mirrored window (the list commands are in the registry above).
+    ['POST', '/api/action', JSON.stringify({ pick: 1 })], ['POST', '/api/action', JSON.stringify({ window: r.bench.pane('sh'), input: { type: 'click', x: 0.5, y: 0.5 } })],
     ['POST', `/api/utterance?receiver=${r.bench.pane('sh')}`, Buffer.alloc(64000)],
     ['POST', `/api/utterance?receiver=${r.bench.pane('sh')}&standby=1`, Buffer.alloc(64000)],
   ] as const) {

@@ -8,6 +8,8 @@ import { Bridge, type Transcriber } from './bridge.js';
 import { HerdrClient } from './herdr.js';
 import { fileLog } from './log.js';
 import { DEFAULT_MIRROR, Mirror, type MirrorOptions } from './mirror.js';
+import { Mirrors } from './mirrors.js';
+import { HelperWindows, type Windows } from './windows.js';
 import { startServer } from './server.js';
 import { Settings } from './settings.js';
 import { LocalSpeech, modelDirectory } from './speech.js';
@@ -25,6 +27,8 @@ export interface ViewOptions {
   mirror?: MirrorOptions;
   closeAnswerMs?: number;
   standbyAnswerMs?: number;
+  /** The PC's windows; by default the helper on Windows (or the stand-in SPATIAL_WINDOW_HELPER names). */
+  windows?: Windows;
 }
 
 export interface RunningView {
@@ -53,8 +57,10 @@ export async function startView(options: ViewOptions): Promise<RunningView> {
   const closeSocket = join(options.dataDirectory, 'helper.sock');
   const agents = options.agents ?? new HerdrLevelAgents(herdr, claudeAgents(join(options.dataDirectory, 'agents')), closeSocket);
   const settings = new Settings(options.dataDirectory);
-  const bridge = new Bridge(herdr, mirror, speech, agents, { closeAnswerMs: options.closeAnswerMs, standbyAnswerMs: options.standbyAnswerMs, log, settings });
+  const mirrors = new Mirrors(herdr, options.windows ?? new HelperWindows(log), join(options.dataDirectory, 'mirror.sock'), log);
+  const bridge = new Bridge(herdr, mirror, speech, agents, { closeAnswerMs: options.closeAnswerMs, standbyAnswerMs: options.standbyAnswerMs, log, settings, mirrors });
   const closeServer: NetServer = serveCloseRequests(closeSocket, ref => bridge.requestClose(ref), log);
+  mirrors.serve(order => bridge.mirrorOrder(order));
   const pairing = new PairingAuthority(join(options.dataDirectory, 'pairing'));
   const tls = join(options.dataDirectory, 'tls');
   let certificate;
@@ -79,6 +85,8 @@ export async function startView(options: ViewOptions): Promise<RunningView> {
     url: `https://127.0.0.1:${port}`,
     async stop() {
       mirror.stop();
+      bridge.stop();
+      mirrors.close();
       server.closeAllConnections();
       await new Promise(resolve => server.close(resolve));
       await new Promise(resolve => closeServer.close(resolve));

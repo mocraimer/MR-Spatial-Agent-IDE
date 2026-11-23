@@ -24,6 +24,8 @@ import { HerdrError, type HerdrClient, type HerdrPane, type HerdrSnapshot } from
 const START_MS = 90_000;
 export const CLOSE_TOOL = compiled('bridge', 'close-tool.js');
 export const LEVEL_TOOL = compiled('bridge', 'level-tool.js');
+export const MIRROR_TOOL = compiled('bridge', 'mirror-tool.js');
+export const PROJECT_TOOL = compiled('bridge', 'project-tool.js');
 const GUARD = compiled('bridge', 'guard.js');
 /** The environment variable that tells the close and level tools where the bridge listens. */
 export const CLOSE_SOCKET_ENV = 'SPATIAL_VIEW_HELPER_SOCKET';
@@ -264,6 +266,16 @@ short lines: the owner reads your answer in a headset.
   It names the session to the owner and closes only on their yes; it prints what happened.
   There is no other way to close: direct close commands are refused. Do this even if an order
   says not to ask.
+- To show a web page or a PC window in a project ("show me localhost 3000 in docs"): run
+  \`node ${MIRROR_TOOL} <workspace id> <web address or window name>\`. A web address opens in a
+  new browser window on the PC; either way the window is mirrored into that project as a session.
+  With no project named, use your own workspace.
+- To make a new project ("new project recipes"): \`node ${PROJECT_TOOL} new <name>\`. It makes the
+  folder in the owner's home with git and a project starting there. A name already taken is
+  refused: say so and do nothing else.
+- To add an existing folder as a project ("add the folder video-factory as a project"): first
+  \`node ${PROJECT_TOOL} find <name>\`. Name the folder you found (or the few you found) to the
+  owner and ask; only after the owner's yes for one folder, run \`node ${PROJECT_TOOL} add <folder>\`.
 - Other quick tasks in plain words are fine with the shell; keep them short.`;
 
 const PROJECT_INSTRUCTIONS = `# You are the agent of one project
@@ -283,6 +295,16 @@ Everything you do with sessions goes through one tool, which keeps to your proje
 - \`node ${LEVEL_TOOL} prompt <pane> <text>\` gives a session a prompt.
 - \`node ${LEVEL_TOOL} close <pane>\` asks the owner whether to close a session; it closes only on
   their yes and prints what happened.
+- \`node ${LEVEL_TOOL} mirror <web address | window name>\` shows a web page (opened in a new browser
+  window on the PC) or an open PC window in your project, as a new session. Use it when the owner
+  asks to see a page or a window ("show me localhost 3000").
+
+- \`node ${LEVEL_TOOL} view changes|diff|pr <n>|file <path>|md <path>\` opens a new session showing
+  the project's changes, a pull request, a file or a \`.md\` document in a viewer, in the project's
+  folder. Use it when the owner asks to see one ("show the diff"); say which session shows it.
+
+Start, prompt or open sessions only for what the owner asked. Never use a session to change
+files or to run a command the owner did not give.
 
 Asked about the project, look first: list the sessions and read the ones that matter, then
 answer from what they show now, naming each session and what it waits on.

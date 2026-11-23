@@ -61,7 +61,7 @@ test('an utterance is a command only when the whole of it is one', () => {
 });
 
 test('inside a project: its sessions beside the front, every other project a chip, the overview chip first; numbers across all projects', () => {
-  const session = (id: string, workspaceId: string, role: Session['role'] = 'task') => ({ id, workspaceId, role, agent: 'claude', status: 'idle' as const, name: id });
+  const session = (id: string, workspaceId: string, role: Session['role'] = 'task') => ({ id, workspaceId, role, agent: 'claude', status: 'idle' as const, name: id, window: false, screen: null });
   const shelf: Shelf = {
     herdr: { state: 'up' },
     projects: ['w1', 'w2', 'w3', 'ov'].map(id => ({ id, label: id === 'ov' ? 'helper' : `project ${id}` })),
@@ -86,7 +86,7 @@ test('inside a project: its sessions beside the front, every other project a chi
 test('chips and nodes stay within 90 degrees either side, at 7 projects and at 14', () => {
   for (const count of [7, 14]) {
     const projects = Array.from({ length: count }, (_, i) => ({ id: `w${i}`, label: `a rather long project name number ${i}` }));
-    const sessions = projects.map(p => ({ id: `${p.id}:p1`, workspaceId: p.id, role: 'task' as const, agent: 'claude', status: 'idle' as const, name: 'x' }));
+    const sessions = projects.map(p => ({ id: `${p.id}:p1`, workspaceId: p.id, role: 'task' as const, agent: 'claude', status: 'idle' as const, name: 'x', window: false, screen: null }));
     for (const focusedId of [null, 'w0:p1']) {
       const { chips } = arrange({ herdr: { state: 'up' }, projects, sessions, focusedId, overviewId: null, starting: [], failed: [], drafts: [] });
       const widest = Math.max(...chips.map(c => Math.abs(c.angle) + (c.width / 2) / CHIP_ARC * 180 / Math.PI));
@@ -107,8 +107,8 @@ test('a spoken session reference resolves by tile number, name or project', () =
     herdr: { state: 'up' },
     projects: [{ id: 'w2', label: 'storefront-web' }, { id: 'w1', label: 'billing' }],
     sessions: [
-      { id: 'w1:p1', workspaceId: 'w1', role: 'task', agent: 'claude', status: 'idle', name: 'ledger' },
-      { id: 'w2:p1', workspaceId: 'w2', role: 'task', agent: null, status: 'unknown', name: 'logs' },
+      { id: 'w1:p1', workspaceId: 'w1', role: 'task', agent: 'claude', status: 'idle', name: 'ledger', window: false, screen: null },
+      { id: 'w2:p1', workspaceId: 'w2', role: 'task', agent: null, status: 'unknown', name: 'logs', window: false, screen: null },
     ],
     focusedId: null, overviewId: null, starting: [], failed: [], drafts: [],
   };
