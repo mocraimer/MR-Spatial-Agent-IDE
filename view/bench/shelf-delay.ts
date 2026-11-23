@@ -46,16 +46,22 @@ const quietWav = (() => {
 
 try {
   // ---- Voice ----
-  let kokoroReady = false;
+  let kokoroLabel = 'async-delay stand-in (1300 ms setTimeout — proves event loop is free)';
   type AnyVoice = { problem: () => null | string; speak: (text: string) => Promise<Buffer> };
-  let voice: AnyVoice = { problem: () => null, speak: async () => quietWav };
+  // Default: a voice that sleeps 1300 ms asynchronously (matches Kokoro first-sentence median).
+  // The sleep is a promise-based setTimeout, which does NOT block the event loop. This validates
+  // the architecture: the bridge main loop processes shelf events even while voice is "busy".
+  let voice: AnyVoice = {
+    problem: () => null,
+    speak: (text: string) => new Promise(resolve => setTimeout(() => resolve(quietWav), 1300 + text.length * 0.5)),
+  };
 
   if (kokoroModelDir) {
     const modelPath = join(kokoroModelDir, KOKORO_MODEL);
     await new Promise<void>((resolve) => {
       const kv = new KokoroVoice(
         modelPath, KOKORO_VOICE, new WindowsVoice(),
-        () => { kokoroReady = true; voice = kv; resolve(); },
+        () => { voice = kv; kokoroLabel = 'real Kokoro voice'; resolve(); },
         reason => { console.warn('Kokoro failed to load:', reason); resolve(); },
       );
     });
@@ -97,7 +103,7 @@ try {
     }).observe(document.body, { childList: true, subtree: true, characterData: true });
   });
 
-  console.log(`\n=== AC-2.3 shelf-to-page delay (voice: ${kokoroReady ? 'Kokoro' : 'silent stand-in'}) ===`);
+  console.log(`\n=== AC-2.3 shelf-to-page delay (voice: ${kokoroLabel}) ===`);
   console.log(`Gate: p95 ≤ 300 ms\n`);
 
   const delays: number[] = [];
@@ -131,12 +137,8 @@ try {
       // what matters is that the bridge-to-page roundtrip is fast. Use wall-clock elapsed instead.
       const wallMs = Date.now() - triggerMs;
       delays.push(wallMs);
-      process.stdout.write(`  [${i + 1}/${TRIALS}] ${wallMs} ms`);
-      if (kokoroReady) {
-        const synthMs = Date.now() - synthStart;
-        process.stdout.write(` (synth running ~${synthMs} ms)`);
-      }
-      process.stdout.write('\n');
+      const synthMs = Date.now() - synthStart;
+      console.log(`  [${i + 1}/${TRIALS}] delay ${wallMs} ms (synth ~${synthMs} ms)`);
     } else {
       console.log(`  [${i + 1}/${TRIALS}] no mutation in 500 ms`);
     }

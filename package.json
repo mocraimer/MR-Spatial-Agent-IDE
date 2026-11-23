@@ -29,6 +29,7 @@
     "agent-system": "file:vendor/coordinator-api",
     "eslint": "^9.13.0",
     "iwer": "^2.8.0",
+    "sherpa-onnx-node": "^2.0.3",
     "typescript": "^5.6.3",
     "typescript-eslint": "^8.12.0"
   },

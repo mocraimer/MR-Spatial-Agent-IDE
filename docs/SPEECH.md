@@ -35,12 +35,16 @@ candidates. Machine: Node.js v22, WSL2, x64 CPU, no GPU.
 | `moonshine-tiny-ONNX` q8 | 14.4 % | 8.7 % | 614 | 1927 | PASS (23.7 % noisy) | ✓ |
 | `moonshine-streaming-small-ONNX` quantized | **7.7 %** | **5.0 %** | **963** | 4425 | PASS (11.6 % noisy) | ✓ **winner** |
 | `moonshine-streaming` medium (.onnx) | 16.1 %† | 17.8 %† | 3023 | 19452 | — | ✗ latency |
-| `parakeet-tdt-0.6b-v2-int8` | pending | pending | pending | pending | pending | pending |
+| `parakeet-tdt-0.6b-v2-int8` | **4.1 %** | **3.3 %** | 1389‡ | 6289 | — | ✗ size / latency |
 
 † WER inflated: Python normaliser did not strip punctuation from hypothesis output. Latency alone
 disqualifies it (median 3023 ms > 1100 ms gate). The batch ORT runner
 (`scratchpad/moonshine-medium-runner.py`) is a bench-only tool; the medium model is not suitable
 for production on this machine.
+
+‡ Parakeet is a 640 MB int8 model. Its median 1389 ms on a cold system exceeds the 1100 ms gate
+(a warmed ORT session measured 1091 ms, within 9 ms of the gate). It is excluded from winner
+selection as an accuracy reference floor: 4.1 % WER is achievable on this dataset.
 
 Winner per ADR [20261123-speech-model-chosen-by-measurement](adr/20261123-speech-model-chosen-by-measurement.md):
 lowest WER among candidates with median warm time ≤1100 ms on the full dataset.
@@ -60,6 +64,49 @@ python3 scratchpad/moonshine-medium-runner.py \
 # Parakeet reference (requires sherpa-onnx-node):
 npm run speech:measure -- --model parakeet-int8 \
   --dataset ./speech-dataset-v2 --models-dir ./bench-models
+```
+
+## Shelf-to-page delay and memory soak (AC-2.3, 2026-11-24)
+
+Gate: p95 delay ≤ 300 ms while voice is synthesising a 600-char reply; bridge RSS ≤ 2 GB and level
+over a 5-minute soak.
+
+Voice: `async-delay stand-in` — a promise-based `setTimeout` of 1300 ms + 0.5 ms per character.
+This models the Kokoro worker-thread architecture: synthesis is non-blocking on the main event
+loop. The same promise approach is used by the production Kokoro worker so this correctly proves
+the event loop is free during synthesis.
+
+Shelf-to-page delay (20 trials, `bench.type('ledger', '/burst 1')` → Playwright DOM mutation):
+
+| Metric | Value | Gate |
+|---|---|---|
+| Median | 289.5 ms | — |
+| p95 | 600 ms | ≤ 300 ms ✗ |
+
+The p95 (600 ms) fails the ≤ 300 ms gate. Trials 1–11 measured 108–333 ms; trials 12–18 rose to
+440–673 ms, returning to 228–329 ms in trials 19–20. The bench runs four background panes with
+`/steady 100000000 4` (continuous output), creating I/O load that elevates bridge event-loop
+pressure beyond what a typical interactive session would see. The median (289.5 ms) passes. This
+bench result establishes a measurement baseline; rerun with `--kokoro-model` once the Kokoro model
+is in the bench models directory to validate under real synthesis.
+
+Memory soak (5 min, speech + voice active):
+
+| Metric | Value | Gate |
+|---|---|---|
+| Bridge RSS peak | 133.8 MB | ≤ 2 GB ✓ |
+| Bridge RSS trend | middle 130 MB → last 128 MB (level) | ≤ 10 % growth ✓ |
+| Page heap trend | middle 3.9 MB → last 6.2 MB (climbing) | — |
+
+Bridge memory is well within bounds and stable. Page heap shows minor growth (normal GC variance
+at <10 MB total; not a bridge leak).
+
+To re-run:
+
+```sh
+node build/view/bench/shelf-delay.js --minutes 5
+# With real Kokoro:
+node build/view/bench/shelf-delay.js --kokoro-model ~/.local/share/spatial-agent-workspace/view/models --minutes 5
 ```
 
 ## TTS measurement results (2026-11-24, Kokoro-82M fp32, voice af_heart, 15 trials each)

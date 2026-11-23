@@ -31,16 +31,19 @@ The measurement results (JSON) are saved beside the models directory for audit.
 | `onnx-community/moonshine-tiny-ONNX` q8 | 14.4 % | 8.7 % | 614 ms | 1927 ms | ✓ |
 | `Workmind/moonshine-streaming-small-ONNX` quantized | **7.7 %** | **5.0 %** | **963 ms** | 4425 ms | ✓ **winner** |
 | `moonshine-ai/moonshine-streaming` medium (.ort) | 16.1 %* | 17.8 %* | 3023 ms | 19452 ms | ✗ latency |
+| `parakeet-tdt-0.6b-v2-int8` (sherpa-onnx-node) | **4.1 %** | **3.3 %** | 1389 ms† | 6289 ms | ✗ size/latency |
 
 \* WER inflated: Python normalizer does not strip punctuation from hypothesis; model outputs
 commas/periods that are not in the reference texts. Latency alone disqualifies it (median 3023 ms
 exceeds the 1.1 s gate), so the exact WER is not material.
 
+† Parakeet (640 MB int8): cold-system median 1389 ms exceeds the 1.1 s gate. A warm ORT session
+measured 1091 ms (9 ms under the gate), which is too close to treat as passing. Excluded from
+winner selection; serves as accuracy reference floor (4.1 % WER is the best achievable on this
+dataset with the candidates evaluated).
+
 The streaming small model requires audio length divisible by 80 (frame_len). The production
 `LocalSpeech.transcribe()` pads each chunk by up to 79 silent samples before inference.
-
-Parakeet 0.6b measurement is pending (requires sherpa-onnx-node); included as accuracy reference
-but excluded from winner selection (expected size ~640 MB, latency unknown).
 
 ## Alternatives Considered
 - **Fix Moonshine tiny q8 forever**: Simple but may miss improvements from v2 models.

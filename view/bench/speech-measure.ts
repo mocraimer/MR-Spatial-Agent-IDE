@@ -119,6 +119,64 @@ function loadDataset(dir: string): Utterance[] {
 // --------------- Transcription interface ---------------
 type Transcribe = (audio: Float32Array) => Promise<string>;
 
+/** Parakeet int8 model via sherpa-onnx-node. Downloads files from HuggingFace on first run. */
+async function loadParakeetModel(): Promise<Transcribe> {
+  const PARAKEET_REPO = 'csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8';
+  const modelDir = join(MODELS_DIR, 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8');
+  mkdirSync(modelDir, { recursive: true });
+
+  const files = ['encoder.int8.onnx', 'decoder.int8.onnx', 'joiner.int8.onnx', 'tokens.txt'];
+  for (const f of files) {
+    const dest = join(modelDir, f);
+    if (!existsSync(dest)) {
+      console.log(`Downloading ${f} (~640 MB total; this will take a while)…`);
+      const url = `https://huggingface.co/${PARAKEET_REPO}/resolve/main/${f}?download=true`;
+      const { execFileSync } = await import('node:child_process');
+      execFileSync('curl', ['-L', '--max-time', '600', '-o', dest, url], { stdio: ['ignore', 'inherit', 'inherit'] });
+    }
+  }
+
+  // sherpa-onnx-node is CommonJS-only. Use createRequire so it can be called from an ESM context.
+  const { createRequire } = await import('node:module');
+  type SherpaStream = { acceptWaveform: (obj: { samples: Float32Array; sampleRate: number }) => void };
+  const sherpa = createRequire(import.meta.url)('sherpa-onnx-node') as {
+    OfflineRecognizer: new (config: {
+      modelConfig: {
+        transducer: { encoder: string; decoder: string; joiner: string };
+        tokens: string;
+        modelType: string;
+        numThreads: number;
+      };
+      decodingConfig: { method: string };
+    }) => {
+      createStream: () => SherpaStream;
+      decode: (stream: SherpaStream) => void;
+      getResult: (stream: SherpaStream) => { text: string };
+    };
+  };
+
+  const rec = new sherpa.OfflineRecognizer({
+    modelConfig: {
+      transducer: {
+        encoder: join(modelDir, 'encoder.int8.onnx'),
+        decoder: join(modelDir, 'decoder.int8.onnx'),
+        joiner:  join(modelDir, 'joiner.int8.onnx'),
+      },
+      tokens: join(modelDir, 'tokens.txt'),
+      modelType: 'nemo_transducer',
+      numThreads: 4,
+    },
+    decodingConfig: { method: 'greedy_search' },
+  });
+
+  return async (audio: Float32Array) => {
+    const stream = rec.createStream();
+    stream.acceptWaveform({ samples: audio, sampleRate: 16000 });
+    rec.decode(stream);
+    return rec.getResult(stream).text.trim();
+  };
+}
+
 /**
  * Moonshine streaming models (Workmind export) require audio length divisible by 80 (frame_len).
  * transformers.js v4 does not pad automatically for this architecture, so we do it here.
@@ -159,7 +217,9 @@ mkdirSync(MODELS_DIR, { recursive: true });
 
 console.log('Loading model (may download)…');
 const t0 = Date.now();
-const transcribe = await loadTransformersModel(MODEL_ID, DTYPE);
+const transcribe = MODEL_ID === 'parakeet-int8'
+  ? await loadParakeetModel()
+  : await loadTransformersModel(MODEL_ID, DTYPE);
 const loadMs = Date.now() - t0;
 console.log(`Model loaded in ${loadMs} ms.\n`);
 
