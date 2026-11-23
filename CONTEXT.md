@@ -20,3 +20,4 @@ A personal Quest VR/MR workspace for directing real agents and reviewing their w
 - **Chip:** a project shown as one small card with its name and one state light per session; at the overview the larger form is a node.
 - **Draft:** spoken words typed into a session's input and not yet sent; "go" sends them, "scratch that" clears them, and further speech is added to them.
 - **Standby:** the microphone open while listening is off: speech is heard only for commands, each done after the owner's yes (those that only change the view run at once), and no spoken words are sent to a session.
+- **Window mirror:** a window of the PC shown in a project like one of its sessions: its picture comes from the PC, and clicks and keys go back to that window. It is not an **Environment** (the window is the owner's own, not isolated), and not the bridge's "mirror", its copy of Herdr's sessions.

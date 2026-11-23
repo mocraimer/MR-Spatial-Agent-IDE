@@ -18,3 +18,4 @@ ground for every contributor and agent, regardless of tooling. Read `NORTH_STAR.
   contradicts or narrows an existing decision. Write new records per
   `docs/adr/CONVENTIONS.md` — it is self-contained, and writing one is one act: the
   record, the restatus of what it changes, and the index rebuild together.
+<!-- setup-project update declined through v20 -->
