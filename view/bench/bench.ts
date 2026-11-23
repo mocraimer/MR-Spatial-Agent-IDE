@@ -43,8 +43,10 @@ export class HerdrBench {
     const directory = mkdtempSync('/tmp/svb-');
     mkdirSync(join(directory, 'home'));
     const bench = new HerdrBench(directory, new HerdrClient(join(directory, 'home', '.config', 'herdr', 'herdr.sock')), options.path ?? []);
-    try { await bench.startServer(); } catch (error) { await bench.stop(); throw error; }
-    for (const workspace of layout) await bench.addWorkspace(workspace);
+    try {
+      await bench.startServer();
+      for (const workspace of layout) await bench.addWorkspace(workspace);
+    } catch (error) { await bench.stop(); throw error; }
     return bench;
   }
 
