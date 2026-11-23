@@ -86,6 +86,8 @@ export const PICKER_PAGE = 12;
 export const PICKER_IDLE_MS = 180_000;
 /** The session in front gets a window's picture this often at most; other mirrors' tiles less often. */
 const FRONT_FRAME_MS = 66;
+/** How long after /model or /effort confirmation to keep watching for delayed settings writes. */
+const RESTORE_WATCH_MS = 4_000;
 const TILE_FRAME_MS = 1000;
 
 type PickerEntry = { kind: 'windows'; label: string; detail: string; hwnd: number } | { kind: 'folders'; label: string; detail: string; path: string };
@@ -646,10 +648,15 @@ export class Bridge {
     const before = confirmations(await this.herdr.read(session.id, 30)).length;
 
     // Save defaults before the command changes the settings file.
+    // If the save fails (file unreadable or corrupt), report it in the outcome rather than typing.
     let token: ReturnType<typeof saveDefaults> | null = null;
+    let saveError: string | null = null;
     if (this.settingsFilePath) {
       try { token = saveDefaults(this.settingsFilePath); }
-      catch (error) { this.log(`could not read ${this.settingsFilePath} before ${typed}: ${(error as Error).message}`); }
+      catch (error) {
+        saveError = (error as Error).message;
+        this.log(`could not read ${this.settingsFilePath} before ${typed}: ${saveError}`);
+      }
     }
 
     await this.herdr.call('pane.send_input', { pane_id: session.id, text: typed, keys: ['enter'] });
@@ -663,21 +670,39 @@ export class Bridge {
       if (Date.now() > deadline) break;
     }
 
-    // Restore the owner's defaults.
+    // Restore the owner's defaults. Claude Code may write the file slightly after the confirmation
+    // line prints, so keep polling for RESTORE_WATCH_MS after the confirmation (or deadline) and
+    // restore whenever tracked values differ.
     let restoreError: string | null = null;
     if (token) {
-      try { restoreDefaults(token); }
-      catch (error) {
-        restoreError = (error as Error).message;
-        this.log(`could not restore default after ${typed}: ${restoreError}`);
-      }
+      const watchUntil = Date.now() + RESTORE_WATCH_MS;
+      const tryRestore = () => {
+        if (!token) return;
+        try { restoreDefaults(token); }
+        catch (error) {
+          restoreError = (error as Error).message;
+          this.log(`could not restore default after ${typed}: ${restoreError}`);
+          token = null;
+        }
+      };
+      tryRestore();
+      // Keep watching until the guard window closes.
+      const watchLoop = async () => {
+        while (Date.now() < watchUntil) {
+          await new Promise(r => setTimeout(r, 200));
+          if (!token) break;
+          try { restoreDefaults(token); } catch { /* will be caught on the next full tryRestore */ }
+        }
+      };
+      void watchLoop().catch(() => undefined);
+      // Immediate restore is enough for the returned outcome.
     }
 
-    // The outcome is the session's own confirmation line (what Claude Code printed), plus a note
-    // when the defaults restore failed.
-    if (!confirmedText) return { ok: true, outcome: `Sent ${typed} to ${session.name}. It did not show that it took effect.` };
+    // Build the outcome.
+    const saveNote = saveError ? ` The default for new sessions may have changed: could not read the settings file before the command (${saveError}).` : '';
+    if (!confirmedText) return { ok: true, outcome: `Sent ${typed} to ${session.name}. It did not show that it took effect.${saveNote}` };
     if (restoreError) return { ok: true, outcome: `${confirmedText}. The default for new sessions may have changed: ${restoreError}` };
-    return { ok: true, outcome: confirmedText };
+    return { ok: true, outcome: `${confirmedText}${saveNote}` };
   }
 
   private setVoice(on: boolean): Result {

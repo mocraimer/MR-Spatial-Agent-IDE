@@ -85,7 +85,11 @@ async function handle(line: string): Promise<void> {
     process.stdout.write(`${name} got: ${line.trim()}\n`);
     if (confirm) process.stdout.write(command === '/model' ? `  ⎿  Set model to ${a} and saved as your default for new sessions\n` : `  ⎿  Set effort level to ${a} (this session only): ready\n`);
     // Simulate Claude Code writing the settings file so the bridge can restore defaults.
-    writeSettingsFor(command as '/model' | '/effort', a);
+    // SPATIAL_CLAUDE_SETTINGS_WRITE_DELAY_MS: when set, write the file after this delay
+    // (simulating a delayed write that races with the bridge's confirmation read).
+    const delayMs = Number(process.env.SPATIAL_CLAUDE_SETTINGS_WRITE_DELAY_MS ?? '0');
+    if (delayMs > 0) setTimeout(() => writeSettingsFor(command as '/model' | '/effort', a), delayMs);
+    else writeSettingsFor(command as '/model' | '/effort', a);
     return;
   }
   if (command === '/block') {
