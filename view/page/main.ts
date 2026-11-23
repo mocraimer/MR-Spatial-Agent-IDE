@@ -58,12 +58,13 @@ const CONTROLS_DEFAULT_DISTANCE = 0.6;
 const CONTROLS_DEFAULT_Y = -0.35;
 
 /**
- * A group offset transforms from the group's default coordinate frame to the recenter frame.
- * pose(0,0,0) is the screens default (no change from today's layout).
- * The controls default is at CONTROLS_DEFAULT_DISTANCE away and CONTROLS_DEFAULT_Y below eye.
+ * Group offsets are DELTA transforms applied on top of the natural world-space positions.
+ * identity() = no movement from the default position.
+ * Controls default positions already use CONTROLS_DEFAULT_Y / CONTROLS_DEFAULT_DISTANCE in
+ * their base poses, so both groups start at identity().
  */
 let screensOffset: Mat = identity();
-let controlsOffset: Mat = pose(0, CONTROLS_DEFAULT_Y, -CONTROLS_DEFAULT_DISTANCE);
+let controlsOffset: Mat = identity();
 
 /** Offset from the ray's intersection point to the group's position, captured at grab start. */
 let barGrabDelta: [number, number, number] = [0, 0, 0];
@@ -91,7 +92,7 @@ function saveGroupOffsets(): void {
 
 function resetGroupOffsets(): void {
   screensOffset = identity();
-  controlsOffset = pose(0, CONTROLS_DEFAULT_Y, -CONTROLS_DEFAULT_DISTANCE);
+  controlsOffset = identity();
   saveGroupOffsets();
 }
 
@@ -658,13 +659,14 @@ function renderNow(): void {
     row([['voice-on', 'voice-off'], ['read-on', 'read-off'], ['read-last', 'voice-stop']], false).map(b => ({ ...b, on: b.id === (state.voice.feedback ? 'voice-on' : 'voice-off') || b.id === (state.voice.reading ? 'read-on' : 'read-off') })),
   ].map((btns, i) => i === 0 ? btns.map(b => b.id === 'keyboard' ? { ...b, on: state.keyboardOpen } : b) : btns);
 
-  // The controls group sits at y=0 relative to its own offset; Talk is the topmost element.
+  // Controls group: Talk at the natural default position, rows stacking below it.
+  // Base poses use absolute world-space positions (CONTROLS_DEFAULT_Y, CONTROLS_DEFAULT_DISTANCE);
+  // controlsOffset is a delta from these defaults, starting as identity().
   const phase: TalkPhase = mic.problem ?? (state.speech.ready ? null : state.speech.reason) ? 'problem'
     : mic.open ? (mic.mode === 'hold' ? 'holding' : 'listening') : mic.standby ? 'standby' : mic.isOpening ? 'opening' : 'idle';
   const talkProblem = mic.problem ?? (state.speech.ready ? null : state.speech.reason);
   const talkHeight = stripWidth * TALK_SIZE.h / TALK_SIZE.w;
-  // Talk sits at y=0 in controls-local space; rows stack below it.
-  const talkY = 0;
+  const talkY = CONTROLS_DEFAULT_Y;
   inGroup('talk', JSON.stringify([phase, talkProblem]), stripWidth, onArc(0, talkY, CONTROLS_DEFAULT_DISTANCE), controlsOffset, c => { regions.set('talk', drawTalk(c, phase, talkProblem)); });
   used.add('talk');
   const controlsHeight = stripWidth * CONTROLS_SIZE.h / CONTROLS_SIZE.w;
