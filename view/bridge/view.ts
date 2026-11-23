@@ -10,6 +10,7 @@ import { fileLog } from './log.js';
 import { DEFAULT_MIRROR, Mirror, type MirrorOptions } from './mirror.js';
 import { startServer } from './server.js';
 import { Settings } from './settings.js';
+import { WindowsVoice, type Voice } from './tts.js';
 import { LocalSpeech, modelDirectory } from './speech.js';
 
 export interface ViewOptions {
@@ -22,6 +23,11 @@ export interface ViewOptions {
   /** Tests may stand in for the speech model or the level agents; by default both are real. */
   speech?: Transcriber;
   agents?: LevelAgents;
+  /** The voice for spoken answers: by default the Windows voice; null for none (tests). */
+  voice?: Voice | null;
+  /** Where Claude Code's transcripts are; by default the owner's. */
+  transcripts?: string;
+  confirmMs?: number;
   mirror?: MirrorOptions;
   closeAnswerMs?: number;
   standbyAnswerMs?: number;
@@ -53,7 +59,8 @@ export async function startView(options: ViewOptions): Promise<RunningView> {
   const closeSocket = join(options.dataDirectory, 'helper.sock');
   const agents = options.agents ?? new HerdrLevelAgents(herdr, claudeAgents(join(options.dataDirectory, 'agents')), closeSocket);
   const settings = new Settings(options.dataDirectory);
-  const bridge = new Bridge(herdr, mirror, speech, agents, { closeAnswerMs: options.closeAnswerMs, standbyAnswerMs: options.standbyAnswerMs, log, settings });
+  const voice = options.voice === undefined ? new WindowsVoice() : options.voice;
+  const bridge = new Bridge(herdr, mirror, speech, agents, { closeAnswerMs: options.closeAnswerMs, standbyAnswerMs: options.standbyAnswerMs, log, settings, ...(voice ? { voice } : {}), ...(options.transcripts ? { transcripts: options.transcripts } : {}), ...(options.confirmMs ? { confirmMs: options.confirmMs } : {}) });
   const closeServer: NetServer = serveCloseRequests(closeSocket, ref => bridge.requestClose(ref), log);
   const pairing = new PairingAuthority(join(options.dataDirectory, 'pairing'));
   const tls = join(options.dataDirectory, 'tls');

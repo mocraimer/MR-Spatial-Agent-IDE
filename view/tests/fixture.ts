@@ -11,6 +11,7 @@ import { HerdrLevelAgents, type AgentOptions, type LevelAgents } from '../bridge
 import type { Transcriber } from '../bridge/bridge.js';
 import { HerdrError } from '../bridge/herdr.js';
 import { REPO } from '../bridge/config.js';
+import type { Voice } from '../bridge/tts.js';
 import { startView, type RunningView, type ViewOptions } from '../bridge/view.js';
 import type { ViewState } from '../shared/view-state.js';
 
@@ -61,6 +62,8 @@ export async function rig(layout: BenchWorkspace[], options: Partial<ViewOptions
     port: 0,
     speech: new ScriptedSpeech(),
     agents: benchAgents(bench, data),
+    // No test makes real audio unless it asks to.
+    voice: null,
     log: line => logs.push(line),
     showPairingCode: () => undefined,
     ...extra,
@@ -241,4 +244,26 @@ export async function tap(page: Page, input: Input, surface: string, id: string)
   const p = await regionPoint(page, surface, id);
   await aim(page, input, surface, p.x, p.y);
   await press(page, input);
+}
+
+/** A silent WAV of this many seconds: 22.05 kHz, mono, 16-bit, as the Windows voice makes. */
+export function silentWav(seconds: number): Buffer {
+  const rate = 22050, samples = Math.round(rate * seconds), data = samples * 2;
+  const b = Buffer.alloc(44 + data);
+  b.write('RIFF', 0); b.writeUInt32LE(36 + data, 4); b.write('WAVEfmt ', 8); b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22);
+  b.writeUInt32LE(rate, 24); b.writeUInt32LE(rate * 2, 28); b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34); b.write('data', 36); b.writeUInt32LE(data, 40);
+  return b;
+}
+
+/** A voice that records what it is asked to say and answers silence, or fails or is unavailable as a test says. */
+export class FakeVoice implements Voice {
+  readonly spoken: string[] = [];
+  mode: 'ok' | 'fail' | 'unavailable' = 'ok';
+  seconds = 0.3;
+  problem(): string | null { return this.mode === 'unavailable' ? 'No voice here.' : null; }
+  speak(text: string): Promise<Buffer> {
+    this.spoken.push(text);
+    if (this.mode === 'fail') return Promise.reject(new Error('the voice made no audio'));
+    return Promise.resolve(silentWav(this.seconds));
+  }
 }

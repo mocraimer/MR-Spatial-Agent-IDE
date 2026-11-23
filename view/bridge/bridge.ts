@@ -2,7 +2,8 @@
  * What the view does, apart from how it is reached: the shelf, the actions, speech routing and
  * the yes before a close. The HTTP server (server.ts) only authenticates and forwards here.
  */
-import { shelfOrder, type BridgeAction, type Command, type KeyName } from '../shared/actions.js';
+import { shelfOrder, type BridgeAction, type Command, type EffortLevel, type KeyName, type ModelName } from '../shared/actions.js';
+import { plain } from '../shared/ansi.js';
 import type { BridgeEvent, Project, Session, Shelf, SpeechState, Utterance } from '../shared/messages.js';
 import { OVERVIEW, type Level, type LevelAgents } from './agents.js';
 import { Drafts, typeable } from './drafts.js';
@@ -10,7 +11,11 @@ import { classify, type Heard } from './heard.js';
 import { HerdrError, type HerdrClient } from './herdr.js';
 import type { Mirror } from './mirror.js';
 import { Questions } from './question.js';
+import { Say } from './say.js';
 import { Settings } from './settings.js';
+import { feedbackFor, replyPhrase } from './spoken.js';
+import { lastReply, TRANSCRIPT_ROOT } from './transcript.js';
+import type { Voice } from './tts.js';
 
 export interface Transcriber { state(): SpeechState; transcribe(audio: Float32Array): Promise<string> }
 
@@ -28,7 +33,21 @@ export interface BridgeOptions {
   log?: (line: string) => void;
   /** The owner's settings; by default in memory, with direct sending off. */
   settings?: Settings;
+  /** The voice that makes spoken answers; by default none, and the bridge speaks nothing. */
+  voice?: Voice;
+  /** Where Claude Code's transcripts are, for reading a reply aloud. */
+  transcripts?: string;
+  /** How long a model or effort command waits for the session to show it took effect. */
+  confirmMs?: number;
+  /** The Claude Code session id of a pane, for finding its transcript; by default Herdr is asked. */
+  sessionOf?: (paneId: string) => Promise<string | null>;
 }
+/** What a command came to; `silent` marks one whose own speech is the answer. */
+type Result = { ok: boolean; outcome: string; silent?: true; say?: string };
+/** Words a session prints when it takes a model or effort command. */
+const CONFIRMATION = { model: /(?:Set model to|Kept model as) [^\n]*/g, effort: /Set effort level to [^\n]*/g } as const;
+/** How long after a turn ends the transcript is read, so its last line is written. */
+const SETTLE_MS = 400;
 const UTTERANCES_KEPT = 200;
 
 export class Bridge {
@@ -44,6 +63,14 @@ export class Bridge {
   private readonly log: (line: string) => void;
   private readonly settings: Settings;
   private readonly drafts = new Drafts();
+  /** Null when the bridge has no voice: it then speaks nothing and says nothing about it. */
+  private readonly say: Say | null;
+  private readonly transcripts: string;
+  private readonly confirmMs: number;
+  private readonly sessionOf: (paneId: string) => Promise<string | null>;
+  /** Each session's last state, to see a turn end; and the last reply read aloud for each, so one is read once. */
+  private readonly states = new Map<string, string>();
+  private readonly read = new Map<string, string>();
   /** The level agents' starts as last logged, so each change is logged once. */
   private logged = { starting: new Set<string>(), failed: new Map<string, string>() };
 
@@ -59,11 +86,16 @@ export class Bridge {
     this.questions = new Questions(() => this.broadcastQuestion());
     this.log = options.log ?? (() => undefined);
     this.settings = options.settings ?? new Settings();
+    this.transcripts = options.transcripts ?? TRANSCRIPT_ROOT;
+    this.confirmMs = options.confirmMs ?? 2500;
+    this.sessionOf = options.sessionOf ?? (paneId => this.herdrSessionOf(paneId));
+    this.say = options.voice ? new Say(options.voice, event => this.broadcast(event), text => this.broadcast({ type: 'notice', text }), this.log, () => this.announceVoice()) : null;
     agents.onChange(() => { this.logAgentStarts(); this.broadcast({ type: 'shelf', shelf: this.shelf() }); });
     mirror.listen({
       shelf: shelf => {
         if (this.jump && shelf.focusedId !== this.jump.current) this.jump = null;
         this.drafts.prune(new Set(shelf.sessions.map(x => x.id)));
+        this.watchTurns(shelf);
         this.broadcast({ type: 'shelf', shelf: this.shelf() });
       },
       text: (id, text) => this.broadcast({ type: 'text', id, text }),
@@ -87,6 +119,7 @@ export class Bridge {
     send({ type: 'confirm', pending: this.questions.closeView() });
     send({ type: 'ask', ask: this.questions.commandView() });
     send({ type: 'direct', on: this.settings.direct });
+    send({ type: 'voice', feedback: this.settings.voice, reading: this.settings.readReplies, trouble: this.say?.failed ?? false });
     send({ type: 'speech', speech: this.speech.state() });
     this.clients.add(send);
     return () => { this.clients.delete(send); };
@@ -94,8 +127,11 @@ export class Bridge {
 
   broadcast(event: BridgeEvent): void { for (const send of this.clients) send(event); }
 
+  /** The audio of a spoken phrase, for the page to fetch. */
+  clip(id: string): Buffer | undefined { return this.say?.clip(id); }
+
   /** Carries out one action; the answer is what to tell the owner. */
-  async act(action: BridgeAction): Promise<{ ok: boolean; outcome: string }> {
+  async act(action: BridgeAction): Promise<Result> {
     const shelf = this.shelf();
     try {
       switch (action.kind) {
@@ -119,6 +155,12 @@ export class Bridge {
         case 'send': return await this.sendDraft(shelf, shelf.focusedId);
         case 'scratch': return await this.scratchDraft(shelf, shelf.focusedId);
         case 'direct': return this.setDirect(action.on);
+        case 'model': return await this.typeSetting(shelf, shelf.focusedId, 'model', action.name);
+        case 'effort': return await this.typeSetting(shelf, shelf.focusedId, 'effort', action.level);
+        case 'voice': return this.setVoice(action.on);
+        case 'read-replies': return this.setReading(action.on);
+        case 'read-last': return await this.readLast(shelf, shelf.focusedId);
+        case 'voice-stop': this.say?.stop(); return { ok: true, outcome: 'The voice is stopped.', silent: true };
         case 'answer': return await this.answer(action.answer);
         case 'go': {
           if (action.projectId === shelf.overviewId) return await this.goTo(OVERVIEW, 'the overview', 'The helper');
@@ -154,6 +196,7 @@ export class Bridge {
     const record = (heard: string, done: Done): Utterance => {
       const u: Utterance = { id, heard, as: done.as, ok: done.ok, outcome: done.outcome };
       this.broadcast({ type: 'utterance', utterance: u });
+      if (!done.silent) this.speak(feedbackFor(done.as, done.ok, done.say ?? done.outcome));
       return u;
     };
     const speech = this.speech.state();
@@ -181,7 +224,7 @@ export class Bridge {
         const run = taken.command.run.bridge;
         // A spoken key, "go" or "scratch that" belongs to its utterance: like a prompt, it acts on the
         // session that was in front when the speech began, not whichever is in front once it is heard.
-        const r = run.kind === 'key' || run.kind === 'send' || run.kind === 'scratch' ? await this.spokenAt(shelf, receiver, run) : await this.act(run);
+        const r = run.kind === 'key' || run.kind === 'send' || run.kind === 'scratch' || run.kind === 'model' || run.kind === 'effort' ? await this.spokenAt(shelf, receiver, run) : await this.act(run);
         return { as: 'command', ...r };
       }
       case 'go': case 'show': {
@@ -239,11 +282,11 @@ export class Bridge {
   private does(c: Command, shelf: Shelf, receiver: string | null): string {
     const what = c.does ?? c.label;
     const run = 'bridge' in c.run ? c.run.bridge : null;
-    return run && (run.kind === 'key' || run.kind === 'send' || run.kind === 'scratch') ? `${what} in ${receiver ? name(shelf, receiver) : 'the session in front'}` : what;
+    return run && (run.kind === 'key' || run.kind === 'send' || run.kind === 'scratch' || run.kind === 'model' || run.kind === 'effort') ? `${what} in ${receiver ? name(shelf, receiver) : 'the session in front'}` : what;
   }
 
   /** Puts a command to the owner as a question; it is done only on their "yes". */
-  private ask(label: string, run: () => Promise<{ ok: boolean; outcome: string }>): Done {
+  private ask(label: string, run: () => Promise<Result>): Done {
     const asked = this.questions.put({ kind: 'command', label, run }, this.standbyAnswerMs, () => {
       this.log(`standby command "${label}" dropped: no answer in time`);
       this.broadcast({ type: 'notice', text: `Dropped: ${label}. There was no yes in time.` });
@@ -261,7 +304,7 @@ export class Bridge {
   }
 
   /** The owner's yes or no to the one question that waits. */
-  private async answer(yes: boolean): Promise<{ ok: boolean; outcome: string }> {
+  private async answer(yes: boolean): Promise<Result> {
     const q = this.questions.take();
     if (!q) return { ok: false, outcome: 'Nothing is waiting for your yes or no.' };
     if (q.kind === 'close') {
@@ -275,7 +318,8 @@ export class Bridge {
     }
     this.log(`standby command "${q.label}" confirmed by the owner`);
     const r = await q.run();
-    return { ok: r.ok, outcome: `Answered yes: ${q.label}. ${r.outcome}` };
+    // What is said is what the command came to, not the owner's own yes read back.
+    return { ok: r.ok, outcome: `Answered yes: ${q.label}. ${r.outcome}`, ...(r.silent ? { silent: true as const } : { say: r.outcome }) };
   }
 
   private async deliver(heard: string, shelf: Shelf, receiver: string | null): Promise<Done> {
@@ -311,12 +355,14 @@ export class Bridge {
     const shown = `${n} ${target.name}${project ? ` (${project})` : ''}`;
     if (this.questions.waiting) return 'busy';
     this.log(`close of ${shown} (${target.id}) asked of the owner`);
+    this.speak(`Close ${target.name}? Say yes or no.`);
     const answer = await new Promise<'yes' | 'no' | 'no-answer'>(settle => {
       this.questions.put({ kind: 'close', sessionId: target.id, name: shown, settle: yes => settle(yes ? 'yes' : 'no') }, this.closeAnswerMs, () => settle('no-answer'));
     });
     if (answer !== 'yes') {
       this.log(`close of ${shown} (${target.id}): ${answer === 'no' ? 'the owner said no' : 'no answer in time'}; it stays open`);
       this.broadcast({ type: 'notice', text: `${target.name} was not closed.` });
+      this.speak(`${target.name} was not closed.`);
       return answer === 'no' ? 'declined' : 'no-answer';
     }
     try { await this.herdr.call('pane.close', { pane_id: target.id }); } catch (error) {
@@ -325,6 +371,7 @@ export class Bridge {
     }
     this.log(`closed ${shown} (${target.id}) on the owner's yes`);
     this.broadcast({ type: 'notice', text: `Closed ${target.name}.` });
+    this.speak(`Closed ${target.name}.`);
     return 'closed';
   }
 
@@ -357,7 +404,7 @@ export class Bridge {
     await this.mirror.tick();
   }
 
-  private async key(shelf: Shelf, target: string | null, key: KeyName): Promise<{ ok: boolean; outcome: string }> {
+  private async key(shelf: Shelf, target: string | null, key: KeyName): Promise<Result> {
     if (!target) return { ok: false, outcome: 'No session is in front to receive the key.' };
     const session = shelf.sessions.find(s => s.id === target);
     const unready = session ? notReady(shelf, session) : null;
@@ -366,11 +413,18 @@ export class Bridge {
     return { ok: true, outcome: `Pressed ${key} in ${name(shelf, target)}` };
   }
 
-  private async spokenAt(shelf: Shelf, receiver: string | null, run: { kind: 'key'; key: KeyName } | { kind: 'send' } | { kind: 'scratch' }): Promise<{ ok: boolean; outcome: string }> {
+  private async spokenAt(shelf: Shelf, receiver: string | null, run: { kind: 'key'; key: KeyName } | { kind: 'send' } | { kind: 'scratch' } | { kind: 'model'; name: ModelName } | { kind: 'effort'; level: EffortLevel }): Promise<Result> {
     if (receiver !== null && !shelf.sessions.some(s => s.id === receiver)) return { ok: false, outcome: 'Not done: the session that was in front when you spoke has closed.' };
     try {
-      return run.kind === 'key' ? await this.key(shelf, receiver, run.key) : run.kind === 'send' ? await this.sendDraft(shelf, receiver) : await this.scratchDraft(shelf, receiver);
-    } catch (error) { return { ok: false, outcome: this.problem(`the ${run.kind === 'key' ? `${run.key} key` : run.kind === 'send' ? '"go"' : '"scratch that"'}`, error) }; }
+      switch (run.kind) {
+        case 'key': return await this.key(shelf, receiver, run.key);
+        case 'send': return await this.sendDraft(shelf, receiver);
+        case 'scratch': return await this.scratchDraft(shelf, receiver);
+        case 'model': return await this.typeSetting(shelf, receiver, 'model', run.name);
+        case 'effort': return await this.typeSetting(shelf, receiver, 'effort', run.level);
+        default: return assertNever(run);
+      }
+    } catch (error) { return { ok: false, outcome: this.problem(`the ${run.kind === 'key' ? `${run.key} key` : run.kind === 'send' ? '"go"' : run.kind === 'scratch' ? '"scratch that"' : `${run.kind} command`}`, error) }; }
   }
 
   /** Runs `step` after the utterances already queued, so a held order never interleaves with one being carried out. */
@@ -401,7 +455,7 @@ export class Bridge {
   }
 
   /** "go": presses Enter in the session, once, if it holds a draft. */
-  private async sendDraft(shelf: Shelf, target: string | null): Promise<{ ok: boolean; outcome: string }> {
+  private async sendDraft(shelf: Shelf, target: string | null): Promise<Result> {
     if (!target || !this.drafts.has(target)) return { ok: false, outcome: 'No draft waits in the session in front. Nothing was sent.' };
     // Taken before the key goes, so a second "go" at the same moment finds nothing to send.
     this.drafts.clear(target);
@@ -413,7 +467,7 @@ export class Bridge {
   }
 
   /** "scratch that": empties the session's input with Ctrl-U, sending nothing. */
-  private async scratchDraft(shelf: Shelf, target: string | null): Promise<{ ok: boolean; outcome: string }> {
+  private async scratchDraft(shelf: Shelf, target: string | null): Promise<Result> {
     if (!target || !this.drafts.has(target)) return { ok: false, outcome: 'No draft waits in the session in front. Nothing was cleared.' };
     // Taken before the key goes, as for "go"; put back if the call fails, so the owner can say it again.
     this.drafts.clear(target);
@@ -421,26 +475,145 @@ export class Bridge {
     return { ok: true, outcome: `Cleared the draft in ${name(shelf, target)}` };
   }
 
-  private setDirect(on: boolean): { ok: boolean; outcome: string } {
-    let saved = '';
-    try { this.settings.setDirect(on); } catch (error) {
-      saved = ` It could not be saved (${(error as Error).message}), so it lasts only until the view restarts.`;
-      this.log(`the send setting could not be saved: ${(error as Error).message}`);
+  /** Speaks a phrase when there is one and the owner has the voice on. Returns whether it was queued. */
+  private speak(phrase: string | null): boolean {
+    if (phrase === null || !this.settings.voice || !this.say) return false;
+    return this.say.say(phrase);
+  }
+
+  /**
+   * Types `/model <name>` or `/effort <level>` into a Claude Code session and tells what the session
+   * itself printed. Only a session that is idle or done, with nothing already typed in its input:
+   * anywhere else the text would be keys answering a question, a prompt, or a line joined to a draft.
+   */
+  private async typeSetting(shelf: Shelf, target: string | null, what: 'model' | 'effort', value: ModelName | EffortLevel): Promise<Result> {
+    if (!target) return { ok: false, outcome: 'No session is in front to change.' };
+    const session = shelf.sessions.find(s => s.id === target);
+    if (!session) return { ok: false, outcome: 'Not done: that session has closed.' };
+    const refused = settingRefusal(shelf, session, this.drafts.has(session.id));
+    if (refused) return { ok: false, outcome: `Not changed: ${refused}` };
+    const typed = `/${what} ${value}`;
+    const confirmations = (text: string) => plain(text).match(CONFIRMATION[what]) ?? [];
+    const before = confirmations(await this.herdr.read(session.id, 30)).length;
+    await this.herdr.call('pane.send_input', { pane_id: session.id, text: typed, keys: ['enter'] });
+    this.log(`${typed} typed into ${session.name} (${session.id}) on the owner's order`);
+    const deadline = Date.now() + this.confirmMs;
+    for (;;) {
+      await new Promise(resolve => setTimeout(resolve, 150));
+      const seen = confirmations(await this.herdr.read(session.id, 30));
+      if (seen.length > before) return { ok: true, outcome: (seen[seen.length - 1] as string).trim().slice(0, 160) };
+      if (Date.now() > deadline) return { ok: true, outcome: `Sent ${typed} to ${session.name}. It did not show that it took effect.` };
     }
-    this.log(`direct sending turned ${on ? 'on: spoken prompts are sent as soon as they are heard' : 'off: spoken prompts wait for "go"'}`);
+  }
+
+  private setVoice(on: boolean): Result {
+    const saved = this.save(() => this.settings.setVoice(on), `spoken feedback turned ${on ? 'on' : 'off'}`);
+    if (!on) this.say?.stop();
+    this.announceVoice();
+    if (on) this.speak('The voice is on.');
+    return { ok: true, outcome: (on ? 'The voice is on: answers are spoken.' : 'The voice is off: answers show on the shelf only.') + saved, silent: true };
+  }
+
+  private setReading(on: boolean): Result {
+    const saved = this.save(() => this.settings.setReadReplies(on), `reading replies aloud turned ${on ? 'on' : 'off'}`);
+    this.announceVoice();
+    const note = on && !this.settings.voice ? ' The voice is off, so nothing is spoken until you say “voice on”.' : '';
+    if (on) this.speak('Reading replies is on.');
+    return { ok: true, outcome: (on ? 'Reading each finished reply aloud. Say “stop reading replies” to stop.' : 'Replies are not read aloud.') + note + saved, silent: true };
+  }
+
+  private announceVoice(): void { this.broadcast({ type: 'voice', feedback: this.settings.voice, reading: this.settings.readReplies, trouble: this.say?.failed ?? false }); }
+
+  /**
+   * Runs a settings write and logs it. A file that cannot be written is logged too, and the setting
+   * holds until a restart: the returned note says so, for the owner's answer, or is empty.
+   */
+  private save(write: () => void, what: string): string {
+    try { write(); } catch (error) {
+      this.log(`${what}, but it could not be saved: ${(error as Error).message}`);
+      return ` It could not be saved (${(error as Error).message}), so it lasts only until the view restarts.`;
+    }
+    this.log(what);
+    return '';
+  }
+
+  /** Reads the last reply of a Claude Code session aloud. */
+  private async readLast(shelf: Shelf, target: string | null): Promise<Result> {
+    if (!target) return { ok: false, outcome: 'No session is in front to read.' };
+    const session = shelf.sessions.find(s => s.id === target);
+    if (!session) return { ok: false, outcome: 'Not read: that session has closed.' };
+    if (!this.settings.voice || !this.say) return { ok: false, outcome: this.say ? 'The voice is off. Say “voice on” first.' : 'There is no voice to read with.' };
+    if (session.agent !== 'claude') return { ok: false, outcome: `${session.name} is not a Claude Code session; only those can be read aloud.` };
+    const spoken = await this.replyOf(session.id);
+    if ('problem' in spoken) return { ok: false, outcome: spoken.problem };
+    this.read.set(session.id, spoken.text);
+    this.speak(spoken.phrase);
+    return { ok: true, outcome: `Reading the last reply of ${session.name}.`, silent: true };
+  }
+
+  /** The session id Herdr holds for a pane's agent. */
+  private async herdrSessionOf(paneId: string): Promise<string | null> {
+    const info = await this.herdr.call('agent.get', { target: paneId });
+    const session = (info.agent as { agent_session?: { value?: unknown } } | undefined)?.agent_session?.value;
+    return typeof session === 'string' ? session : null;
+  }
+
+  /** The speakable start of a session's last reply, or why there is none. Nothing of it is logged. */
+  private async replyOf(paneId: string): Promise<{ text: string; phrase: string } | { problem: string }> {
+    let id: string | null = null;
+    try { id = await this.sessionOf(paneId); } catch (error) { this.problem(`asking for the session of ${paneId}`, error); }
+    if (!id) return { problem: 'Herdr has no transcript for that session, so there is nothing to read.' };
+    const reply = lastReply(id, this.transcripts);
+    if ('text' in reply) {
+      const phrase = replyPhrase(reply.text);
+      return phrase ? { text: reply.text, phrase } : { problem: 'That reply has nothing to read.' };
+    }
+    this.log(`the reply of ${paneId} could not be read: ${reply.problem}`);
+    return { problem: reply.problem === 'no-reply' ? 'That session has no reply to read yet.' : reply.problem === 'unreadable' ? 'Its transcript could not be read.' : 'No transcript was found for that session.' };
+  }
+
+  /**
+   * With reading on, a finished turn in the session in front is read aloud once: when its state
+   * goes from working to idle or done. Another session's turn, and a reply already read, are not.
+   */
+  private watchTurns(shelf: Shelf): void {
+    const ids = new Set(shelf.sessions.map(s => s.id));
+    for (const id of [...this.states.keys()]) if (!ids.has(id)) { this.states.delete(id); this.read.delete(id); }
+    for (const s of shelf.sessions) {
+      const was = this.states.get(s.id);
+      this.states.set(s.id, s.status);
+      if (!(was === 'working' && (s.status === 'idle' || s.status === 'done')) || !this.settings.readReplies || !this.settings.voice) continue;
+      if (s.id !== shelf.focusedId || s.agent !== 'claude') continue;
+      const timer = setTimeout(() => {
+        void (async () => {
+          // Rechecked now: the owner may have turned reading off, or moved on, during the wait.
+          if (this.mirror.shelf().focusedId !== s.id || !this.settings.readReplies || !this.settings.voice) return;
+          const spoken = await this.replyOf(s.id);
+          if ('problem' in spoken || this.read.get(s.id) === spoken.text || !this.settings.readReplies) return;
+          this.read.set(s.id, spoken.text);
+          this.speak(spoken.phrase);
+        })();
+      }, SETTLE_MS);
+      // A wait for a transcript must not keep the process alive after the view stops.
+      timer.unref();
+    }
+  }
+
+  private setDirect(on: boolean): Result {
+    const saved = this.save(() => this.settings.setDirect(on), `direct sending turned ${on ? 'on: spoken prompts are sent as soon as they are heard' : 'off: spoken prompts wait for "go"'}`);
     this.broadcast({ type: 'direct', on });
     return { ok: true, outcome: (on ? 'Sending at once: spoken prompts are sent as soon as they are heard. Say “wait for go” to stop.' : 'Waiting for “go”: spoken prompts wait as drafts.') + saved };
   }
 
   /** Brings a level's agent to the front, making its seat and starting the agent beside this call. */
-  private async goTo(level: Level, place: string, who: string): Promise<{ ok: boolean; outcome: string }> {
+  private async goTo(level: Level, place: string, who: string): Promise<Result> {
     const seat = await this.agents.seat(level);
     await this.focus(seat.paneId);
     if (seat.state === 'ready') return { ok: true, outcome: `At ${place}` };
     return { ok: true, outcome: `At ${place}. ${who} is starting.` };
   }
 
-  private async nextWaiting(shelf: Shelf): Promise<{ ok: boolean; outcome: string }> {
+  private async nextWaiting(shelf: Shelf): Promise<Result> {
     const ordered = shelfOrder(shelf.projects, shelf.sessions);
     const waiting = ordered.filter(s => s.status === 'blocked' && s.id !== shelf.focusedId);
     if (waiting.length === 0) return { ok: false, outcome: 'Nothing is waiting for you.' };
@@ -456,6 +629,19 @@ export class Bridge {
     if (target.agent) await this.herdr.call('agent.prompt', { target: target.id, text });
     else await this.herdr.call('pane.send_input', { pane_id: target.id, text, keys: ['enter'] });
   }
+}
+
+/** Why a model or effort command cannot be typed into this session now, or null. */
+function settingRefusal(shelf: Shelf, session: Session, draft: boolean): string | null {
+  const unready = notReady(shelf, session);
+  if (unready) return unready;
+  if (session.agent === null) return `${session.name} is a shell; the command would run there as text.`;
+  if (session.agent !== 'claude') return `${session.name} is not a Claude Code session.`;
+  if (session.status === 'working') return `${session.name} is working. Say it again when it is done.`;
+  if (session.status === 'blocked') return `${session.name} is waiting on a question. Answer it first.`;
+  if (session.status === 'unknown') return `${session.name} is not showing whether it is ready.`;
+  if (draft) return `a draft waits in ${session.name}. Say “go” or “scratch that” first.`;
+  return null;
 }
 
 /** Why words cannot go to this session now, or null: a level agent that is not up must never get them as shell input. */
@@ -506,7 +692,7 @@ function assertNever(value: never): never { throw new Error(`Unhandled ${JSON.st
 function name(shelf: Shelf, id: string): string { return shelf.sessions.find(s => s.id === id)?.name ?? id; }
 
 /** What an utterance came to: how it was taken, whether it worked, what to tell the owner. */
-interface Done { as: Utterance['as']; ok: boolean; outcome: string }
+interface Done { as: Utterance['as']; ok: boolean; outcome: string; silent?: true; say?: string }
 
 const IGNORED: Done = { as: 'ignored', ok: false, outcome: 'Not sent: listening is off. Say a command.' };
 

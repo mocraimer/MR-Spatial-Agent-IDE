@@ -430,6 +430,10 @@ export interface StripState {
   link: string | null;
   /** Direct sending is on: spoken prompts are sent as soon as they are heard. */
   direct: boolean;
+  /** Spoken feedback is off, the voice failed, and finished replies are read aloud. */
+  voiceOff: boolean;
+  voiceProblem: boolean;
+  reading: boolean;
   /** A close that waits for the owner's answer, or a command heard in standby: at most one. */
   confirm: PendingClose | null;
   ask: PendingAsk | null;
@@ -503,7 +507,16 @@ export function drawStrip(canvas: HTMLCanvasElement, st: StripState): Region[] {
     ctx.fillText(st.mic.standby ? 'Commands only: each asks “yes”' : st.mic.mode === 'hold' ? 'Hold to talk' : 'Keep listening until “stop listening”', tx, 98);
   }
 
-  const sayX = 1250, sayW = w - sayX - (st.link ? 400 : 44) - (st.direct ? 380 : 0);
+  // The standing chips, drawn from the right edge first: what is heard gets the room that is left.
+  let right = w - 40;
+  if (st.link) right -= chip(ctx, st.link, right, h / 2, 28, AMBER, 'right') + 16;
+  // Direct sending is a standing exception to "say go": it shows whenever it is on.
+  if (st.direct) right -= chip(ctx, 'Sending at once', right, h / 2, 32, AMBER, 'right') + 16;
+  // The voice is a standing setting too: off, or reading each reply, it shows whenever it holds; a voice that failed shows until it works again.
+  if (st.voiceProblem) right -= chip(ctx, 'Voice problem', right, h / 2, 32, AMBER, 'right') + 16;
+  if (st.voiceOff) right -= chip(ctx, 'Voice off', right, h / 2, 32, AMBER, 'right') + 16;
+  else if (st.reading) right -= chip(ctx, 'Reading replies', right, h / 2, 32, ACCENT, 'right') + 16;
+  const sayX = 1250, sayW = Math.max(300, right - sayX);
   ctx.font = `600 34px ${SANS}`; ctx.fillStyle = st.last || st.pendingHeard ? PAPER : DIM;
   const said = st.pendingHeard ? 'Hearing…' : st.last ? `“${st.last.heard || '…'}”` : 'Nothing said yet';
   ctx.fillText(fit(ctx, said, sayW), sayX, 48);
@@ -514,10 +527,6 @@ export function drawStrip(canvas: HTMLCanvasElement, st: StripState): Region[] {
   }
   ctx.font = `28px ${SANS}`; ctx.fillStyle = st.last && !st.last.ok && !st.notice ? AMBER : DIM; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
   ctx.fillText(fit(ctx, st.notice ?? st.last?.outcome ?? 'What you say shows here, with where it went.', sayX + sayW - x), x, 103);
-  let right = w - 40;
-  if (st.link) right -= chip(ctx, st.link, right, h / 2, 28, AMBER, 'right') + 16;
-  // Direct sending is a standing exception to "say go": it shows whenever it is on.
-  if (st.direct) chip(ctx, 'Sending at once', right, h / 2, 32, AMBER, 'right');
   return [mic];
 }
 

@@ -91,7 +91,7 @@ A **project** is a Herdr workspace. The view shows one place at a time, and the 
 | A project | the project's agent, in front when you go in | answers about the project's sessions; on your order, starts sessions in the project and gives them prompts |
 | The overview | the helper | answers across all projects; starts, renames and closes sessions; other quick tasks |
 
-**The project's agent** is a real Claude Code session in the project's workspace, in a tab labelled "project agent". It starts the first time you go into the project; going in sends it nothing. Ask it "what is waiting here?" or "what is everyone doing?", and it reads the project's sessions and answers in its window. Tell it "start an agent on the flaky test" or "tell the test session to rebase", and it does that in this project only. It never acts unasked, and it does not do the project's work itself. Anything else, such as changing a file, running a command that changes something, or acting on another project, waits for your approval: its window shows the question and its light turns amber, and you answer with the keys below the front session. It runs on Claude Code's default model and works in its own folder (see *What this rests on*).
+**The project's agent** is a real Claude Code session in the project's workspace, in a tab labelled "project agent". It starts the first time you go into the project; going in sends it nothing. Ask it "what is waiting here?" or "what is everyone doing?", and it reads the project's sessions and answers in its window. Tell it "start an agent on the flaky test" or "tell the test session to rebase", and it does that in this project only. It never acts unasked, and it does not do the project's work itself. Anything else, such as changing a file, running a command that changes something, or acting on another project, waits for your approval: its window shows the question and its light turns amber, and you answer with the keys below the front session. It runs on Claude Code with Sonnet at medium effort and works in its own folder (see *What this rests on*).
 
 **The helper** is in front at the overview. From inside any project, start a sentence with "helper" to reach it without leaving: "helper, start a shell in project docs". Orders with no project named start the session in the helper's workspace, so it shows at the overview.
 
@@ -116,6 +116,12 @@ Point a hand or controller at something. A ray shows where you point. Pinch (han
 | Larger or smaller text | **A+, A−** | "bigger text", "smaller text" |
 | Put the shelf in front of you again | **Recenter** | "recenter" |
 | Leave mixed reality, back to the flat page | **Exit MR** (or the Quest's Meta button) | "leave mixed reality" |
+| Set the model of the session in front | **Model Haiku, Model Sonnet, Model Opus** (the fourth row) | "model haiku", "model sonnet", "model opus" (also "set model to sonnet") |
+| Set the effort of the session in front | **Effort low, medium, high, extra high, max** | "effort low", "effort medium", "effort high", "effort extra high", "effort max" (also "set effort to high") |
+| Speak answers, or stay silent | **Voice on**, **Voice off** (the fifth row; the one in force is lit) | "voice on", "voice off" |
+| Read each finished reply aloud, or stop | **Read replies**, **Stop reading** | "read replies", "stop reading replies" |
+| Read the last reply of the session in front, once | **Read that** | "read that" |
+| Stop the voice at once | **Quiet** | "stop talking", "be quiet", "quiet" |
 | Answer a close the helper asks about | **Yes, close** / **No, keep it** in the strip, or the y / n key | "yes" / "no" |
 | Change the listening mode | the Talk button: hold it to talk, tap it to keep listening | "hold to talk", "keep listening" (also "start listening") |
 | Stop listening | Select the microphone | "stop listening" |
@@ -137,7 +143,7 @@ In mixed reality the microphone stays open even when listening is off. This is *
 
 On standby the view acts on commands only, and nothing is ever sent to a session:
 
-- A command that only changes how the view is shown (scroll up, scroll down, scroll bottom, recenter, bigger text, smaller text) runs at once.
+- A command that only changes how the view is shown or heard (scroll up, scroll down, scroll bottom, recenter, bigger text, smaller text, and the voice commands: voice on and off, read replies, stop reading replies, read that, quiet) runs at once. They send nothing to a session.
 - Any other command is **asked first**: the strip turns amber and says what it will do, for example "Do “Keep listening”?" or "Do “Send the draft in logs”?". Say **"yes"** (or select **Yes, do it**, or press y) to do it. Say "no" (or select **No**, or press Esc or n) to drop it. Anything else you say, or 15 seconds of silence, drops it too.
 - Words that are not a command, such as a prompt or an order to the helper, are shown as **Ignored** and sent nowhere: not typed, not drafted.
 
@@ -162,6 +168,24 @@ An order to the helper waits the same way, in the helper's input. The helper is 
 
 The strip always shows what was heard, whether it was taken as a command, a prompt or a helper order, and where it went. If a word was misheard, say "scratch that", or fix it at the desk.
 
+### Model and effort of the session in front
+
+Say **"model sonnet"** (or haiku, opus) or **"effort high"** (low, medium, high, extra high, max), or select the button in the fourth row. The view types `/model sonnet` or `/effort high` and Enter into the session that was in front when you started speaking, then tells you what the session itself printed ("Set model to Sonnet 4.6 …"). If the session prints nothing within a moment, the answer says the command was sent and **did not show that it took effect**; it says it worked only when the session shows that.
+
+It works only on a Claude Code session that is idle or done and has nothing typed in its input. It refuses, and says why, for a shell, another kind of agent, a session that is working or waits on a question, and a session that holds a draft: say "go" or "scratch that" first. With listening off it is asked first ("Do “Set the model to sonnet in a1”?") and done only after your "yes".
+
+Claude Code saves a model you choose with `/model` as your default for new sessions too: the session's own line says so ("… saved as your default for new sessions"), and it is Claude Code that does it, not this view.
+
+### The voice
+
+The view speaks short answers aloud in the headset: what a command did ("Pressed enter in a1", "No project or session is called …"), a failure, and each question that waits for your yes ("Close logs? Say yes or no."). It does not speak noise, words that were ignored, or a prompt typed as a draft. A phrase is the first sentence of the outcome, at most about 100 characters. The strip and the notices still show everything in writing.
+
+The voice is made on the PC by Windows' own speech (the voices Microsoft David and Microsoft Zira) and played in the headset; nothing leaves the PC, and nothing is paid for. It needs Windows PowerShell, reached from WSL at `/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe` (set `VIEW_POWERSHELL` to use another path). If it cannot speak, a notice says so, the written answers go on, and it is tried again with the next phrase.
+
+- **Quiet** (or "stop talking") ends the phrase being played and drops those that wait. While a phrase plays the microphone hears nothing, so the voice is never taken for you; that includes your own "quiet", so select **Quiet** to stop a phrase in the middle.
+- **Voice off** ("voice off") silences all spoken answers and reply reading, and the strip shows "Voice off". **Voice on** brings them back. The voice starts on; the setting is kept across restarts.
+- **Reading replies** is off until you say **"read replies"**. Then, when a turn ends in the session in front, its reply is read once: the start of it, whole sentences up to about 600 characters, with code left out and links said as "a link". **"read that"** reads the last reply of the session in front once, whether or not reading is on. Both work for Claude Code sessions only: the reply is taken from the transcript Claude Code keeps for the session, and what is read is never written to the log. The strip shows "Reading replies" while it is on; say "stop reading replies" to stop.
+
 ### Every spoken form
 
 A command must be the whole utterance. These are all the forms, each in quotation marks; the speech model sometimes writes a word differently, so a few extra spellings are accepted.
@@ -178,6 +202,10 @@ A command must be the whole utterance. These are all the forms, each in quotatio
 | 3 | "press three", "press 3", "option three", "option 3" |
 | Send the draft | "go", "submit", "send it" |
 | Clear the draft | "scratch that", "clear that" |
+| Model of the session in front | "model haiku", "set model haiku", "set model to haiku", "model to haiku"; the same with sonnet and with opus: "model sonnet", "set model sonnet", "set model to sonnet", "model to sonnet", "model opus", "set model opus", "set model to opus", "model to opus" |
+| Effort of the session in front | "effort low", "set effort low", "set effort to low", "effort to low"; "effort medium", "set effort medium", "set effort to medium", "effort to medium"; "effort high", "set effort high", "set effort to high", "effort to high"; "effort extra high", "set effort extra high", "set effort to extra high", "effort to extra high"; "effort max", "set effort max", "set effort to max", "effort to max" |
+| Voice | "voice on", "speak answers"; "voice off", "mute voice"; "stop talking", "be quiet", "quiet" |
+| Reading replies | "read replies", "read my replies"; "stop reading replies", "dont read replies"; "read that", "read that again", "read the reply" |
 | Send at once, wait for go | "send at once"; "wait for go" ("way for go") |
 | Scroll | "scroll up", "page up"; "scroll down", "page down"; "scroll bottom", "bottom", "go bottom", "scroll to bottom", "latest" |
 | Recenter | "recenter", "re center", "center" |
@@ -190,7 +218,7 @@ A command must be the whole utterance. These are all the forms, each in quotatio
 
 ## Closing, and what the agents may do
 
-The helper is a small, fast agent (Claude Code with Haiku) in a tab labelled "helper" in the Herdr workspace labelled "helper", which is the overview. You can read what it did in its window. It starts the first time you need it. Speak to it by starting with "helper":
+The helper is an agent (Claude Code on Sonnet at medium effort) in a tab labelled "helper" in the Herdr workspace labelled "helper", which is the overview. You can read what it did in its window. It starts the first time you need it. Speak to it by starting with "helper":
 
 - "helper, start a shell in project docs"
 - "helper, start a claude agent in project infra"
@@ -245,4 +273,4 @@ Then delete the view's data directory, `~/.local/share/spatial-agent-workspace/v
 - **Herdr 0.9.3, socket protocol 22.** If Herdr's protocol changes, the view says so and shows no sessions until they match.
 - **Quest browser:** a WebXR `immersive-ar` session, hand tracking, controllers, and the microphone, on a page with a self-signed certificate. The text is drawn by the view itself onto WebGL quads; compositor layers are not used.
 - **Speech:** Moonshine tiny, English, 8-bit weights, about 31 MB, on the PC's CPU through `@huggingface/transformers` and ONNX Runtime. About 0.1 s per utterance on this PC.
-- **Level agents:** Claude Code, using your existing Claude login: the helper with `--model haiku`, each project's agent on Claude Code's default model. Their settings, the closing hook and their instructions live in `~/.local/share/spatial-agent-workspace/view/agents` (one folder for the helper, one shared by all project agents), which is also where they work, so an agent Herdr restarts by itself keeps them. A project agent is found again by its tab label "project agent", the helper by its label "helper"; renaming those tabs makes the view start new ones.
+- **Level agents:** Claude Code, using your existing Claude login: the helper and each project's agent on Sonnet at medium effort (`--model sonnet --effort medium`, and the same in their settings, so a resumed agent keeps them). "sonnet" is Claude Code's own name for its current Sonnet; to pin one release, change `LEVEL_MODEL` in `view/bridge/agents.ts`. An agent that is already running keeps its model until it is restarted: close its tab and go to its level again. Their settings, the closing hook and their instructions live in `~/.local/share/spatial-agent-workspace/view/agents` (one folder for the helper, one shared by all project agents), which is also where they work, so an agent Herdr restarts by itself keeps them. A project agent is found again by its tab label "project agent", the helper by its label "helper"; renaming those tabs makes the view start new ones.

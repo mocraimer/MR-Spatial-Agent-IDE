@@ -1,6 +1,6 @@
 # Spatial Agent Workspace
 
-Your Herdr sessions, agents and shells, around you in a Quest 3 in mixed reality at your desk, one project at a time and readable. Each project has an agent of its own you can ask about the project and tell to start or prompt its sessions; at the overview, above all projects, a small helper agent answers across them and starts, renames and closes sessions. You act by voice, hands, controllers or keyboard.
+Your Herdr sessions, agents and shells, around you in a Quest 3 in mixed reality at your desk, one project at a time and readable. Each project has an agent of its own you can ask about the project and tell to start or prompt its sessions; at the overview, above all projects, a helper agent answers across them and starts, renames and closes sessions. You act by voice, hands, controllers or keyboard.
 
 This is one person's own tool, published as is under the MIT license. It is built for its owner's desk and headset; no support is promised, and issues and pull requests may go unanswered. Read it, fork it, change it.
 
@@ -12,7 +12,7 @@ This is one person's own tool, published as is under the MIT license. It is buil
 
 ## Quick start
 
-One small bridge process on the PC (`view/bridge`) reads your Herdr sessions through Herdr's socket API and serves one WebXR page (`view/page`) to the headset over Wi-Fi, behind a pairing code and the view's own certificate. Speech becomes text on the PC with a small local model. The view shows your real sessions; Herdr stays the owner of focus, so the desk keyboard types into the session the view shows in front.
+One small bridge process on the PC (`view/bridge`) reads your Herdr sessions through Herdr's socket API and serves one WebXR page (`view/page`) to the headset over Wi-Fi, behind a pairing code and the view's own certificate. Speech becomes text on the PC with a small local model, and short spoken answers come back from Windows' own voice on the PC; nothing leaves the PC. The view shows your real sessions; Herdr stays the owner of focus, so the desk keyboard types into the session the view shows in front.
 
 Start Herdr first, then:
 

@@ -10,6 +10,9 @@
  *   /tall <blank rows> [tag]        a short answer, that many blank rows, then an input box at the bottom,
  *                                   as Claude Code draws in a tall pane
  *   /block                          ask a question and stay blocked until the next line
+ *   /model <name>, /effort <level>  like Claude Code: print what it took, and the line as typed
+ *                                   (so tests can see exactly what arrived)
+ *   /confirm <on|off>               whether /model and /effort print what they took (default on)
  *   /exit                           exit
  *   anything else                   answer like an agent: working, a reply, idle
  */
@@ -75,6 +78,12 @@ async function handle(line: string): Promise<void> {
     await report('idle');
     return;
   }
+  if (command === '/confirm' && (a === 'on' || a === 'off')) { confirm = a === 'on'; return; }
+  if ((command === '/model' || command === '/effort') && a) {
+    process.stdout.write(`${name} got: ${line.trim()}\n`);
+    if (confirm) process.stdout.write(command === '/model' ? `  ⎿  Set model to ${a} and saved as your default for new sessions\n` : `  ⎿  Set effort level to ${a} (this session only): ready\n`);
+    return;
+  }
   if (command === '/block') {
     process.stdout.write(`${C.yellow}?${C.reset} ${name} wants to edit ${C.bold}ledger.ts${C.reset}. Allow? (y/n) `);
     await report('blocked');
@@ -88,6 +97,7 @@ async function handle(line: string): Promise<void> {
 }
 
 let blocked = false;
+let confirm = true;
 let queue = Promise.resolve();
 // Agents set the terminal title; Herdr reports it and the view names the session by it.
 process.stdout.write(`\x1b]0;${name}\x07`);

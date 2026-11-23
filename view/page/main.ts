@@ -10,6 +10,7 @@ import type { ViewState } from '../shared/view-state.js';
 import { arrange, columnFit, CHIP_ARC, FRONT_DISTANCE, FRONT_WIDTH, FRONT_Y, ARC, TOP, type Closed } from './layout.js';
 import { BridgeLink } from './link.js';
 import { Mic, openMicrophone, type Captured, type OpenSource } from './mic.js';
+import { VoicePlayer } from './voice.js';
 import {
   CONTROLS_SIZE, LINE_PX, drawChip, drawControls, drawTalk, TALK_SIZE, type TalkPhase, drawDraft, DRAFT_SIZE, drawFront, drawStrip, drawTile, STRIP_SIZE, EMPTY_FRONT, FRONT_SIZE, NO_SESSIONS, frontRows, lightOf, regionAt, resetFonts, terminalLines, tileRows, type ControlButton, type DraftState, type Region, type StripState,
 } from './panels.js';
@@ -27,6 +28,7 @@ const state = {
   confirm: null as PendingClose | null,
   ask: null as PendingAsk | null,
   direct: false,
+  voice: { feedback: true, reading: false, trouble: false },
   speech: { ready: false, reason: 'Connecting to the PC…' } as SpeechState,
   scroll: 0,
   scale: 1,
@@ -51,6 +53,13 @@ const scene = new Scene(canvas, {
 let openSource: OpenSource = openMicrophone;
 const mic = new Mic(src => openSource(src), () => state.shelf?.focusedId ?? null, sendUtterance, render);
 const link = new BridgeLink(apply, render);
+/** The voice: phrases the bridge made, fetched and played. The microphone hears nothing while one plays. */
+const player = new VoicePlayer(
+  async id => { const r = await fetch(`/api/say/${id}`, { credentials: 'same-origin' }); return r.ok ? await r.arrayBuffer() : null; },
+  () => { mic.setSuspended(player.playing); render(); },
+);
+// Sound may start only after a tap or key press: take every one as the chance to allow it.
+for (const type of ['pointerdown', 'keydown'] as const) window.addEventListener(type, () => player.unlock(), { capture: true });
 
 setInterval(() => {
   const now = Date.now();
@@ -91,6 +100,9 @@ function apply(event: BridgeEvent): void {
     case 'confirm': state.confirm = event.pending; break;
     case 'ask': state.ask = event.ask; break;
     case 'direct': state.direct = event.on; break;
+    case 'voice': state.voice = { feedback: event.feedback, reading: event.reading, trouble: event.trouble }; break;
+    case 'say': player.enqueue(event.id); break;
+    case 'say-stop': player.stop(); break;
     case 'speech': state.speech = event.speech; break;
     case 'page': if (isPageAction(event.action)) runPage(event.action); break;
     default: return assertNever(event);
@@ -112,6 +124,8 @@ function said(reply: { body: Record<string, unknown> }, fallback: string): strin
 async function runCommand(id: string): Promise<void> {
   const c = command(id);
   if ('page' in c.run) { runPage(c.run.page); return; }
+  // The voice stops at once; the bridge is told to drop what waits behind it.
+  if (id === 'voice-stop') player.stop();
   notice(said(await link.post('/api/action', { command: id }), c.label));
   render();
 }
@@ -332,6 +346,9 @@ function renderNow(): void {
     notice: state.notice?.text ?? null,
     link: stale && link.state !== 'live' ? 'No link to the PC' : stale ? 'Herdr unavailable' : null,
     direct: state.direct,
+    voiceOff: !state.voice.feedback,
+    voiceProblem: state.voice.trouble || player.problem !== null,
+    reading: state.voice.reading,
     confirm: state.confirm,
     ask: state.ask,
   };
@@ -358,6 +375,10 @@ function renderNow(): void {
     row([['enter', 'escape', 'interrupt'], ['up', 'down', 'tab'], ['y', 'n'], ['one', 'two', 'three']], true),
     // Words: send or clear the draft in front, and how spoken prompts are sent. The one in force is lit.
     row([['send', 'scratch'], ['direct-on', 'direct-off']], false).map(b => ({ ...b, on: b.id === (state.direct ? 'direct-on' : 'direct-off') })),
+    // Words for the session in front: its model and effort (typed into it as /model and /effort).
+    row([['model-haiku', 'model-sonnet', 'model-opus'], ['effort-low', 'effort-medium', 'effort-high', 'effort-xhigh', 'effort-max']], false),
+    // The voice: whether answers are spoken and replies read, reading the last reply now, and stopping.
+    row([['voice-on', 'voice-off'], ['read-on', 'read-off'], ['read-last', 'voice-stop']], false).map(b => ({ ...b, on: b.id === (state.voice.feedback ? 'voice-on' : 'voice-off') || b.id === (state.voice.reading ? 'read-on' : 'read-off') })),
   ];
   // Talk, wide and first under the front session: the way in to speaking.
   const phase: TalkPhase = mic.problem ?? (state.speech.ready ? null : state.speech.reason) ? 'problem'
@@ -471,6 +492,7 @@ window.viewState = () => {
     ask: state.ask,
     drafts: shelf?.drafts ?? [],
     direct: state.direct,
+    voice: { feedback: state.voice.feedback, reading: state.voice.reading, trouble: state.voice.trouble, playing: player.playing, played: player.played, problem: player.problem },
     immersive: scene.immersive,
     surfaces: [...scene.surfaces.keys()],
   };

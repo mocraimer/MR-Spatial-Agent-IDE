@@ -8,6 +8,7 @@ import { HerdrBench, type BenchWorkspace } from '../bench/bench.js';
 import { Bridge } from '../bridge/bridge.js';
 import { DEFAULT_MIRROR, Mirror } from '../bridge/mirror.js';
 import type { Settings } from '../bridge/settings.js';
+import type { Voice } from '../bridge/tts.js';
 import { plain } from '../shared/ansi.js';
 import { benchAgents, ScriptedSpeech, type StandinAgentOptions } from './fixture.js';
 
@@ -18,6 +19,11 @@ export interface DeskOptions {
   /** Directories put before PATH in the bench's Herdr, e.g. one holding a stand-in `claude`. */
   path?: string[];
   settings?: Settings;
+  /** The voice for spoken answers; none by default, so nothing is spoken. */
+  voice?: Voice;
+  transcripts?: string;
+  confirmMs?: number;
+  sessionOf?: (paneId: string) => Promise<string | null>;
   log?: (line: string) => void;
 }
 
@@ -30,7 +36,17 @@ export async function setup(layout: BenchWorkspace[], options: DeskOptions = {})
   const mirror = new Mirror(bench.client, DEFAULT_MIRROR);
   const speech = new ScriptedSpeech();
   const agents = benchAgents(bench, data, options.standin ?? {});
-  const bridge = new Bridge(bench.client, mirror, speech, agents, { closeAnswerMs: options.closeAnswerMs ?? 400, ...(options.standbyAnswerMs ? { standbyAnswerMs: options.standbyAnswerMs } : {}), ...(options.settings ? { settings: options.settings } : {}), ...(options.log ? { log: options.log } : {}) });
+  // Optional fields are passed only when given: the project's types do not allow an explicit undefined.
+  const bridge = new Bridge(bench.client, mirror, speech, agents, {
+    closeAnswerMs: options.closeAnswerMs ?? 400,
+    confirmMs: options.confirmMs ?? 500,
+    ...(options.standbyAnswerMs ? { standbyAnswerMs: options.standbyAnswerMs } : {}),
+    ...(options.settings ? { settings: options.settings } : {}),
+    ...(options.voice ? { voice: options.voice } : {}),
+    ...(options.transcripts ? { transcripts: options.transcripts } : {}),
+    ...(options.sessionOf ? { sessionOf: options.sessionOf } : {}),
+    ...(options.log ? { log: options.log } : {}),
+  });
   mirror.start();
   await bench.waitFor(async () => mirror.shelf().sessions.length === layout.flatMap(w => w.panes).length, 'the mirror to see every session');
   const snap = () => bench.client.snapshot();

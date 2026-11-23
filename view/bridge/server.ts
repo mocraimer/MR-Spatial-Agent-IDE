@@ -87,6 +87,13 @@ export function startServer(options: ServerOptions): Promise<Server> {
 
     if (req.method === 'GET' && path === '/api/session') return send(res, 200, { paired: true });
     if (req.method === 'GET' && path === '/api/events') return events(req, res);
+    const said = /^\/api\/say\/([A-Za-z0-9-]{1,64})$/.exec(path);
+    if (req.method === 'GET' && said) {
+      const wav = bridge.clip(said[1] as string);
+      if (!wav) return send(res, 404, { error: 'That phrase is gone.' });
+      res.writeHead(200, { 'Content-Type': 'audio/wav', 'Cache-Control': 'no-store', 'Content-Length': wav.length });
+      return void res.end(wav);
+    }
     if (req.method === 'POST' && path === '/api/action') {
       const body = await json(req, 4096);
       if (typeof body.focus === 'string') return send(res, 200, await bridge.act({ kind: 'focus', sessionId: body.focus }));

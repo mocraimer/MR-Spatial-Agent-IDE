@@ -25,7 +25,26 @@ export type BridgeAction =
   /** Turns direct sending on or off: spoken prompts sent as soon as they are heard. */
   | { kind: 'direct'; on: boolean }
   /** Answers the one question that waits for the owner: a close, or a command heard while listening is off. */
-  | { kind: 'answer'; answer: boolean };
+  | { kind: 'answer'; answer: boolean }
+  /** Types `/model <name>` into the session in front (a Claude Code session that is idle). */
+  | { kind: 'model'; name: ModelName }
+  /** Types `/effort <level>` into the session in front. */
+  | { kind: 'effort'; level: EffortLevel }
+  /** Spoken feedback for commands on or off. */
+  | { kind: 'voice'; on: boolean }
+  /** Reading each finished reply of the session in front aloud, on or off. */
+  | { kind: 'read-replies'; on: boolean }
+  /** Reads the last reply of the session in front aloud, once. */
+  | { kind: 'read-last' }
+  /** Ends the phrase that is being spoken and drops those waiting behind it. */
+  | { kind: 'voice-stop' };
+
+/** The models and effort levels the owner can set by voice: Claude Code's own names. */
+export const MODELS = ['haiku', 'sonnet', 'opus'] as const;
+export type ModelName = (typeof MODELS)[number];
+/** Spoken name, then the level Claude Code takes. */
+export const EFFORTS = [['low', 'low'], ['medium', 'medium'], ['high', 'high'], ['extra high', 'xhigh'], ['max', 'max']] as const;
+export type EffortLevel = (typeof EFFORTS)[number][1];
 
 export interface Command {
   id: string;
@@ -42,6 +61,9 @@ export interface Command {
   whenConfirming?: true;
 }
 
+const cap = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
+const model = (name: ModelName): Command => ({ id: `model-${name}`, label: `Model ${cap(name)}`, does: `Set the model to ${name}`, say: [`model ${name}`, `set model ${name}`, `set model to ${name}`, `model to ${name}`], run: { bridge: { kind: 'model', name } } });
+const effort = (spoken: string, level: EffortLevel): Command => ({ id: `effort-${level}`, label: `Effort ${spoken}`, does: `Set the effort to ${spoken}`, say: [`effort ${spoken}`, `set effort ${spoken}`, `set effort to ${spoken}`, `effort to ${spoken}`], run: { bridge: { kind: 'effort', level } } });
 const key = (id: string, label: string, k: KeyName, say: string[]): Command => ({ id, label, does: `Press ${label}`, say, run: { bridge: { kind: 'key', key: k } } });
 
 export const COMMANDS: readonly Command[] = [
@@ -62,6 +84,15 @@ export const COMMANDS: readonly Command[] = [
   { id: 'scratch', label: 'Scratch that', does: 'Clear the draft', say: ['scratch that', 'clear that'], run: { bridge: { kind: 'scratch' } } },
   { id: 'direct-on', label: 'Send at once', does: 'Send each prompt as soon as it is heard', say: ['send at once'], run: { bridge: { kind: 'direct', on: true } } },
   { id: 'direct-off', label: 'Wait for go', does: 'Wait for “go” before sending', say: ['wait for go', 'way for go'], run: { bridge: { kind: 'direct', on: false } } },
+  ...MODELS.map(model),
+  ...EFFORTS.map(([spoken, level]) => effort(spoken, level)),
+  // These change only what the owner hears: nothing reaches a session, so they run at once in standby.
+  { id: 'voice-on', label: 'Voice on', does: 'Speak answers', say: ['voice on', 'speak answers'], run: { bridge: { kind: 'voice', on: true } }, viewOnly: true },
+  { id: 'voice-off', label: 'Voice off', does: 'Stop speaking answers', say: ['voice off', 'mute voice'], run: { bridge: { kind: 'voice', on: false } }, viewOnly: true },
+  { id: 'read-on', label: 'Read replies', does: 'Read each finished reply aloud', say: ['read replies', 'read my replies'], run: { bridge: { kind: 'read-replies', on: true } }, viewOnly: true },
+  { id: 'read-off', label: 'Stop reading', does: 'Stop reading replies aloud', say: ['stop reading replies', 'dont read replies'], run: { bridge: { kind: 'read-replies', on: false } }, viewOnly: true },
+  { id: 'read-last', label: 'Read that', does: 'Read the last reply aloud', say: ['read that', 'read that again', 'read the reply'], run: { bridge: { kind: 'read-last' } }, viewOnly: true },
+  { id: 'voice-stop', label: 'Quiet', does: 'Stop the voice', say: ['stop talking', 'be quiet', 'quiet'], run: { bridge: { kind: 'voice-stop' } }, viewOnly: true },
   { id: 'scroll-up', label: 'Scroll up', say: ['scroll up', 'page up'], run: { page: 'scroll-up' }, viewOnly: true },
   { id: 'scroll-down', label: 'Scroll down', say: ['scroll down', 'page down'], run: { page: 'scroll-down' }, viewOnly: true },
   { id: 'bottom', label: 'Latest', say: ['scroll bottom', 'bottom', 'go bottom', 'scroll to bottom', 'latest'], run: { page: 'scroll-bottom' }, viewOnly: true },

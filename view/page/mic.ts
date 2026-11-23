@@ -142,9 +142,23 @@ export class Mic {
     if (this.live) { this.live = false; this.onChange(); }
   }
 
+  /** True while the voice plays: the microphone hears nothing, so the voice is never taken for the owner. */
+  private suspended = false;
+
+  /** Starts or ends a stretch in which every sample is ignored. A recording not held by hand is dropped. */
+  setSuspended(on: boolean): void {
+    if (on === this.suspended) return;
+    this.suspended = on;
+    if (!on) return;
+    if (!this.holding) this.recording = null;
+    this.pending = new Float32Array(0);
+    this.preRoll = [];
+    this.loud = 0; this.quiet = 0;
+  }
+
   /** Every sample the microphone hears comes through here. */
   feed(samples: Float32Array): void {
-    if (!this.live) return;
+    if (!this.live || this.suspended) return;
     if (this.holding) {
       if (!this.recording) return;
       this.append(samples);

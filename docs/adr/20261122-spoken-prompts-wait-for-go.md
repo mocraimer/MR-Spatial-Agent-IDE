@@ -1,7 +1,7 @@
 # ADR: Spoken prompts wait for "go", and the microphone stands by while listening is off
 
 ## Status
-Accepted
+Accepted; narrowed by 20261123-spoken-answers-made-on-the-pc-by-the-windows-voice: the microphone hears nothing while the voice plays
 
 ## Area
 Spatial view

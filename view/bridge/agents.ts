@@ -28,6 +28,14 @@ const GUARD = compiled('bridge', 'guard.js');
 /** The environment variable that tells the close and level tools where the bridge listens. */
 export const CLOSE_SOCKET_ENV = 'SPATIAL_VIEW_HELPER_SOCKET';
 
+/**
+ * What both kinds of level agent run on: Sonnet at medium effort. It is written into each agent's
+ * folder settings as well as its start arguments, so an agent Herdr resumes (with no arguments) keeps it.
+ */
+export const LEVEL_MODEL = 'sonnet';
+export const LEVEL_EFFORT = 'medium';
+const LEVEL_ARGS = ['--model', LEVEL_MODEL, '--effort', LEVEL_EFFORT];
+
 /** The overview, or the project with this workspace id. */
 export type Level = { overview: true } | { project: string };
 export const OVERVIEW: Level = { overview: true };
@@ -64,9 +72,10 @@ export interface LevelAgents {
   describe(paneId: string): string;
 }
 
-function settings(permissions: Record<string, unknown>, model?: string): string {
+function settings(permissions: Record<string, unknown>): string {
   return JSON.stringify({
-    ...(model ? { model } : {}),
+    model: LEVEL_MODEL,
+    effortLevel: LEVEL_EFFORT,
     permissions,
     skipDangerousModePermissionPrompt: true,
     // The guard runs on every tool call: it is what keeps a close behind the owner's yes.
@@ -86,19 +95,19 @@ function herdrSkill(): string {
   try { return execFileSync('herdr', ['--skill'], { encoding: 'utf8', timeout: 5000 }); } catch { return ''; /* the instructions still hold */ }
 }
 
-/** The helper: Haiku through Claude Code, with the guard hook and no per-command permission prompts. */
+/** The helper: Claude Code on Sonnet at medium effort, with the guard hook and no per-command permission prompts. */
 export function claudeHelper(directory: string): AgentOptions {
   const file = join(directory, '.claude', 'settings.json');
   return {
     kind: 'claude',
     cwd: directory,
-    args: ['--model', 'haiku', '--permission-mode', 'bypassPermissions', '--settings', file, '--strict-mcp-config'],
-    prepare: () => { write(directory, settings({ defaultMode: 'bypassPermissions' }, 'haiku'), `${HELPER_INSTRUCTIONS}\n\n${herdrSkill()}`); },
+    args: [...LEVEL_ARGS, '--permission-mode', 'bypassPermissions', '--settings', file, '--strict-mcp-config'],
+    prepare: () => { write(directory, settings({ defaultMode: 'bypassPermissions' }), `${HELPER_INSTRUCTIONS}\n\n${herdrSkill()}`); },
   };
 }
 
 /**
- * A project agent: an ordinary Claude Code session on its default model. It may read, and it
+ * A project agent: Claude Code on Sonnet at medium effort. It may read, and it
  * acts on sessions only through the level tool, which keeps it to its own project; anything
  * else meets Claude Code's own permission prompt, which shows as a waiting session.
  */
@@ -108,7 +117,7 @@ export function claudeProjectAgent(directory: string): AgentOptions {
   return {
     kind: 'claude',
     cwd: directory,
-    args: ['--settings', file, '--strict-mcp-config'],
+    args: [...LEVEL_ARGS, '--settings', file, '--strict-mcp-config'],
     prepare: () => { write(directory, settings({ allow, defaultMode: 'default' }), PROJECT_INSTRUCTIONS); },
   };
 }

@@ -39,6 +39,8 @@ test('spoken words reach a session in one way each: typed by typeInto, or sent b
     'agent.prompt in order',
     'agent.prompt in prompt',
     'pane.send_input in prompt',
+    // The one other writer: the fixed command `/model <name>` or `/effort <level>`, never spoken words (asserted below).
+    'pane.send_input in typeSetting',
     'pane.send_text in typeInto',
   ]);
   const bridge = source('bridge.ts');
@@ -46,4 +48,18 @@ test('spoken words reach a session in one way each: typed by typeInto, or sent b
   assert.match(bridge, /private async order\([^)]*\)[^{]*\{\s*if \(this\.settings\.direct\)/);
   assert.match(bridge, /if \(this\.settings\.direct\) \{\s*try \{ await this\.prompt\(/);
   assert.equal(bridge.split('this.prompt(').length - 1, 1, 'prompt() has the one caller that checks the setting');
+  // typeSetting types text built from two registry-typed values, and its callers pass only those.
+  assert.match(bridge, /private async typeSetting\([^)]*what: 'model' \| 'effort', value: ModelName \| EffortLevel\)/);
+  assert.match(bridge, /const typed = `\/\$\{what\} \$\{value\}`;/);
+  const callers = [...bridge.matchAll(/this\.typeSetting\(([^;]*)\)/g)].map(m => (m[1] as string).replace(/^shelf, [\w.]+, /, ''));
+  assert.deepEqual(callers.sort(), ["'effort', action.level", "'effort', run.level", "'model', action.name", "'model', run.name"]);
+});
+
+test('text reaches the Windows voice as data only: the command line is fixed and the text goes on standard input', () => {
+  // The text is an agent's reply or transcribed speech: never part of a command (see the tts tests).
+  const tts = source('tts.ts');
+  assert.equal(tts.split('spawn(').length - 1, 1, 'one place starts a process');
+  assert.match(tts, /spawn\(this\.exe, \['-NoProfile', '-NonInteractive', '-Command', SCRIPT\]/);
+  assert.match(tts, /child\.stdin\.end\(said, 'utf8'\)/);
+  assert.doesNotMatch(tts.slice(tts.indexOf('const SCRIPT'), tts.indexOf('/** What the bridge needs')), /\$\{/, 'the script holds no interpolation');
 });

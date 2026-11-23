@@ -1,7 +1,7 @@
 # ADR: The helper runs without permission prompts; closing is held by a hook and the owner's yes
 
 ## Status
-Accepted
+Accepted; narrowed by 20261123-level-agents-run-on-sonnet-at-medium-effort: the helper runs on Sonnet at medium effort, not Haiku
 
 ## Area
 Spatial view

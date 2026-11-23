@@ -5,7 +5,7 @@ export type Slot =
   /** A close the helper asked for: the helper's tool waits on the answer. */
   | { kind: 'close'; sessionId: string; name: string; settle: (yes: boolean) => void }
   /** A command heard while listening is off: done only after a "yes". */
-  | { kind: 'command'; label: string; run: () => Promise<{ ok: boolean; outcome: string }> };
+  | { kind: 'command'; label: string; run: () => Promise<{ ok: boolean; outcome: string; silent?: true; say?: string }> };
 
 /**
  * The one question that can wait for the owner's "yes" or "no". A yes answers exactly the question

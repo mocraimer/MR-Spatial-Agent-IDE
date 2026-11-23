@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { compiled } from '../bridge/config.js';
 import { HerdrClient, type JsonObject } from '../bridge/herdr.js';
 
-export interface BenchPane { name: string; kind: 'agent' | 'shell' }
+export interface BenchPane { name: string; kind: 'agent' | 'shell'; /** The agent the stand-in presents itself as (default `claude`). */ as?: string }
 export interface BenchWorkspace { label: string; panes: BenchPane[] }
 
 /** Shaped like a busy desk: six projects, eight agents, plus shells. */
@@ -95,7 +95,7 @@ export class HerdrBench {
     await this.waitFor(async () => (await this.client.read(paneId, 5)).includes('$'), `${pane.name} shell prompt`);
     // A real shell is named by its terminal title; a bench shell has none, so it gets a label.
     if (pane.kind === 'shell') { await this.client.call('pane.rename', { pane_id: paneId, label: pane.name }); return; }
-    await this.client.call('pane.send_text', { pane_id: paneId, text: `exec node ${STANDIN} --name ${pane.name} --bench ${this.directory}\r` });
+    await this.client.call('pane.send_text', { pane_id: paneId, text: `exec node ${STANDIN} --name ${pane.name} --bench ${this.directory}${pane.as ? ` --agent ${pane.as}` : ''}\r` });
     await this.waitFor(async () => (await this.client.snapshot()).panes.some(p => p.id === paneId && p.agent !== null), `${pane.name} registered as an agent`);
   }
 

@@ -8,7 +8,7 @@ export default defineConfig({
   retries: 0,
   timeout: 30000,
   expect: { timeout: 7000 },
-  use: { browserName: 'chromium', headless: true, viewport: { width: 1280, height: 960 }, trace: 'retain-on-failure', screenshot: 'only-on-failure' },
+  use: { browserName: 'chromium', headless: true, viewport: { width: 1280, height: 960 }, trace: 'retain-on-failure', screenshot: 'only-on-failure', launchOptions: { args: ['--autoplay-policy=no-user-gesture-required'] } },
   outputDir: '/tmp/spatial-workspace-playwright-results',
   reporter: 'list',
 });
