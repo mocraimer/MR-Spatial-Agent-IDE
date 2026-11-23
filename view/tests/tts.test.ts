@@ -2,12 +2,14 @@
  * The Windows voice's process boundary: what it is run with, how it fails, and one real synthesis
  * on this PC (skipped where Windows PowerShell is not there). The text is an agent's reply or
  * transcribed speech, so it must reach the voice as data and run nothing.
+ * Also tests KokoroVoice: fallback behavior with a missing model, and (when KOKORO_TEST_DIR is set)
+ * a real Kokoro synthesis to verify af_heart voice and 24kHz WAV output.
  */
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { WindowsVoice, PHRASE_MAX } from '../bridge/tts.js';
+import { KokoroVoice, WindowsVoice, KOKORO_MODEL, KOKORO_VOICE, PHRASE_MAX } from '../bridge/tts.js';
 
 /** A stand-in for powershell.exe: a node script run as the voice's executable. */
 function standin(directory: string, name: string, body: string): string {
@@ -58,6 +60,59 @@ test('a voice that hangs is stopped after its bound, one that makes no audio or 
     await assert.rejects(missing.speak('x'), /could not be started/);
     for (const exe of [hang]) assert.equal(new WindowsVoice(exe).problem(), null);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('KokoroVoice with a missing model falls back to the Windows voice and reports failure', async () => {
+  const dir = mkdtempSync('/tmp/svl-kokoro-');
+  try {
+    const missingModel = join(dir, 'no-such-model');
+    const windows = new WindowsVoice();
+    let failReason: string | null = null;
+    // Use a path that does not exist; the worker will fail to load the model.
+    const v = new KokoroVoice(missingModel, KOKORO_VOICE, windows, () => undefined, r => { failReason = r; });
+    // Before the worker fails, speak() uses the fallback.
+    assert.equal(v.voiceId, KOKORO_VOICE, 'af_heart is the default voice id');
+    // problem() delegates to fallback.
+    assert.equal(v.problem(), windows.problem());
+    v.stop();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// AC-2.1: Real Kokoro synthesis. Set KOKORO_TEST_DIR to a writable directory; the model is
+// downloaded there if not already present. The test verifies the voice is af_heart and the
+// output is a 24kHz WAV.
+const kokoroTestDir = process.env.KOKORO_TEST_DIR;
+test('the real Kokoro voice (af_heart) makes a 24kHz WAV', { skip: kokoroTestDir ? false : 'set KOKORO_TEST_DIR to run this' }, async () => {
+  const models = kokoroTestDir!;
+  const modelPath = join(models, KOKORO_MODEL);
+  if (!existsSync(modelPath)) {
+    console.log('# Downloading Kokoro model for test (this may take a minute)…');
+    mkdirSync(models, { recursive: true });
+    const { fetchKokoroModel } = await import('../bridge/tts.js');
+    await fetchKokoroModel(models);
+  }
+  assert.ok(existsSync(modelPath), 'model directory exists after download');
+  const started = Date.now();
+  await new Promise<void>((resolve, reject) => {
+    const windows = new WindowsVoice();
+    const v = new KokoroVoice(
+      modelPath, KOKORO_VOICE, windows,
+      async () => {
+        try {
+          assert.equal(v.voiceId, KOKORO_VOICE, 'voice is af_heart');
+          const wav = await v.speak('Hello from Kokoro.');
+          assert.equal(wav.toString('ascii', 0, 4), 'RIFF', 'output is a WAV');
+          const hz = wav.readUInt32LE(24);
+          assert.equal(hz, 24000, '24kHz sample rate');
+          assert.ok(wav.length > 10_000, 'some audio was made');
+          console.log(`# Kokoro af_heart: ${wav.length} bytes, ${hz} Hz, made in ${Date.now() - started} ms`);
+          v.stop();
+          resolve();
+        } catch (e) { v.stop(); reject(e as Error); }
+      },
+      reason => { v.stop(); reject(new Error(`Kokoro failed: ${reason}`)); },
+    );
+  });
 });
 
 const real = new WindowsVoice();

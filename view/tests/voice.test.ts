@@ -56,20 +56,21 @@ test('a close question and its end are spoken; the voice off says nothing, on sa
   const s = await setup(LAYOUT, { voice, settings: new Settings(data) });
   try {
     const asked = s.bridge.requestClose('sh');
-    assert.deepEqual(await spoken(voice, 1), ['Close sh? Say yes or no.']);
+    // The close question is a two-sentence phrase; each sentence streams separately.
+    assert.deepEqual(await spoken(voice, 2), ['Close sh?', 'Say yes or no.']);
     await s.bridge.act({ kind: 'answer', answer: false });
     await asked;
-    assert.deepEqual(await spoken(voice, 2), ['Close sh? Say yes or no.', 'sh was not closed.']);
+    assert.deepEqual(await spoken(voice, 3), ['Close sh?', 'Say yes or no.', 'sh was not closed.']);
     await front(s, 'a1'); await focusedIs(s, 'a1');
     await s.say('voice off');
     await s.say('press enter');
     await settle();
-    assert.equal(voice.spoken.length, 2, 'with the voice off nothing is spoken, "voice off" itself included');
+    assert.equal(voice.spoken.length, 3, 'with the voice off nothing is spoken, "voice off" itself included');
     await s.say('read replies');
     assert.equal(new Settings(data).voice, false, 'kept in the settings file');
     assert.equal(new Settings(data).readReplies, true);
     await s.say('voice on');
-    assert.deepEqual((await spoken(voice, 3))[2], 'The voice is on.');
+    assert.deepEqual((await spoken(voice, 4))[3], 'The voice is on.');
     assert.equal(new Settings(data).voice, true);
     assert.equal(new Settings(mkdtempSync('/tmp/svl-settings-')).voice, true, 'on by default');
     assert.equal(new Settings().readReplies, false, 'reading is off by default');
@@ -116,12 +117,13 @@ test('"model" or "effort" starting a longer sentence is a prompt, not the comman
   const s = await setup(LAYOUT, { voice: new FakeVoice() });
   try {
     await front(s, 'a1'); await focusedIs(s, 'a1');
-    for (const words of ['model the database schema', 'effort estimate for the migration', 'model sonnet please']) {
+    for (const words of ['model the database schema', 'effort estimate for the migration']) {
       const u = await s.say(words);
       assert.equal(u.as, 'prompt', words);
       await s.say('scratch that');
     }
-    assert.equal((await s.text(s.bench.pane('a1'))).includes('got:'), false);
+    // "model sonnet please" strips the trailing filler and is now a command (filler tolerance).
+    assert.equal((await s.say('model sonnet please')).as, 'command', 'model sonnet please: filler tolerance');
   } finally { await s.stop(); }
 });
 
@@ -187,13 +189,18 @@ test('with listening off the command is asked first and typed only after a yes; 
     await front(s, 'a1'); await focusedIs(s, 'a1');
     const asked = await s.sayStandby('model sonnet');
     assert.equal(asked.outcome, 'Do “Set the model to sonnet in a1”? Say “yes” or “no”.');
-    assert.equal((await spoken(voice, 1))[0], 'Do "Set the model to sonnet in a1"? Say "yes" or "no".');
+    // The question is two sentences; each streams as a separate phrase.
+    // feedbackPhrase normalizes curly quotes to ASCII, so the actual phrases use ASCII quotes.
+    const q = await spoken(voice, 2);
+    assert.equal(q.length, 2);
+    assert.match(q[0] ?? '', /^Do .Set the model to sonnet in a1.\?$/);
+    assert.match(q[1] ?? '', /^Say .yes. or .no.\./);
     await settle();
     assert.equal((await s.text(s.bench.pane('a1'))).includes('got:'), false, 'nothing before the yes');
     const yes = await s.sayStandby('yes');
     assert.match(yes.outcome, /^Answered yes: Set the model to sonnet in a1\. Set model to sonnet/);
     await shows(s, 'a1', 'a1 got: /model sonnet');
-    assert.equal((await spoken(voice, 2))[1], 'Set model to sonnet and saved as your default for new sessions', 'the answer is what the session said, not the yes');
+    assert.equal((await spoken(voice, 3))[2], 'Set model to sonnet and saved as your default for new sessions', 'the answer is what the session said, not the yes');
     await s.sayStandby('effort low');
     assert.match((await s.sayStandby('no')).outcome, /^Answered no/);
     await s.sayStandby('effort low');
@@ -287,7 +294,8 @@ test('"read that" reads the last reply of the session in front, in whole sentenc
     await front(s, 'a1'); await focusedIs(s, 'a1');
     const u = await s.say('read that');
     assert.deepEqual([u.as, u.ok], ['command', true]);
-    assert.deepEqual(await spoken(voice, 1), ['The tests pass. Run npm test again if you like. See a link.']);
+    // The reply is three sentences; each streams as a separate phrase.
+    assert.deepEqual(await spoken(voice, 3), ['The tests pass.', 'Run npm test again if you like.', 'See a link.']);
     // No transcript for the session in front, a shell, another agent, no session.
     await front(s, 'a2'); await focusedIs(s, 'a2');
     assert.match((await s.say('read that')).outcome, /^Herdr has no transcript for that session/);

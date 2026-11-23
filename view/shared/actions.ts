@@ -45,6 +45,10 @@ export type BridgeAction =
   /** Make a new project folder named by what was said into the folder list. */
   | { kind: 'picker-make' }
   | { kind: 'pick'; n: number }
+  /** Turn keeping utterance audio and text on or off. */
+  | { kind: 'keep-speech'; on: boolean }
+  /** Delete all kept utterances. */
+  | { kind: 'delete-speech' }
   /** Clicks and scrolls for the PC window a mirror session shows. */
   | { kind: 'window-input'; sessionId: string; events: WindowInput[] };
 
@@ -127,6 +131,10 @@ export const COMMANDS: readonly Command[] = [
   { id: 'more', label: 'More', say: ['more', 'next page', 'show more'], run: { bridge: { kind: 'picker-page', delta: 1 } }, whenPicking: true, viewOnly: true },
   { id: 'previous', label: 'Previous', say: ['previous', 'previous page'], run: { bridge: { kind: 'picker-page', delta: -1 } }, whenPicking: true, viewOnly: true },
   { id: 'make', label: 'Make it', does: 'Make a new project folder with the name said', say: ['make it', 'make new', 'make a new folder', 'make that'], run: { bridge: { kind: 'picker-make' } }, whenPicking: true },
+  // Keep speech: viewOnly because nothing reaches a session. Off by default; persisted.
+  { id: 'keep-speech-on', label: 'Keep my speech', does: 'Keep each utterance as audio and text in the data folder', say: ['keep my speech', 'save my speech', 'record my speech'], run: { bridge: { kind: 'keep-speech', on: true } }, viewOnly: true },
+  { id: 'keep-speech-off', label: 'Stop keeping speech', does: 'Stop keeping utterances', say: ['stop keeping my speech', 'dont keep my speech', 'stop saving my speech'], run: { bridge: { kind: 'keep-speech', on: false } }, viewOnly: true },
+  { id: 'delete-speech', label: 'Delete my speech', does: 'Delete all kept utterances', say: ['delete my speech', 'delete my recordings', 'clear my speech'], run: { bridge: { kind: 'delete-speech' } }, viewOnly: true },
 ];
 
 export function command(id: string): Command {

@@ -3,6 +3,8 @@
  * the yes before a close. The HTTP server (server.ts) only authenticates and forwards here.
  */
 import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { shelfOrder, type BridgeAction, type Command, type EffortLevel, type KeyName, type ModelName } from '../shared/actions.js';
 import { plain } from '../shared/ansi.js';
 import { currentProject, type BridgeEvent, type Picker, type Project, type Session, type Shelf, type SpeechState, type Utterance } from '../shared/messages.js';
@@ -22,6 +24,22 @@ import { addProject, folders, loose as squeezed, makeProject, newProjectRoot, pr
 import type { Frame, Windows } from './windows.js';
 
 export interface Transcriber { state(): SpeechState; transcribe(audio: Float32Array): Promise<string> }
+
+/** Encode float32 PCM samples (–1..1) as a 16-bit mono WAV at the given sample rate. */
+function pcmToWav(samples: Float32Array, sampleRate: number): Buffer {
+  const dataLen = samples.length * 2;
+  const buf = Buffer.allocUnsafe(44 + dataLen);
+  buf.write('RIFF', 0); buf.writeUInt32LE(36 + dataLen, 4); buf.write('WAVE', 8);
+  buf.write('fmt ', 12); buf.writeUInt32LE(16, 16); buf.writeUInt16LE(1, 20);
+  buf.writeUInt16LE(1, 22); buf.writeUInt32LE(sampleRate, 24);
+  buf.writeUInt32LE(sampleRate * 2, 28); buf.writeUInt16LE(2, 32); buf.writeUInt16LE(16, 34);
+  buf.write('data', 36); buf.writeUInt32LE(dataLen, 40);
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i] ?? 0));
+    buf.writeInt16LE(s < 0 ? s * 0x8000 : s * 0x7fff, 44 + i * 2);
+  }
+  return buf;
+}
 
 type Send = (event: BridgeEvent) => void;
 export type CloseAnswer = 'closed' | 'declined' | 'no-answer' | 'unknown-session' | 'ambiguous' | 'busy' | 'failed';
@@ -49,6 +67,8 @@ export interface BridgeOptions {
   pickerIdleMs?: number | undefined;
   /** The window mirrors; without them, the PC's windows are not offered. */
   mirrors?: Mirrors | undefined;
+  /** Where kept utterance WAVs and texts are stored; without it, keeping speech is a no-op. */
+  speechKeepDir?: string;
 }
 /** What a command came to; `silent` marks one whose own speech is the answer. */
 type Result = { ok: boolean; outcome: string; silent?: true; say?: string };
@@ -110,6 +130,7 @@ export class Bridge {
   private readonly noteTimer: NodeJS.Timeout;
   private readonly mirrors: Mirrors;
   private readonly pickerIdleMs: number;
+  private readonly speechKeepDir: string | undefined;
 
   constructor(
     private readonly herdr: HerdrClient,
@@ -129,6 +150,7 @@ export class Bridge {
     this.say = options.voice ? new Say(options.voice, event => this.broadcast(event), text => this.broadcast({ type: 'notice', text }), this.log, () => this.announceVoice()) : null;
     this.mirrors = options.mirrors ?? new Mirrors(herdr, NO_WINDOWS, '');
     this.pickerIdleMs = options.pickerIdleMs ?? PICKER_IDLE_MS;
+    this.speechKeepDir = options.speechKeepDir;
     agents.onChange(() => { this.logAgentStarts(); this.broadcast({ type: 'shelf', shelf: this.shelf() }); });
     mirror.listen({
       shelf: shelf => {
@@ -190,6 +212,9 @@ export class Bridge {
 
   broadcast(event: BridgeEvent): void { for (const send of this.clients) send(event); }
 
+  /** Sends a notice to every connected page. */
+  notice(text: string): void { this.broadcast({ type: 'notice', text }); }
+
   /** The audio of a spoken phrase, for the page to fetch. */
   clip(id: string): Buffer | undefined { return this.say?.clip(id); }
 
@@ -249,6 +274,8 @@ export class Bridge {
         }
         case 'picker-make': return await this.makeFromPicker(null);
         case 'pick': return await this.pick(shelf, action.n);
+        case 'keep-speech': return this.setKeepSpeech(action.on);
+        case 'delete-speech': return this.deleteSpeech();
         case 'window-input': {
           const s = shelf.sessions.find(x => x.id === action.sessionId);
           if (!s?.window) return { ok: false, outcome: 'That session is not a window mirror.' };
@@ -291,6 +318,7 @@ export class Bridge {
     try { heard = (await this.speech.transcribe(audio)).trim(); } catch (error) {
       return record('', { as: 'nothing', ok: false, outcome: `Speech could not be read: ${(error as Error).message}` });
     }
+    if (this.settings.keepSpeech && this.speechKeepDir && heard) this.keepUtterance(audio, heard);
     const shelf = this.shelf();
     const taken = classify(heard, this.questions.waiting, this.picker !== null);
     // A command waiting for its yes is dropped by anything the owner says but a yes or a no. Noise that came to no words is not something said.
@@ -575,10 +603,19 @@ export class Bridge {
     return { ok: true, outcome: `Cleared the draft in ${name(shelf, target)}` };
   }
 
-  /** Speaks a phrase when there is one and the owner has the voice on. Returns whether it was queued. */
+  /**
+   * Speaks a phrase when there is one and the owner has the voice on. Splits into sentences so
+   * each is made and sent to the page as soon as it is ready. Returns whether anything was queued.
+   */
   private speak(phrase: string | null): boolean {
     if (phrase === null || !this.settings.voice || !this.say) return false;
-    return this.say.say(phrase);
+    // Split on sentence-ending punctuation. Each sentence queues separately so the voice
+    // streams the first word to the page before later sentences are even synthesised.
+    const parts = phrase.match(/[^.!?]+(?:[.!?]+(?=\s|$)|$)/g)?.map(s => s.trim()).filter(Boolean);
+    if (!parts || parts.length === 0) return this.say.say(phrase);
+    let queued = false;
+    for (const part of parts) queued = this.say.say(part) || queued;
+    return queued;
   }
 
   /**
@@ -623,6 +660,42 @@ export class Bridge {
   }
 
   private announceVoice(): void { this.broadcast({ type: 'voice', feedback: this.settings.voice, reading: this.settings.readReplies, trouble: this.say?.failed ?? false }); }
+
+  private keepUtterance(audio: Float32Array, text: string): void {
+    try {
+      const dir = this.speechKeepDir!;
+      mkdirSync(dir, { recursive: true });
+      const existing = readdirSync(dir).filter(f => f.endsWith('.wav'));
+      // Cap at 1,000; trim oldest first (names sort lexicographically by timestamp).
+      if (existing.length >= 1000) {
+        existing.sort();
+        for (const f of existing.slice(0, existing.length - 999)) rmSync(join(dir, f));
+      }
+      const name = `${new Date().toISOString().replace(/[:.]/g, '-')}`;
+      writeFileSync(join(dir, `${name}.txt`), text);
+      writeFileSync(join(dir, `${name}.wav`), pcmToWav(audio, 16000));
+    } catch (error) {
+      this.log(`keep speech failed: ${(error as Error).message}`);
+    }
+  }
+
+  private setKeepSpeech(on: boolean): Result {
+    const saved = this.save(() => this.settings.setKeepSpeech(on), `keep speech turned ${on ? 'on' : 'off'}`);
+    const note = on ? 'Each utterance is kept as audio and text in the data folder on this PC.' : 'Utterances are no longer kept.';
+    return { ok: true, outcome: note + saved, silent: true };
+  }
+
+  private deleteSpeech(): Result {
+    if (!this.speechKeepDir) return { ok: false, outcome: 'No speech has been kept.' };
+    try {
+      const files = readdirSync(this.speechKeepDir);
+      for (const f of files) rmSync(join(this.speechKeepDir, f));
+      this.log('kept speech deleted');
+      return { ok: true, outcome: `Deleted ${files.length} kept utterance${files.length === 1 ? '' : 's'}.`, silent: true };
+    } catch (error) {
+      return { ok: false, outcome: `Could not delete kept speech: ${(error as Error).message}` };
+    }
+  }
 
   /**
    * Runs a settings write and logs it. A file that cannot be written is logged too, and the setting

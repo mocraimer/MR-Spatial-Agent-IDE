@@ -33,18 +33,34 @@ export type Heard =
   | { as: 'prompt'; text: string }
   | { as: 'nothing' };
 
+/** Leading/trailing spoken fillers that may appear around a command without changing its meaning. */
+const FILLERS = /^(?:uh|um|okay|ok|so|please)\s+|\s+(?:uh|um|okay|ok|so|please)$|\s+(?:please)$/g;
+
+/** Strip leading/trailing fillers from a normalized utterance; returns the core. */
+function stripFillers(words: string): string {
+  let s = words;
+  let prev: string;
+  do { prev = s; s = s.replace(FILLERS, ''); } while (s !== prev);
+  return s.trim();
+}
+
 /**
  * What an utterance is taken as. A command must be the whole utterance, so a prompt that
  * merely starts with a command word ("back up the database") still goes to the agent.
+ * Leading/trailing fillers ("uh", "um", "okay", "so", "please") are stripped before
+ * matching commands so "please enter" and "uh next" still work.
  */
 export function classify(text: string, confirming: boolean, picking = false): Heard {
   const words = normalize(text);
   if (!words) return { as: 'nothing' };
+  // Strip fillers to try command matching, but keep original `words` for other uses.
+  const core = stripFillers(words);
   // "press to", "press two" and "press 2" are one command: numbers are compared as digits.
-  const said = words.replace(/^(press|option|show|focus|go to|open)(?: number| tile)? (\S+)$/, (whole, verb: string, word: string) => {
+  const numberize = (s: string) => s.replace(/^(press|option|show|focus|go to|open)(?: number| tile)? (\S+)$/, (whole, verb: string, word: string) => {
     const n = spokenNumber(word);
     return n === null ? whole : `${verb} ${n}`;
   });
+  const said = numberize(core);
   const found = COMMANDS.find(c => c.say.includes(said) && (!c.whenConfirming || confirming) && (!c.whenPicking || picking));
   if (found) return { as: 'command', command: found };
   if (picking) {

@@ -249,6 +249,9 @@ A command must be the whole utterance. These are all the forms, each in quotatio
 | Answer a question that waits | "yes", "confirm", "yes close it", "close it"; "no", "cancel", "dont close", "keep it" |
 | Mirror a PC window, New project | "mirror", "mirror a window", "show windows", "show pc windows", "pc windows"; "new project", "add project", "add a project", "make a project" |
 | In a list | a number ("two", "number two", "pick two"); "more", "next page", "show more"; "previous", "previous page"; "cancel", "close list", "close the list", "never mind"; "make it", "make new", "make a new folder", "make that", or "make" and a name; any other words narrow it |
+| Keep my speech | "keep my speech", "save my speech", "record my speech" |
+| Stop keeping speech | "stop keeping my speech", "dont keep my speech", "stop saving my speech" |
+| Delete my speech | "delete my speech", "delete my recordings", "clear my speech" |
 
 ## Closing, and what the agents may do
 
