@@ -3,6 +3,8 @@
  * the yes before a close. The HTTP server (server.ts) only authenticates and forwards here.
  */
 import { homedir } from 'node:os';
+import { randomUUID } from 'node:crypto';
+import { claudeSettingsPath, saveDefaults, restoreDefaults } from './claude-settings.js';
 import { shelfOrder, type BridgeAction, type Command, type EffortLevel, type KeyName, type ModelName } from '../shared/actions.js';
 import { plain } from '../shared/ansi.js';
 import { currentProject, type BridgeEvent, type Picker, type Project, type Session, type Shelf, type SpeechState, type Utterance } from '../shared/messages.js';
@@ -20,6 +22,7 @@ import type { Voice } from './tts.js';
 import { Mirrors } from './mirrors.js';
 import { addProject, folders, loose as squeezed, makeProject, newProjectRoot, projectRoots, takenFolders } from './projects.js';
 import type { Frame, Windows } from './windows.js';
+import { fitWindow, restoreWindow, newFitState, RESTORE_GRACE_MS, type FitState } from './window-fit.js';
 
 export interface Transcriber { state(): SpeechState; transcribe(audio: Float32Array): Promise<string> }
 
@@ -49,6 +52,12 @@ export interface BridgeOptions {
   pickerIdleMs?: number | undefined;
   /** The window mirrors; without them, the PC's windows are not offered. */
   mirrors?: Mirrors | undefined;
+  /**
+   * Path to the Claude Code settings file. Used to restore the owner's default model and effort
+   * after /model or /effort. Tests use a temp file. Defaults to ~/.claude/settings.json (or
+   * CLAUDE_CONFIG_DIR). Pass null to skip the restore entirely (no settings file available).
+   */
+  claudeSettingsPath?: string | null;
 }
 /** What a command came to; `silent` marks one whose own speech is the answer. */
 type Result = { ok: boolean; outcome: string; silent?: true; say?: string };
@@ -63,6 +72,10 @@ const NO_WINDOWS: Windows = {
   stop: () => Promise.resolve(),
   input: () => Promise.reject(new Error('Window mirrors are not set up in this view.')),
   open: () => Promise.reject(new Error('Window mirrors are not set up in this view.')),
+  findWindow: () => Promise.reject(new Error('Window mirrors are not set up in this view.')),
+  getRect: () => Promise.reject(new Error('Window mirrors are not set up in this view.')),
+  setRect: () => Promise.reject(new Error('Window mirrors are not set up in this view.')),
+  maximize: () => Promise.reject(new Error('Window mirrors are not set up in this view.')),
   listen: () => undefined,
   close: () => undefined,
 };
@@ -81,6 +94,8 @@ interface PickerState { kind: Picker['kind']; filter: string; page: number; entr
 
 export class Bridge {
   private readonly clients = new Set<Send>();
+  /** Unique id for this bridge instance; the page uses it to detect a restart. */
+  readonly instanceId = randomUUID();
   /** Where "back" returns to, and the session the last jump brought to the front. */
   private jump: { origin: string; current: string } | null = null;
   /** The one question that waits for the owner's yes: a close, or a command heard while listening is off. */
@@ -110,6 +125,12 @@ export class Bridge {
   private readonly noteTimer: NodeJS.Timeout;
   private readonly mirrors: Mirrors;
   private readonly pickerIdleMs: number;
+  /** Path to the Claude Code settings file for restoring model/effort defaults; null to skip. */
+  private readonly settingsFilePath: string | null;
+  /** State for the terminal window fitting (Deliverable 1). */
+  private readonly fitState: FitState = newFitState();
+  /** Timer that restores the terminal window after all pages disconnect. */
+  private restoreTimer: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly herdr: HerdrClient,
@@ -128,6 +149,7 @@ export class Bridge {
     this.sessionOf = options.sessionOf ?? (paneId => this.herdrSessionOf(paneId));
     this.say = options.voice ? new Say(options.voice, event => this.broadcast(event), text => this.broadcast({ type: 'notice', text }), this.log, () => this.announceVoice()) : null;
     this.mirrors = options.mirrors ?? new Mirrors(herdr, NO_WINDOWS, '');
+    this.settingsFilePath = options.claudeSettingsPath !== undefined ? options.claudeSettingsPath : claudeSettingsPath();
     this.pickerIdleMs = options.pickerIdleMs ?? PICKER_IDLE_MS;
     agents.onChange(() => { this.logAgentStarts(); this.broadcast({ type: 'shelf', shelf: this.shelf() }); });
     mirror.listen({
@@ -170,6 +192,7 @@ export class Bridge {
 
   /** Adds a page. It first gets everything it needs to draw, then each change. */
   connect(send: Send): () => void {
+    send({ type: 'instance', id: this.instanceId });
     const shelf = this.shelf();
     send({ type: 'shelf', shelf });
     for (const s of shelf.sessions) { const text = this.mirror.text(s.id); if (text !== undefined) send({ type: 'text', id: s.id, text }); }
@@ -189,6 +212,31 @@ export class Bridge {
   }
 
   broadcast(event: BridgeEvent): void { for (const send of this.clients) send(event); }
+
+  /**
+   * Called by the server when the page enters or leaves mixed reality. When entering, fits the
+   * terminal window; when leaving, starts a grace-period timer and restores when it fires.
+   */
+  setMixedReality(inMR: boolean): void {
+    if (inMR) {
+      // Cancel any pending restore.
+      if (this.restoreTimer) { clearTimeout(this.restoreTimer); this.restoreTimer = null; }
+      const shelf = this.shelf();
+      const front = shelf.sessions.find(s => s.id === shelf.focusedId);
+      if (!front) return;
+      const workspaceLabel = shelf.projects.find(p => p.id === front.workspaceId)?.label ?? '';
+      const notice = (text: string) => this.broadcast({ type: 'notice', text });
+      void fitWindow(front.id, workspaceLabel, this.fitState, { log: this.log, notice, herdr: this.herdr, windows: this.mirrors.windowHelper() }).catch(() => undefined);
+    } else {
+      // Grace period before restoring: the page may reconnect shortly (e.g. handset sleep).
+      if (this.restoreTimer) clearTimeout(this.restoreTimer);
+      this.restoreTimer = setTimeout(() => {
+        this.restoreTimer = null;
+        void restoreWindow(this.fitState, { log: this.log, windows: this.mirrors.windowHelper() }).catch(() => undefined);
+      }, RESTORE_GRACE_MS);
+      this.restoreTimer.unref();
+    }
+  }
 
   /** The audio of a spoken phrase, for the page to fetch. */
   clip(id: string): Buffer | undefined { return this.say?.clip(id); }
@@ -582,9 +630,10 @@ export class Bridge {
   }
 
   /**
-   * Types `/model <name>` or `/effort <level>` into a Claude Code session and tells what the session
-   * itself printed. Only a session that is idle or done, with nothing already typed in its input:
-   * anywhere else the text would be keys answering a question, a prompt, or a line joined to a draft.
+   * Types `/model <name>` or `/effort <level>` into a Claude Code session and restores the
+   * owner's defaults for new sessions afterwards. Only a session that is idle or done, with
+   * nothing already typed in its input: elsewhere the text would be keys answering a question,
+   * a prompt, or a line joined to a draft.
    */
   private async typeSetting(shelf: Shelf, target: string | null, what: 'model' | 'effort', value: ModelName | EffortLevel): Promise<Result> {
     if (!target) return { ok: false, outcome: 'No session is in front to change.' };
@@ -595,15 +644,40 @@ export class Bridge {
     const typed = `/${what} ${value}`;
     const confirmations = (text: string) => plain(text).match(CONFIRMATION[what]) ?? [];
     const before = confirmations(await this.herdr.read(session.id, 30)).length;
+
+    // Save defaults before the command changes the settings file.
+    let token: ReturnType<typeof saveDefaults> | null = null;
+    if (this.settingsFilePath) {
+      try { token = saveDefaults(this.settingsFilePath); }
+      catch (error) { this.log(`could not read ${this.settingsFilePath} before ${typed}: ${(error as Error).message}`); }
+    }
+
     await this.herdr.call('pane.send_input', { pane_id: session.id, text: typed, keys: ['enter'] });
     this.log(`${typed} typed into ${session.name} (${session.id}) on the owner's order`);
     const deadline = Date.now() + this.confirmMs;
+    let confirmedText: string | null = null;
     for (;;) {
       await new Promise(resolve => setTimeout(resolve, 150));
       const seen = confirmations(await this.herdr.read(session.id, 30));
-      if (seen.length > before) return { ok: true, outcome: (seen[seen.length - 1] as string).trim().slice(0, 160) };
-      if (Date.now() > deadline) return { ok: true, outcome: `Sent ${typed} to ${session.name}. It did not show that it took effect.` };
+      if (seen.length > before) { confirmedText = seen.slice(before)[0] ?? null; break; }
+      if (Date.now() > deadline) break;
     }
+
+    // Restore the owner's defaults.
+    let restoreError: string | null = null;
+    if (token) {
+      try { restoreDefaults(token); }
+      catch (error) {
+        restoreError = (error as Error).message;
+        this.log(`could not restore default after ${typed}: ${restoreError}`);
+      }
+    }
+
+    // The outcome is the session's own confirmation line (what Claude Code printed), plus a note
+    // when the defaults restore failed.
+    if (!confirmedText) return { ok: true, outcome: `Sent ${typed} to ${session.name}. It did not show that it took effect.` };
+    if (restoreError) return { ok: true, outcome: `${confirmedText}. The default for new sessions may have changed: ${restoreError}` };
+    return { ok: true, outcome: confirmedText };
   }
 
   private setVoice(on: boolean): Result {

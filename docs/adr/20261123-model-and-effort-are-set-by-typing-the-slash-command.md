@@ -1,7 +1,7 @@
 # ADR: Model and effort are changed by typing Claude Code's own slash command
 
 ## Status
-Accepted
+Accepted; amended by [20261123-model-and-effort-defaults-are-restored-after-the-command](20261123-model-and-effort-defaults-are-restored-after-the-command.md): the bridge now restores the owner's defaults after each command so only the running session is changed
 
 ## Area
 Spatial view
@@ -25,7 +25,7 @@ The command is part of the shared action registry, with a spoken form and a butt
 - The owner hears what the session itself said, not the view's guess.
 
 ### Negative
-- `/model` changes the owner's default for new sessions every time it is used.
+- `/model` changed the owner's default for new sessions every time it was used. Amended: the bridge now restores the defaults after the command (20261123-model-and-effort-defaults-are-restored-after-the-command).
 - Whether `/effort` also saves a default, and how it behaves when it shows a picker, was not tested against a real session: those answers are read from the pane. The owner's first use is the check.
 - A session that is working, waits on a question or holds a draft must be cleared first.
 

@@ -17,6 +17,8 @@
  *   anything else                   answer like an agent: working, a reply, idle
  */
 import { createInterface } from 'node:readline';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { HerdrClient } from '../bridge/herdr.js';
 
 const args = new Map<string, string>();
@@ -82,6 +84,8 @@ async function handle(line: string): Promise<void> {
   if ((command === '/model' || command === '/effort') && a) {
     process.stdout.write(`${name} got: ${line.trim()}\n`);
     if (confirm) process.stdout.write(command === '/model' ? `  ⎿  Set model to ${a} and saved as your default for new sessions\n` : `  ⎿  Set effort level to ${a} (this session only): ready\n`);
+    // Simulate Claude Code writing the settings file so the bridge can restore defaults.
+    writeSettingsFor(command as '/model' | '/effort', a);
     return;
   }
   if (command === '/block') {
@@ -98,7 +102,35 @@ async function handle(line: string): Promise<void> {
 
 let blocked = false;
 let confirm = true;
+/** The model name that was last set by /model (used for /effort writes). */
+let currentModelId = 'test-model';
 let queue = Promise.resolve();
+
+/**
+ * Writes the Claude Code settings file when /model or /effort is used, simulating what
+ * Claude Code itself does. Only writes when SPATIAL_CLAUDE_SETTINGS_FILE is set.
+ */
+function writeSettingsFor(command: '/model' | '/effort', value: string): void {
+  const path = process.env.SPATIAL_CLAUDE_SETTINGS_FILE;
+  if (!path) return;
+  let data: Record<string, unknown> = {};
+  try { data = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>; } catch { /* new file */ }
+  if (command === '/model') {
+    // Derive a plausible model id from the name (e.g. "haiku" → "claude-haiku-4-5").
+    // For tests, the exact id matters less than the write happening.
+    const modelIds: Record<string, string> = { haiku: 'claude-haiku-4-5', sonnet: 'claude-sonnet-4-5', opus: 'claude-opus-4-5' };
+    currentModelId = modelIds[value] ?? value;
+    data.model = currentModelId;
+  } else {
+    const ms = (typeof data.modelSettings === 'object' && data.modelSettings !== null ? { ...data.modelSettings as Record<string, unknown> } : {});
+    const entry = (typeof ms[currentModelId] === 'object' && ms[currentModelId] !== null ? { ...ms[currentModelId] as Record<string, unknown> } : {});
+    entry.effortLevel = value;
+    ms[currentModelId] = entry;
+    data.modelSettings = ms;
+  }
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+}
 // Agents set the terminal title; Herdr reports it and the view names the session by it.
 process.stdout.write(`\x1b]0;${name}\x07`);
 process.stdout.write(`${C.bold}${C.cyan}${name}${C.reset} ${C.dim}(stand-in ${agent})${C.reset} ready\n`);

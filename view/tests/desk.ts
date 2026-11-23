@@ -25,6 +25,11 @@ export interface DeskOptions {
   confirmMs?: number;
   sessionOf?: (paneId: string) => Promise<string | null>;
   log?: (line: string) => void;
+  /**
+   * Where the bridge should read/write Claude Code settings for model/effort restore. Tests pass a
+   * temp path here so the owner's real settings are never touched. Pass null to skip the restore.
+   */
+  claudeSettingsPath?: string | null;
 }
 
 const audio = new Float32Array(1600);
@@ -46,6 +51,7 @@ export async function setup(layout: BenchWorkspace[], options: DeskOptions = {})
     ...(options.transcripts ? { transcripts: options.transcripts } : {}),
     ...(options.sessionOf ? { sessionOf: options.sessionOf } : {}),
     ...(options.log ? { log: options.log } : {}),
+    ...(options.claudeSettingsPath !== undefined ? { claudeSettingsPath: options.claudeSettingsPath } : {}),
   });
   mirror.start();
   await bench.waitFor(async () => mirror.shelf().sessions.length === layout.flatMap(w => w.panes).length, 'the mirror to see every session');
