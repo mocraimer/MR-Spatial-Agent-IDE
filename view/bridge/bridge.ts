@@ -268,6 +268,7 @@ export class Bridge {
       q.settle(yes);
       return { ok: true, outcome: yes ? `Answered yes to closing ${q.name}.` : `Answered no: ${q.name} stays open.` };
     }
+    // The only other kind: a command heard on standby.
     if (!yes) {
       this.log(`standby command "${q.label}" dropped: the owner said no`);
       return { ok: true, outcome: `Answered no: “${q.label}” was not done.` };
@@ -507,7 +508,7 @@ function name(shelf: Shelf, id: string): string { return shelf.sessions.find(s =
 /** What an utterance came to: how it was taken, whether it worked, what to tell the owner. */
 interface Done { as: Utterance['as']; ok: boolean; outcome: string }
 
-const IGNORED: Done = { as: 'ignored', ok: false, outcome: 'Listening is off: that was heard and sent nowhere. Say a command, or turn listening on.' };
+const IGNORED: Done = { as: 'ignored', ok: false, outcome: 'Not sent: listening is off. Say a command.' };
 
 /**
  * Where "go to ..." or "show ..." leads: the action and what to call it, or why it leads nowhere,
@@ -534,7 +535,7 @@ function navigation(taken: Extract<Heard, { as: 'go' | 'show' }>, shelf: Shelf):
 class RefusedError extends Error {}
 
 const HELPER_DRAFT_HOW = 'say “overview”, then “go” to send it or “scratch that” to clear it.';
-const HELPER_DRAFT = `Draft in the helper's input. At the overview, ${HELPER_DRAFT_HOW.replace('say “overview”, then', 'say')}`;
+const HELPER_DRAFT = 'Draft in the helper\'s input. At the overview, say “go” to send it or “scratch that” to clear it.';
 
 function herdrProblem(error: unknown): string {
   if (error instanceof HerdrError && error.code === 'agent_blocked') return 'it is waiting on a question — answer it with a key first.';

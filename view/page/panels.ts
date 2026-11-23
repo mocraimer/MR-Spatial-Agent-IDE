@@ -503,7 +503,7 @@ export function drawStrip(canvas: HTMLCanvasElement, st: StripState): Region[] {
     ctx.fillText(st.mic.standby ? 'Commands only: each asks “yes”' : st.mic.mode === 'hold' ? 'Hold to talk' : 'Keep listening until “stop listening”', tx, 98);
   }
 
-  const sayX = 1250, sayW = w - sayX - (st.link ? 400 : 44) - (st.direct ? 340 : 0);
+  const sayX = 1250, sayW = w - sayX - (st.link ? 400 : 44) - (st.direct ? 380 : 0);
   ctx.font = `600 34px ${SANS}`; ctx.fillStyle = st.last || st.pendingHeard ? PAPER : DIM;
   const said = st.pendingHeard ? 'Hearing…' : st.last ? `“${st.last.heard || '…'}”` : 'Nothing said yet';
   ctx.fillText(fit(ctx, said, sayW), sayX, 48);
@@ -517,7 +517,7 @@ export function drawStrip(canvas: HTMLCanvasElement, st: StripState): Region[] {
   let right = w - 40;
   if (st.link) right -= chip(ctx, st.link, right, h / 2, 28, AMBER, 'right') + 16;
   // Direct sending is a standing exception to "say go": it shows whenever it is on.
-  if (st.direct) chip(ctx, 'Sending at once', right, h / 2, 28, AMBER, 'right');
+  if (st.direct) chip(ctx, 'Sending at once', right, h / 2, 32, AMBER, 'right');
   return [mic];
 }
 

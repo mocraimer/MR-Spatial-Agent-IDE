@@ -28,7 +28,7 @@ test('with listening off, a prompt or an order is ignored and reaches no session
     await focusedIs(s, 'a1');
     const prompt = await s.sayStandby('summarize the ledger change');
     assert.deepEqual([prompt.as, prompt.ok], ['ignored', false]);
-    assert.match(prompt.outcome, /Listening is off: that was heard and sent nowhere/);
+    assert.match(prompt.outcome, /^Not sent: listening is off\./);
     const order = await s.sayStandby('helper, count the files in the folder');
     assert.equal(order.as, 'ignored');
     assert.equal((await s.sayStandby('yes')).as, 'ignored', 'a yes with nothing waiting is not a command');
