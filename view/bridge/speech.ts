@@ -15,6 +15,61 @@ import type { Transcriber } from './bridge.js';
 export const SPEECH_MODEL = 'onnx-community/moonshine-tiny-ONNX';
 export const SPEECH_DTYPE = 'q8';
 
+/** Sample rate expected by the speech model (16kHz). */
+export const SAMPLE_RATE = 16000;
+/** Maximum chunk length for one model call: ~10 seconds at 16kHz. */
+const MAX_CHUNK = SAMPLE_RATE * 10;
+/** Minimum silence gap to split at: ~200ms. */
+const PAUSE_WINDOW = Math.round(SAMPLE_RATE * 0.2);
+/** RMS energy below this is considered silence (–40 dBFS ≈ 0.01). */
+const SILENCE_RMS = 0.01;
+
+/**
+ * Split audio into chunks of at most `MAX_CHUNK` samples, breaking at the last silence gap before
+ * the limit. If no silence is found within a chunk, the chunk is cut hard at the limit.
+ * Short audio (≤MAX_CHUNK) is returned as-is.
+ */
+export function splitAtPauses(audio: Float32Array, sampleRate: number = SAMPLE_RATE): Float32Array[] {
+  const max = Math.round(sampleRate * 10);
+  if (audio.length <= max) return [audio];
+  const chunks: Float32Array[] = [];
+  let start = 0;
+  while (start < audio.length) {
+    const end = Math.min(start + max, audio.length);
+    if (end === audio.length) { chunks.push(audio.subarray(start)); break; }
+    // Find the last silence gap in the window [start, end) by scanning backwards.
+    const win = Math.round(sampleRate * 0.2);
+    let splitAt = end;
+    for (let i = end - win; i > start + win; i -= win) {
+      const slice = audio.subarray(i, i + win);
+      let sumSq = 0;
+      for (let j = 0; j < slice.length; j++) sumSq += (slice[j] ?? 0) * (slice[j] ?? 0);
+      const rms = Math.sqrt(sumSq / slice.length);
+      if (rms < SILENCE_RMS) { splitAt = i + win; break; }
+    }
+    chunks.push(audio.subarray(start, splitAt));
+    start = splitAt;
+  }
+  return chunks;
+}
+
+/**
+ * Collapse immediate repeated word sequences that speech recognition produces when the speaker
+ * pauses or stammers: "the the the quick" → "the quick", "please please" → "please".
+ * Only collapses runs of 2+ identical consecutive words/phrases.
+ */
+export function collapseRepeats(text: string): string {
+  if (!text) return text;
+  // Split into words, then collapse runs of identical consecutive words.
+  const words = text.split(/\s+/);
+  const out: string[] = [];
+  for (const word of words) {
+    if (out.length > 0 && out[out.length - 1] === word) continue; // skip repeat
+    out.push(word);
+  }
+  return out.join(' ');
+}
+
 type Recognizer = (audio: Float32Array) => Promise<{ text: string } | { text: string }[]>;
 
 export function modelDirectory(dataDirectory: string): string { return join(dataDirectory, 'models'); }
@@ -46,11 +101,17 @@ export class LocalSpeech implements Transcriber {
 
   async transcribe(audio: Float32Array): Promise<string> {
     if (!this.recognizer) throw new Error('speech is not ready');
-    const result: unknown = await this.recognizer(audio);
-    const parts = Array.isArray(result) ? result : [result];
-    const texts = parts.map(r => (typeof r === 'object' && r !== null && typeof (r as { text?: unknown }).text === 'string' ? (r as { text: string }).text : null));
-    if (texts.includes(null)) throw new Error('the speech model answered in a form this view does not read');
-    return texts.join(' ').trim();
+    // Split long audio at pauses into ≤10s chunks so the model never sees too much at once.
+    const chunks = splitAtPauses(audio, SAMPLE_RATE);
+    const parts: string[] = [];
+    for (const chunk of chunks) {
+      const result: unknown = await this.recognizer(chunk);
+      const rs = Array.isArray(result) ? result : [result];
+      const texts = rs.map(r => (typeof r === 'object' && r !== null && typeof (r as { text?: unknown }).text === 'string' ? (r as { text: string }).text : null));
+      if (texts.includes(null)) throw new Error('the speech model answered in a form this view does not read');
+      parts.push(texts.join(' ').trim());
+    }
+    return collapseRepeats(parts.filter(Boolean).join(' ').trim());
   }
 }
 

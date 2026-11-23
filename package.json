@@ -17,7 +17,9 @@
     "start": "node build/host/src/main.js",
     "test:ui": "npm run build && playwright test",
     "view": "node build/view/bridge/main.js",
-    "view:setup": "node build/view/bridge/setup.js"
+    "view:setup": "node build/view/bridge/setup.js",
+    "speech:dataset": "node build/view/bench/download-speech-dataset.js",
+    "speech:measure": "node build/view/bench/speech-measure.js"
   },
   "devDependencies": {
     "@eslint/js": "^9.13.0",

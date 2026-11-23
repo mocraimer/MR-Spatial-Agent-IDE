@@ -14,5 +14,7 @@
 | 2026-11-22 | [The workspace is one public MIT repository; private values stay in untracked local configuration](20261122-public-mit-repository-for-the-spatial-workspace.md) | Accepted | Publication |
 | 2026-11-22 | [Spoken prompts wait for "go", and the microphone stands by while listening is off](20261122-spoken-prompts-wait-for-go.md) | Accepted; narrowed by [20261123-spoken-answers-made-on-the-pc-by-the-windows-voice](20261123-spoken-answers-made-on-the-pc-by-the-windows-voice.md): the microphone hears nothing while the voice plays | Spatial view |
 | 2026-11-23 | [The helper and the project agents run on Sonnet at medium effort](20261123-level-agents-run-on-sonnet-at-medium-effort.md) | Accepted | Spatial view |
-| 2026-11-23 | [Spoken answers are made on the PC by the Windows voice, and replies are read only when asked](20261123-spoken-answers-made-on-the-pc-by-the-windows-voice.md) | Accepted | Spatial view |
+| 2026-11-23 | [Spoken answers are made on the PC by the Windows voice, and replies are read only when asked](20261123-spoken-answers-made-on-the-pc-by-the-windows-voice.md) | Superseded by [20261123-kokoro-replaces-windows-voice](20261123-kokoro-replaces-windows-voice.md): Kokoro-82M is now the default; Windows voice is the fallback | Spatial view |
 | 2026-11-23 | [Model and effort are changed by typing Claude Code's own slash command](20261123-model-and-effort-are-set-by-typing-the-slash-command.md) | Accepted | Spatial view |
+| 2026-11-23 | [Kokoro-82M replaces the Windows voice for spoken answers](20261123-kokoro-replaces-windows-voice.md) | Accepted | Spatial view |
+| 2026-11-23 | [Speech model is chosen by measurement against a frozen utterance set](20261123-speech-model-chosen-by-measurement.md) | Accepted | Spatial view |

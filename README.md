@@ -13,14 +13,14 @@ This is one person's own tool, published as is under the MIT license. It is buil
 
 ## Quick start
 
-One small bridge process on the PC (`view/bridge`) reads your Herdr sessions through Herdr's socket API and serves one WebXR page (`view/page`) to the headset over Wi-Fi, behind a pairing code and the view's own certificate. Speech becomes text on the PC with a small local model, and short spoken answers come back from Windows' own voice on the PC; nothing leaves the PC. The view shows your real sessions; Herdr stays the owner of focus, so the desk keyboard types into the session the view shows in front.
+One small bridge process on the PC (`view/bridge`) reads your Herdr sessions through Herdr's socket API and serves one WebXR page (`view/page`) to the headset over Wi-Fi, behind a pairing code and the view's own certificate. Speech becomes text on the PC with a small local model (Moonshine tiny q8), and spoken answers come back through the Kokoro-82M neural voice ("af_heart") running locally; while Kokoro loads at startup the Windows voice plays. Nothing leaves the PC. The view shows your real sessions; Herdr stays the owner of focus, so the desk keyboard types into the session the view shows in front.
 
 Start Herdr first, then:
 
 ```sh
 npm ci
 npm run build
-npm run view:setup   # once: fetches the speech model (about 31 MB)
+npm run view:setup   # once: fetches the speech model (~31 MB) and Kokoro voice (~311 MB)
 npm run view         # prints the address to open on the headset
 ```
 
