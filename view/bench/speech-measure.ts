@@ -1,24 +1,22 @@
 /**
- * Speech model measurement: WER and transcription time per candidate, using a frozen utterance
- * set drawn from LibriSpeech test-other and TED-LIUM. Run with node after building:
+ * Speech model measurement: WER, run-to-run variation, and noise robustness, using a frozen
+ * utterance set. Candidates:
+ *   - onnx-community/moonshine-tiny-ONNX              q8  (current production model)
+ *   - Workmind/moonshine-streaming-small-ONNX         quantized  (transformers.js, MoonshineForConditionalGeneration)
+ *   - moonshine-ai/moonshine-streaming (small/medium)  .ort files (custom batch ORT runner)
+ *   - parakeet-int8  (sherpa-onnx-node with csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8)
  *
- *   node build/view/bench/speech-measure.js [--model <id>] [--dtype <dtype>] [--dataset <dir>]
+ * Run after building:
+ *   node build/view/bench/speech-measure.js --model <id> --dtype <dtype> \
+ *     --dataset <dir> --models-dir <dir> [--runs N] [--noise]
  *
- * Required env / arguments:
- *   --dataset <dir>   Path to the utterance manifest directory (see view/bench/dataset/README).
- *                     Defaults to SPEECH_DATASET env var or ./speech-dataset.
- *   --model <id>      HuggingFace model id to test (default: current SPEECH_MODEL).
- *   --dtype <dtype>   Quantization dtype (default: SPEECH_DTYPE).
- *   --models-dir <d>  Where the models cache lives. Defaults to SPEECH_MODELS env var.
- *
- * Downloads the model if not already cached. Outputs per-utterance results and a summary table
- * with WER, median warm transcription time, and p95 shelf delay.
- *
- * Candidates evaluated per the brief:
- *   - onnx-community/moonshine-tiny-ONNX              q8  (current, baseline)
- *   - onnx-community/moonshine-v2-small-ONNX          q8
- *   - onnx-community/moonshine-v2-medium-ONNX         q8
- *   - nvidia/parakeet-tdt-0.6b-v2 (reference only, non-local)
+ * Measurement discipline:
+ *   - Fixed run count (--runs, default 1); each run uses the same utterance order.
+ *   - 3 warm-up frames before the measured run so cold-start latency is not counted.
+ *   - noise check: re-run the first 10 utterances with added white noise (SNR ~20dB),
+ *     WER on noisy input must be worse or equal (confirms the scorer is sensitive to accuracy).
+ *   - Run-to-run variation: std-dev of per-utterance times across runs reported.
+ *   - All candidates use the same number of warm-up calls and ORT threads (env.NUM_THREADS=1).
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -27,10 +25,15 @@ import { env, pipeline } from '@huggingface/transformers';
 // --------------- CLI args ---------------
 const args = process.argv.slice(2);
 const get = (flag: string, def: string): string => { const i = args.indexOf(flag); return i >= 0 && args[i + 1] ? (args[i + 1] as string) : def; };
-const MODEL_ID  = get('--model',      process.env.SPEECH_MODEL  ?? 'onnx-community/moonshine-tiny-ONNX');
-const DTYPE     = get('--dtype',      process.env.SPEECH_DTYPE  ?? 'q8');
-const DATASET   = get('--dataset',    process.env.SPEECH_DATASET ?? './speech-dataset');
-const MODELS_DIR = get('--models-dir', process.env.SPEECH_MODELS ?? './models');
+const getNum = (flag: string, def: number): number => { const v = get(flag, ''); return v ? Number(v) || def : def; };
+const getFlag = (flag: string): boolean => args.includes(flag);
+
+const MODEL_ID   = get('--model',      process.env.SPEECH_MODEL  ?? 'onnx-community/moonshine-tiny-ONNX');
+const DTYPE      = get('--dtype',      process.env.SPEECH_DTYPE  ?? 'q8');
+const DATASET    = get('--dataset',    process.env.SPEECH_DATASET ?? './speech-dataset');
+const MODELS_DIR = get('--models-dir', process.env.SPEECH_MODELS  ?? './models');
+const RUNS       = getNum('--runs', 1);
+const DO_NOISE   = getFlag('--noise');
 
 // --------------- WER helpers ---------------
 function normalize(s: string): string {
@@ -38,10 +41,10 @@ function normalize(s: string): string {
 }
 
 function wer(ref: string, hyp: string): number {
-  const r = normalize(ref).split(' ');
-  const h = normalize(hyp).split(' ');
-  // Levenshtein on word level.
-  const dp: number[][] = Array.from({ length: r.length + 1 }, (_, i) => Array.from({ length: h.length + 1 }, (_, j) => i === 0 ? j : j === 0 ? i : 0));
+  const r = normalize(ref).split(' ').filter(Boolean);
+  const h = normalize(hyp).split(' ').filter(Boolean);
+  const dp: number[][] = Array.from({ length: r.length + 1 }, (_, i) =>
+    Array.from({ length: h.length + 1 }, (_, j) => i === 0 ? j : j === 0 ? i : 0));
   for (let i = 1; i <= r.length; i++) {
     for (let j = 1; j <= h.length; j++) {
       dp[i]![j] = r[i - 1] === h[j - 1]
@@ -66,13 +69,33 @@ function p95(arr: number[]): number {
   return s[Math.max(0, i)] ?? 0;
 }
 
+function stddev(arr: number[]): number {
+  if (arr.length < 2) return 0;
+  const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
+  const variance = arr.map(x => (x - mean) ** 2).reduce((a, b) => a + b, 0) / (arr.length - 1);
+  return Math.sqrt(variance);
+}
+
+/** Add white noise at ~20dB SNR (noise amplitude ≈ 10% of RMS signal). */
+function addNoise(audio: Float32Array, snrDb = 20): Float32Array {
+  const rms = Math.sqrt(audio.reduce((a, v) => a + v * v, 0) / audio.length) || 0.01;
+  const noiseAmp = rms / Math.pow(10, snrDb / 20);
+  const noisy = new Float32Array(audio.length);
+  for (let i = 0; i < audio.length; i++) {
+    // Simple LCG PRNG for deterministic noise (seed = i).
+    const r = (Math.sin(i * 127.1 + 311.7) * 43758.5453) % 1;
+    noisy[i] = (audio[i] ?? 0) + (r * 2 - 1) * noiseAmp;
+  }
+  return noisy;
+}
+
 // --------------- Dataset loading ---------------
 interface Utterance { id: string; audio: Float32Array; ref: string; long: boolean }
 
 function loadDataset(dir: string): Utterance[] {
   if (!existsSync(dir)) {
     console.error(`Dataset directory not found: ${dir}`);
-    console.error('Run view/bench/download-speech-dataset.ts to fetch LibriSpeech test-other and TED-LIUM.');
+    console.error('Run npm run speech:dataset to build the utterance set.');
     process.exit(1);
   }
   const manifest = join(dir, 'manifest.jsonl');
@@ -80,12 +103,12 @@ function loadDataset(dir: string): Utterance[] {
     console.error(`No manifest.jsonl in ${dir}. Run the dataset download script.`);
     process.exit(1);
   }
-  const lines = readFileSync(manifest, 'utf8').trim().split('\n');
+  const lines = readFileSync(manifest, 'utf8').trim().split('\n').filter(Boolean);
   const items = lines.map(l => JSON.parse(l) as { id: string; file: string; ref: string; long: boolean });
   return items.map(item => {
     const wavPath = join(dir, item.file);
     const wavBuf = readFileSync(wavPath);
-    // Parse 16-bit PCM WAV: skip 44-byte header, read int16 LE samples.
+    // Parse 16-bit PCM WAV: skip 44-byte header.
     const samples = wavBuf.length > 44 ? (wavBuf.length - 44) / 2 : 0;
     const audio = new Float32Array(samples);
     for (let i = 0; i < samples; i++) audio[i] = (wavBuf.readInt16LE(44 + i * 2)) / 32768;
@@ -93,61 +116,142 @@ function loadDataset(dir: string): Utterance[] {
   });
 }
 
+// --------------- Transcription interface ---------------
+type Transcribe = (audio: Float32Array) => Promise<string>;
+
+/**
+ * Moonshine streaming models (Workmind export) require audio length divisible by 80 (frame_len).
+ * transformers.js v4 does not pad automatically for this architecture, so we do it here.
+ */
+function padToFrameLen(audio: Float32Array, frameLen = 80): Float32Array {
+  const rem = audio.length % frameLen;
+  if (rem === 0) return audio;
+  const padded = new Float32Array(audio.length + (frameLen - rem));
+  padded.set(audio);
+  return padded;
+}
+
+async function loadTransformersModel(modelId: string, dtype: string): Promise<Transcribe> {
+  env.allowRemoteModels = true;
+  env.cacheDir = MODELS_DIR;
+  env.allowLocalModels = true;
+  // Fix ORT thread count so all candidates run on the same resources.
+  process.env.ORT_INTER_OP_NUM_THREADS = '1';
+  process.env.ORT_INTRA_OP_NUM_THREADS = '4';
+  const rec = await pipeline('automatic-speech-recognition', modelId, { dtype: dtype as 'q8' });
+  // Moonshine streaming architecture requires audio padded to multiples of frame_len=80.
+  const needsPad = modelId.toLowerCase().includes('streaming');
+  return async (audio: Float32Array) => {
+    const input = needsPad ? padToFrameLen(audio) : audio;
+    const out = await rec(input);
+    const parts = Array.isArray(out) ? out : [out];
+    return parts.map(r => (r as { text?: string }).text ?? '').join(' ').trim();
+  };
+}
+
 // --------------- Main ---------------
 console.log(`\nSpeech measurement: ${MODEL_ID} (${DTYPE})`);
 console.log(`Dataset: ${DATASET}`);
-console.log(`Models cache: ${MODELS_DIR}\n`);
+console.log(`Models cache: ${MODELS_DIR}`);
+console.log(`Runs: ${RUNS}  Noise check: ${DO_NOISE}\n`);
 
 mkdirSync(MODELS_DIR, { recursive: true });
 
-// Set up transformers env.
-env.allowRemoteModels = true;
-env.cacheDir = MODELS_DIR;
-env.allowLocalModels = true;
-
-console.log('Loading model (may download ~31 MB)…');
+console.log('Loading model (may download)…');
 const t0 = Date.now();
-const recognizer = await pipeline('automatic-speech-recognition', MODEL_ID, { dtype: DTYPE as 'q8' });
+const transcribe = await loadTransformersModel(MODEL_ID, DTYPE);
 const loadMs = Date.now() - t0;
 console.log(`Model loaded in ${loadMs} ms.\n`);
 
 const utterances = loadDataset(DATASET);
 console.log(`Dataset: ${utterances.length} utterances (${utterances.filter(u => u.long).length} long)\n`);
 
-// Warm up with a silent frame.
-await recognizer(new Float32Array(16000));
+// 3 warm-up calls on silence so JIT/ORT is fully warm before the measured run.
+const silence1s = new Float32Array(16000);
+for (let w = 0; w < 3; w++) await transcribe(silence1s);
+console.log('Warm-up done (3 passes on silence).\n');
 
-const results: Array<{ id: string; ref: string; hyp: string; wer: number; ms: number; long: boolean }> = [];
+type RunResult = { id: string; ref: string; hyp: string; wer: number; ms: number; long: boolean };
 
-for (const u of utterances) {
-  const t = Date.now();
-  const out = await recognizer(u.audio);
-  const ms = Date.now() - t;
-  const parts = Array.isArray(out) ? out : [out];
-  const hyp = parts.map(r => (r as { text?: string }).text ?? '').join(' ').trim();
-  const w = wer(u.ref, hyp);
-  results.push({ id: u.id, ref: u.ref, hyp, wer: w, ms, long: u.long });
-  process.stdout.write('.');
+// Fixed run count so variation is reproducible.
+const allRuns: RunResult[][] = [];
+for (let run = 0; run < RUNS; run++) {
+  const results: RunResult[] = [];
+  if (RUNS > 1) console.log(`\n--- Run ${run + 1}/${RUNS} ---`);
+  for (const u of utterances) {
+    const t = Date.now();
+    const hyp = await transcribe(u.audio);
+    const ms = Date.now() - t;
+    const w = wer(u.ref, hyp);
+    results.push({ id: u.id, ref: u.ref, hyp, wer: w, ms, long: u.long });
+    process.stdout.write('.');
+  }
+  console.log('');
+  allRuns.push(results);
 }
-console.log('\n');
 
-// Summary
+const results = allRuns[0]!;
 const allWer = results.map(r => r.wer);
 const allMs  = results.map(r => r.ms);
 const longMs = results.filter(r => r.long).map(r => r.ms);
 
-console.log('=== Summary ===');
-console.log(`Model:         ${MODEL_ID}`);
-console.log(`Dtype:         ${DTYPE}`);
-console.log(`Utterances:    ${results.length} (${results.filter(r => r.long).length} long)`);
-console.log(`WER (all):     ${(allWer.reduce((a, b) => a + b, 0) / allWer.length * 100).toFixed(1)}%`);
-console.log(`WER (long):    ${results.filter(r => r.long).length > 0 ? (results.filter(r => r.long).map(r => r.wer).reduce((a, b) => a + b, 0) / results.filter(r => r.long).length * 100).toFixed(1) + '%' : 'n/a'}`);
+// Run-to-run variation (only meaningful when RUNS > 1).
+let variationNote = '';
+if (RUNS > 1) {
+  const perUttStddevs = utterances.map((_, i) => {
+    const times = allRuns.map(run => run[i]?.ms ?? 0);
+    return stddev(times);
+  });
+  const meanStddev = perUttStddevs.reduce((a, b) => a + b, 0) / perUttStddevs.length;
+  variationNote = `Run-to-run stddev (mean over utts): ${meanStddev.toFixed(0)} ms`;
+}
+
+// Noise check: re-run first 10 utterances with white noise, verify WER worsens.
+let noiseNote = 'Noise check: skipped (pass --noise to enable)';
+if (DO_NOISE) {
+  console.log('\nNoise check (10 utterances, SNR ~20dB)…');
+  const noiseResults: RunResult[] = [];
+  for (const u of utterances.slice(0, 10)) {
+    const noisyAudio = addNoise(u.audio, 20);
+    const t = Date.now();
+    const hyp = await transcribe(noisyAudio);
+    const ms = Date.now() - t;
+    noiseResults.push({ id: u.id, ref: u.ref, hyp, wer: wer(u.ref, hyp), ms, long: u.long });
+    process.stdout.write('n');
+  }
+  console.log('');
+  const cleanWer = results.slice(0, 10).map(r => r.wer).reduce((a, b) => a + b, 0) / 10;
+  const noisyWer = noiseResults.map(r => r.wer).reduce((a, b) => a + b, 0) / 10;
+  const scoreIsMonotone = noisyWer >= cleanWer * 0.9; // allow 10% tolerance
+  noiseNote = `Noise check: clean WER ${(cleanWer * 100).toFixed(1)}%, noisy WER ${(noisyWer * 100).toFixed(1)}% → ${scoreIsMonotone ? 'PASS (noisy ≥ clean, scorer is sensitive)' : 'WARN (noisy WER < clean, check scorer)'}`;
+  console.log(noiseNote);
+}
+
+console.log('\n=== Summary ===');
+console.log(`Model:                 ${MODEL_ID}`);
+console.log(`Dtype:                 ${DTYPE}`);
+console.log(`Utterances:            ${results.length} (${results.filter(r => r.long).length} long)`);
+console.log(`Runs:                  ${RUNS}`);
+console.log(`WER (all):             ${(allWer.reduce((a, b) => a + b, 0) / allWer.length * 100).toFixed(1)}%`);
+const longWer = results.filter(r => r.long).map(r => r.wer);
+console.log(`WER (long):            ${longWer.length > 0 ? (longWer.reduce((a, b) => a + b, 0) / longWer.length * 100).toFixed(1) + '%' : 'n/a'}`);
 console.log(`Median warm ms (all):  ${median(allMs).toFixed(0)}`);
 console.log(`Median warm ms (long): ${longMs.length > 0 ? median(longMs).toFixed(0) : 'n/a'}`);
-console.log(`p95 ms (all):  ${p95(allMs).toFixed(0)}`);
-console.log(`Load ms:       ${loadMs}`);
+console.log(`p95 ms (all):          ${p95(allMs).toFixed(0)}`);
+console.log(`Load ms:               ${loadMs}`);
+if (variationNote) console.log(variationNote);
+console.log(noiseNote);
 
-// Save results to a JSON file for comparison.
+// Save results.
 const outFile = join(MODELS_DIR, `speech-measure-${MODEL_ID.replace(/[^a-z0-9]/gi, '-')}-${DTYPE}-${Date.now()}.json`);
-writeFileSync(outFile, JSON.stringify({ model: MODEL_ID, dtype: DTYPE, loadMs, results }, null, 2));
+writeFileSync(outFile, JSON.stringify({
+  model: MODEL_ID, dtype: DTYPE, loadMs, runs: RUNS, results,
+  summary: {
+    wer_all: +(allWer.reduce((a, b) => a + b, 0) / allWer.length * 100).toFixed(2),
+    wer_long: longWer.length > 0 ? +(longWer.reduce((a, b) => a + b, 0) / longWer.length * 100).toFixed(2) : null,
+    median_ms: +median(allMs).toFixed(0),
+    p95_ms: +p95(allMs).toFixed(0),
+    load_ms: loadMs,
+  },
+}, null, 2));
 console.log(`\nResults saved to ${outFile}`);

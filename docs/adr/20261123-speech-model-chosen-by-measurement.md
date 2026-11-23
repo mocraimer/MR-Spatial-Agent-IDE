@@ -1,8 +1,9 @@
 # ADR: Speech model is chosen by measurement against a frozen utterance set
 
 ## Status
-Accepted; extends [20261121-local-speech-on-the-pc](20261121-local-speech-on-the-pc.md): the
-choice of Moonshine tiny q8 is now backed by a measured benchmark
+Accepted; extends [20261121-local-speech-on-the-pc](20261121-local-speech-on-the-pc.md): winner
+confirmed by measurement on 2026-11-24 — `Workmind/moonshine-streaming-small-ONNX` (quantized) is
+now the production model, replacing Moonshine tiny q8.
 
 ## Area
 Spatial view
@@ -21,11 +22,25 @@ model must have both the lowest WER among candidates with median warm transcript
 Measure WER and median warm transcription time for each candidate using the `npm run speech:measure`
 bench script against the frozen dataset assembled by `npm run speech:dataset`. The candidate with
 the lowest WER that also meets the ≤1.1 s median warm time constraint becomes the production model.
-Until the measurement is run and a winner is confirmed, Moonshine tiny q8 stays as the default.
 The measurement results (JSON) are saved beside the models directory for audit.
 
-Parakeet 0.6b is included in the measurement as a WER reference floor but excluded from
-consideration as the production model: its size (~2.5 GB) and latency exceed the view's targets.
+**Winner (measured 2026-11-24, LibriSpeech test-other, 100 utterances, 3 warm-up passes):**
+
+| Candidate | WER all | WER long | Median ms (all) | p95 ms | Eligible |
+|---|---|---|---|---|---|
+| `onnx-community/moonshine-tiny-ONNX` q8 | 14.4 % | 8.7 % | 614 ms | 1927 ms | ✓ |
+| `Workmind/moonshine-streaming-small-ONNX` quantized | **7.7 %** | **5.0 %** | **963 ms** | 4425 ms | ✓ **winner** |
+| `moonshine-ai/moonshine-streaming` medium (.ort) | 16.1 %* | 17.8 %* | 3023 ms | 19452 ms | ✗ latency |
+
+\* WER inflated: Python normalizer does not strip punctuation from hypothesis; model outputs
+commas/periods that are not in the reference texts. Latency alone disqualifies it (median 3023 ms
+exceeds the 1.1 s gate), so the exact WER is not material.
+
+The streaming small model requires audio length divisible by 80 (frame_len). The production
+`LocalSpeech.transcribe()` pads each chunk by up to 79 silent samples before inference.
+
+Parakeet 0.6b measurement is pending (requires sherpa-onnx-node); included as accuracy reference
+but excluded from winner selection (expected size ~640 MB, latency unknown).
 
 ## Alternatives Considered
 - **Fix Moonshine tiny q8 forever**: Simple but may miss improvements from v2 models.

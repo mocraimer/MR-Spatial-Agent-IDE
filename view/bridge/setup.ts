@@ -5,7 +5,7 @@ import { fetchKokoroModel } from './tts.js';
 
 const models = modelDirectory(dataDirectory());
 
-console.log(`Fetching ${SPEECH_MODEL} (about 31 MB) into ${models} …`);
+console.log(`Fetching ${SPEECH_MODEL} (about 100 MB) into ${models} …`);
 await fetchModel(models);
 console.log('Speech model ready.');
 

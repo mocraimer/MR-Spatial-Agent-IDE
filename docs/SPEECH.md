@@ -1,45 +1,65 @@
 # View local speech (ASR and TTS)
 
-`view/bridge/speech.ts` runs all speech recognition on the PC using Moonshine tiny q8 (ONNX
-Runtime, `@huggingface/transformers`). `view/bridge/tts.ts` runs synthesis using Kokoro-82M
-fp32 (via `kokoro-js` worker thread, voice `af_heart`, 24 kHz WAV). Neither model contacts any
-server at run time (INV-G4).
+`view/bridge/speech.ts` runs all speech recognition on the PC using Moonshine streaming small
+(quantized, ~100 MB, ONNX Runtime via `@huggingface/transformers`). `view/bridge/tts.ts` runs
+synthesis using Kokoro-82M fp32 (via `kokoro-js` worker thread, voice `af_heart`, 24 kHz WAV).
+Neither model contacts any server at run time (INV-G4).
 
 ## Bench scripts
 
 | Script | Purpose |
 |---|---|
-| `npm run speech:dataset` | Assembles 100 utterances from LibriSpeech test-clean into `./speech-dataset` (70 short <15 s, 30 long 15–30 s). Requires `ffmpeg` and local LibriSpeech test-clean FLAC files. |
-| `npm run speech:measure` | Measures WER and warm transcription time for a candidate model. Downloads model on first run. Run with `--model <id> --dtype q8 --dataset <dir> --models-dir <dir>`. |
+| `npm run speech:dataset` | Assembles ≥100 utterances (≥30 long, 15–30 s) from LibriSpeech test-other and TED-LIUM into a local directory. Downloads audio from HuggingFace Hub (`openslr/librispeech_asr` test-other and `distil-whisper/tedlium-long-form` test). Requires `ffmpeg` and `python3` with `pyarrow` and `soundfile`. |
+| `npm run speech:measure` | Measures WER and warm transcription time for a candidate model. Downloads model on first run (models-dir is a bench scratch dir, never the production data dir). Run with `--model <id> --dtype <dtype> --dataset <dir> --models-dir <dir>`. |
 | `npm run bench:tts` | Measures Kokoro synthesis latency across 15 trials per phrase class. |
+| `node build/view/bench/shelf-delay.js [--kokoro-model <dir>] [--minutes N]` | AC-2.3: measures p95 shelf-to-page delay during active voice synthesis and bridge RSS over a soak. |
 
-## Measurement results (2026-11-24, 100 utterances from LibriSpeech test-clean)
+## Candidates
 
-Dataset: 100 utterances (70 short <15 s, 30 long 15–30 s) from LibriSpeech test-clean speakers.
-All candidates measured at q8 dtype on the owner's PC (Node.js v22, WSL2, x64 CPU, no GPU).
+| Model id | Route | Notes |
+|---|---|---|
+| `onnx-community/moonshine-tiny-ONNX` | `@huggingface/transformers` pipeline, q8 | Former production model |
+| `Workmind/moonshine-streaming-small-ONNX` | `@huggingface/transformers` pipeline, quantized | Public, MIT; community ONNX export; `model_type: moonshine`; transformers.js v4 `MoonshineForConditionalGeneration` |
+| `moonshine-ai/moonshine-streaming` medium | `onnxruntime-node`, official .onnx files, Python batch runner | Public, MIT; full pipeline: frontend → encoder → adapter → decoder |
+| `csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8` | `sherpa-onnx-node` | ~640 MB; accuracy reference floor only |
 
-| Candidate | WER all | WER long | Median warm (ms) | p95 (ms) | Status |
-|---|---|---|---|---|---|
-| moonshine-tiny-ONNX q8 | 5.1 % | 3.4 % | 766 | 2 544 | Current production model |
-| moonshine-v2-small-ONNX q8 | — | — | — | — | Gated (401); not measured |
-| moonshine-v2-medium-ONNX q8 | — | — | — | — | Gated (401); not measured |
-| parakeet-tdt-0.6b-v2 | — | — | — | — | Reference only; size >2.5 GB |
+## Measurement results (2026-11-24, dataset v2 — LibriSpeech test-other)
 
-Moonshine tiny q8 remains the production model per ADR
-[20261123-speech-model-chosen-by-measurement](adr/20261123-speech-model-chosen-by-measurement.md):
-the winning candidate must have the lowest WER among measurable candidates **and** median warm
-time ≤1100 ms. With v2 models gated on HuggingFace Hub (HTTP 401 without an owner HF token), the
-comparison cannot be completed. Tiny q8 is confirmed as default until a comparison run succeeds.
+Dataset: 100 utterances (70 short 3–13 s, 30 long 15–26 s) from LibriSpeech test-other.
+Measurement: 3 warm-up passes on silence, then all 100 utterances. Noise check at SNR ~20 dB on
+first 10 utterances verifies scorer sensitivity. ORT threads fixed at 4 intra / 1 inter for all
+candidates. Machine: Node.js v22, WSL2, x64 CPU, no GPU.
 
-To re-run when v2 models become accessible:
+| Candidate | WER all | WER long | Median ms (all) | p95 ms | Noise check | Eligible |
+|---|---|---|---|---|---|---|
+| `moonshine-tiny-ONNX` q8 | 14.4 % | 8.7 % | 614 | 1927 | PASS (23.7 % noisy) | ✓ |
+| `moonshine-streaming-small-ONNX` quantized | **7.7 %** | **5.0 %** | **963** | 4425 | PASS (11.6 % noisy) | ✓ **winner** |
+| `moonshine-streaming` medium (.onnx) | 16.1 %† | 17.8 %† | 3023 | 19452 | — | ✗ latency |
+| `parakeet-tdt-0.6b-v2-int8` | pending | pending | pending | pending | pending | pending |
+
+† WER inflated: Python normaliser did not strip punctuation from hypothesis output. Latency alone
+disqualifies it (median 3023 ms > 1100 ms gate). The batch ORT runner
+(`scratchpad/moonshine-medium-runner.py`) is a bench-only tool; the medium model is not suitable
+for production on this machine.
+
+Winner per ADR [20261123-speech-model-chosen-by-measurement](adr/20261123-speech-model-chosen-by-measurement.md):
+lowest WER among candidates with median warm time ≤1100 ms on the full dataset.
+`Workmind/moonshine-streaming-small-ONNX` (quantized) wins: WER 7.7 % at 963 ms median.
+
+To re-run:
 
 ```sh
-# Set HF_TOKEN to an owner token with read access to onnx-community gated models, then:
-npm run speech:dataset -- --out ./speech-dataset
-npm run speech:measure -- --model onnx-community/moonshine-v2-small-ONNX \
-  --dtype q8 --dataset ./speech-dataset --models-dir <models-dir>
-npm run speech:measure -- --model onnx-community/moonshine-v2-medium-ONNX \
-  --dtype q8 --dataset ./speech-dataset --models-dir <models-dir>
+npm run speech:dataset -- --out ./speech-dataset-v2
+npm run speech:measure -- --model onnx-community/moonshine-tiny-ONNX \
+  --dtype q8 --dataset ./speech-dataset-v2 --models-dir ./bench-models --noise
+npm run speech:measure -- --model Workmind/moonshine-streaming-small-ONNX \
+  --dtype quantized --dataset ./speech-dataset-v2 --models-dir ./bench-models --noise
+# Medium ORT (Python batch runner, bench-only):
+python3 scratchpad/moonshine-medium-runner.py \
+  --models-dir ./bench-models --dataset ./speech-dataset-v2
+# Parakeet reference (requires sherpa-onnx-node):
+npm run speech:measure -- --model parakeet-int8 \
+  --dataset ./speech-dataset-v2 --models-dir ./bench-models
 ```
 
 ## TTS measurement results (2026-11-24, Kokoro-82M fp32, voice af_heart, 15 trials each)

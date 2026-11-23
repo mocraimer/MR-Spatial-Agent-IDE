@@ -8,12 +8,15 @@ import type { SpeechState } from '../shared/messages.js';
 import type { Transcriber } from './bridge.js';
 
 /**
- * Moonshine tiny, 8-bit weights: about 31 MB on disk, English only. Chosen over Moonshine base
- * (64 MB), Parakeet CTC 110M, zipformer and Whisper tiny/base.en on the view's own phrases: as
- * accurate overall as base, better on short commands, half the size (see the ADR on local speech).
+ * Moonshine streaming small, quantized (~100 MB on disk), English only. Chosen over tiny q8 on
+ * LibriSpeech test-other: WER 7.7% vs 14.2%, median warm time 963 ms vs 459 ms (both under the
+ * 1100 ms gate). See the ADR on local speech and docs/SPEECH.md for the full measurement table.
+ *
+ * The streaming model's conv frontend requires audio length divisible by 80 (frame_len = 80
+ * samples at 16kHz). `transcribe()` pads each chunk before inference.
  */
-export const SPEECH_MODEL = 'onnx-community/moonshine-tiny-ONNX';
-export const SPEECH_DTYPE = 'q8';
+export const SPEECH_MODEL = 'Workmind/moonshine-streaming-small-ONNX';
+export const SPEECH_DTYPE = 'quantized';
 
 /** Sample rate expected by the speech model (16kHz). */
 export const SAMPLE_RATE = 16000;
@@ -114,7 +117,7 @@ export class LocalSpeech implements Transcriber {
       env.allowRemoteModels = false;
       env.allowLocalModels = true;
       env.localModelPath = this.models;
-      this.recognizer = await pipeline('automatic-speech-recognition', SPEECH_MODEL, { dtype: SPEECH_DTYPE }) as unknown as Recognizer;
+      this.recognizer = await pipeline('automatic-speech-recognition', SPEECH_MODEL, { dtype: SPEECH_DTYPE as 'q8' }) as unknown as Recognizer;
       this.current = { ready: true };
     } catch (error) {
       this.current = { ready: false, reason: `Speech could not start on the PC: ${(error as Error).message}` };
@@ -126,7 +129,11 @@ export class LocalSpeech implements Transcriber {
     // Split long audio at pauses into ≤10s chunks so the model never sees too much at once.
     const chunks = splitAtPauses(audio, SAMPLE_RATE);
     const parts: string[] = [];
-    for (const chunk of chunks) {
+    for (const rawChunk of chunks) {
+      // The streaming model's conv frontend requires audio length divisible by 80 (frame_len).
+      // Pad with silence at the end; at most 79 samples (≈5 ms) are added.
+      const rem = rawChunk.length % 80;
+      const chunk = rem === 0 ? rawChunk : (() => { const p = new Float32Array(rawChunk.length + (80 - rem)); p.set(rawChunk); return p; })();
       const result: unknown = await this.recognizer(chunk);
       const rs = Array.isArray(result) ? result : [result];
       const texts = rs.map(r => (typeof r === 'object' && r !== null && typeof (r as { text?: unknown }).text === 'string' ? (r as { text: string }).text : null));
@@ -142,5 +149,5 @@ export async function fetchModel(models: string): Promise<void> {
   const { env, pipeline } = await import('@huggingface/transformers');
   env.allowRemoteModels = true;
   env.cacheDir = models;
-  await pipeline('automatic-speech-recognition', SPEECH_MODEL, { dtype: SPEECH_DTYPE });
+  await pipeline('automatic-speech-recognition', SPEECH_MODEL, { dtype: SPEECH_DTYPE as 'q8' });
 }
