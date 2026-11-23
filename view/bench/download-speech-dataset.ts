@@ -118,11 +118,9 @@ const { execSync } = await import('node:child_process');
 
 for (const id of FROZEN_IDS) {
   const [spk, ch] = id.split('-');
-  const pattern = `LibriSpeech/test-other/${spk ?? ''}/${ch ?? ''}/${id}.flac`;
   try {
     execSync(`tar -xzf "${archivePath}" -C "${tmpDir}" --no-anchored "${id}.flac" 2>/dev/null`);
   } catch { /* file not found in archive; skip */ }
-  const transPattern = `LibriSpeech/test-other/${spk ?? ''}/${ch ?? ''}/${spk ?? ''}-${ch ?? ''}.trans.txt`;
   try {
     execSync(`tar -xzf "${archivePath}" -C "${tmpDir}" --no-anchored "${spk ?? ''}-${ch ?? ''}.trans.txt" 2>/dev/null`);
   } catch { /* skip */ }

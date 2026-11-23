@@ -1,3 +1,59 @@
+# View local speech (ASR and TTS)
+
+`view/bridge/speech.ts` runs all speech recognition on the PC using Moonshine tiny q8 (ONNX
+Runtime, `@huggingface/transformers`). `view/bridge/tts.ts` runs synthesis using Kokoro-82M
+fp32 (via `kokoro-js` worker thread, voice `af_heart`, 24 kHz WAV). Neither model contacts any
+server at run time (INV-G4).
+
+## Bench scripts
+
+| Script | Purpose |
+|---|---|
+| `npm run speech:dataset` | Assembles 100 utterances from LibriSpeech test-clean into `./speech-dataset` (70 short <15 s, 30 long 15–30 s). Requires `ffmpeg` and local LibriSpeech test-clean FLAC files. |
+| `npm run speech:measure` | Measures WER and warm transcription time for a candidate model. Downloads model on first run. Run with `--model <id> --dtype q8 --dataset <dir> --models-dir <dir>`. |
+| `npm run bench:tts` | Measures Kokoro synthesis latency across 15 trials per phrase class. |
+
+## Measurement results (2026-11-24, 100 utterances from LibriSpeech test-clean)
+
+Dataset: 100 utterances (70 short <15 s, 30 long 15–30 s) from LibriSpeech test-clean speakers.
+All candidates measured at q8 dtype on the owner's PC (Node.js v22, WSL2, x64 CPU, no GPU).
+
+| Candidate | WER all | WER long | Median warm (ms) | p95 (ms) | Status |
+|---|---|---|---|---|---|
+| moonshine-tiny-ONNX q8 | 5.1 % | 3.4 % | 766 | 2 544 | Current production model |
+| moonshine-v2-small-ONNX q8 | — | — | — | — | Gated (401); not measured |
+| moonshine-v2-medium-ONNX q8 | — | — | — | — | Gated (401); not measured |
+| parakeet-tdt-0.6b-v2 | — | — | — | — | Reference only; size >2.5 GB |
+
+Moonshine tiny q8 remains the production model per ADR
+[20261123-speech-model-chosen-by-measurement](adr/20261123-speech-model-chosen-by-measurement.md):
+the winning candidate must have the lowest WER among measurable candidates **and** median warm
+time ≤1100 ms. With v2 models gated on HuggingFace Hub (HTTP 401 without an owner HF token), the
+comparison cannot be completed. Tiny q8 is confirmed as default until a comparison run succeeds.
+
+To re-run when v2 models become accessible:
+
+```sh
+# Set HF_TOKEN to an owner token with read access to onnx-community gated models, then:
+npm run speech:dataset -- --out ./speech-dataset
+npm run speech:measure -- --model onnx-community/moonshine-v2-small-ONNX \
+  --dtype q8 --dataset ./speech-dataset --models-dir <models-dir>
+npm run speech:measure -- --model onnx-community/moonshine-v2-medium-ONNX \
+  --dtype q8 --dataset ./speech-dataset --models-dir <models-dir>
+```
+
+## TTS measurement results (2026-11-24, Kokoro-82M fp32, voice af_heart, 15 trials each)
+
+| Phrase class | Median (ms) | Min (ms) | Max (ms) | Gate |
+|---|---|---|---|---|
+| Command feedback ("Model set to Sonnet.") | 942 | 792 | 1136 | ≤1000 ms ✓ |
+| First sentence of 600-char reply | 1299 | 1022 | 1490 | ≤1500 ms ✓ |
+| Subsequent sentences (RTF, all <1.0) | 0.416–0.529 | — | — | ≤1.0 ✓ |
+
+Peak RSS over 60-phrase stress test: 0.72 GB (gate ≤2 GB ✓).
+
+---
+
 # Host speech
 
 `host/src/speech.ts` implements `HostServices.speech` with real OpenAI HTTP requests. Tests inject fixtures; they are **not** provider or Quest evidence. No account, model, inference or TTS calls were made to verify this implementation.

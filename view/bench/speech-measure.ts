@@ -20,8 +20,8 @@
  *   - onnx-community/moonshine-v2-medium-ONNX         q8
  *   - nvidia/parakeet-tdt-0.6b-v2 (reference only, non-local)
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, basename, extname } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { env, pipeline } from '@huggingface/transformers';
 
 // --------------- CLI args ---------------

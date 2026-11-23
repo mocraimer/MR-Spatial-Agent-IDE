@@ -17,12 +17,6 @@ export const SPEECH_DTYPE = 'q8';
 
 /** Sample rate expected by the speech model (16kHz). */
 export const SAMPLE_RATE = 16000;
-/** Maximum chunk length for one model call: ~10 seconds at 16kHz. */
-const MAX_CHUNK = SAMPLE_RATE * 10;
-/** Minimum chunk length after a split: ~1 second (protects against micro-chunks). */
-const MIN_CHUNK = SAMPLE_RATE * 1;
-/** Width of one silence-scanning window: ~200ms. */
-const PAUSE_WINDOW = Math.round(SAMPLE_RATE * 0.2);
 
 /**
  * Split audio into chunks of at most ~10 seconds, breaking at the quietest 200ms window found

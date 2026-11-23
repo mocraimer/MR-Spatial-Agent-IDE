@@ -72,9 +72,8 @@ test('KokoroVoice with a missing model falls back to the Windows voice and repor
   try {
     const missingModel = join(dir, 'no-such-model');
     const windows = new WindowsVoice();
-    let failReason: string | null = null;
     // Use a path that does not exist; the worker will fail to load the model.
-    const v = new KokoroVoice(missingModel, KOKORO_VOICE, windows, () => undefined, r => { failReason = r; });
+    const v = new KokoroVoice(missingModel, KOKORO_VOICE, windows, () => undefined, () => undefined);
     // Before the worker fails (while loading), problem() delegates to fallback and standingIn is true.
     assert.equal(v.voiceId, KOKORO_VOICE, 'af_heart is the default voice id');
     assert.equal(v.problem(), windows.problem(), 'problem() delegates to fallback while loading');

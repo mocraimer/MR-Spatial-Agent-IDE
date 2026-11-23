@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { resolve, splitSentences } from '../bridge/bridge.js';
@@ -290,9 +290,8 @@ test('splitAtPauses: short audio passes through; long audio splits at the quiete
 });
 
 test('AC-3.3: every command is recognised with every leading/trailing filler; prompts with command words stay prompts', () => {
-  const fillers = ['uh', 'um', 'okay', 'ok', 'so', 'please'];
-  const leading = ['uh', 'um', 'okay', 'ok', 'so'];  // leading fillers
-  const trailing = ['please', 'uh', 'um', 'okay', 'ok', 'so'];  // trailing fillers
+  const leading = ['uh', 'um', 'okay', 'ok', 'so'];
+  const trailing = ['please', 'uh', 'um', 'okay', 'ok', 'so'];
   // Filter to commands that are not confirming-only or picking-only.
   for (const c of COMMANDS.filter(cmd => !cmd.whenConfirming && !cmd.whenPicking)) {
     const base = c.say[0] as string;
