@@ -211,6 +211,9 @@ export class HerdrLevelAgents implements LevelAgents {
       } catch (error) {
         // Started but asking something (agent_not_ready): it stays in its seat for the owner.
         if (error instanceof HerdrError && error.code === 'agent_not_ready') throw error;
+        // An attempt that Herdr answered with an error but that did start the agent: the retry
+        // finds the name taken by this very pane, so the agent is up.
+        if (error instanceof HerdrError && error.code === 'agent_name_taken' && error.message.includes(`pane_id=${pane.id} `)) return;
         // A fresh shell may not be at its prompt yet.
         if (error instanceof HerdrError && Date.now() <= deadline) { await new Promise(resolve => setTimeout(resolve, 300)); continue; }
         throw error;
