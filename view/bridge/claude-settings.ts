@@ -150,8 +150,19 @@ export function restoreDefaults(token: SaveToken): void {
     }
   }
 
-  // If modelSettings did not exist at save time but now does due to /effort, we don't touch it
-  // (the per-model loop above already handles the specific ids that were absent).
+  // Also remove effortLevel for model ids that did not exist at save time but were added by /effort.
+  // Iterating the union of saved and current ids ensures new ids created by /effort are cleaned up.
+  for (const id of Object.keys(ms)) {
+    if (id in token.modelEfforts) continue; // already handled in the loop above
+    const entry = (typeof ms[id] === 'object' && ms[id] !== null) ? ms[id] as Record<string, unknown> : null;
+    if (!entry || !('effortLevel' in entry)) continue;
+    changed = true;
+    const cleaned = { ...entry };
+    delete cleaned.effortLevel;
+    if (Object.keys(cleaned).length === 0) delete ms[id];
+    else ms[id] = cleaned;
+  }
+
   if (changed) {
     if (Object.keys(ms).length > 0 || token.hadModelSettings) {
       data.modelSettings = ms;

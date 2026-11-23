@@ -23,6 +23,7 @@ import { Mirrors } from './mirrors.js';
 import { addProject, folders, loose as squeezed, makeProject, newProjectRoot, projectRoots, takenFolders } from './projects.js';
 import type { Frame, Windows } from './windows.js';
 import { fitWindow, restoreWindow, newFitState, RESTORE_GRACE_MS, type FitState } from './window-fit.js';
+import { FRONT_COLS } from '../shared/front-cols.js';
 
 export interface Transcriber { state(): SpeechState; transcribe(audio: Float32Array): Promise<string> }
 
@@ -63,6 +64,38 @@ export interface BridgeOptions {
 type Result = { ok: boolean; outcome: string; silent?: true; say?: string };
 /** Words a session prints when it takes a model or effort command. */
 const CONFIRMATION = { model: /(?:Set model to|Kept model as) [^\n]*/g, effort: /Set effort level to [^\n]*/g } as const;
+/**
+ * Builds the outcome for a /model or /effort command from the session's raw confirmation line.
+ * Drops the "saved as your default" clause so the owner hears only what changed in this session.
+ * Appends a note about the default for new sessions (kept, or may have changed on error).
+ *
+ * Real Claude Code examples:
+ *   model: "Set model to Sonnet 4.6 and saved as your default for new sessions"
+ *   effort: "Set effort level to high (saved as your default for new sessions): Comprehensive…"
+ *   effort: "Set effort level to high (this session only): ready"
+ */
+function settingOutcome(what: 'model' | 'effort', rawLine: string, restoreError: string | null): string {
+  let sessionPart: string;
+  if (what === 'model') {
+    // "Set model to <name> and saved as…" → "Set model to <name> in this session."
+    // "Kept model as <name>" → "Model <name> was already set in this session."
+    const kept = /^Kept model as (.+)$/.exec(rawLine.trim());
+    if (kept) {
+      sessionPart = `Model ${kept[1]!.trim()} was already set in this session.`;
+    } else {
+      const m = /^Set model to (.+?) (?:and |in )/.exec(rawLine.trim()) ?? /^Set model to (.+)$/.exec(rawLine.trim());
+      const name = m ? m[1]!.trim() : rawLine.trim();
+      sessionPart = `Set model to ${name} in this session.`;
+    }
+  } else {
+    // "Set effort level to <level> (saved as…): …" or "Set effort level to <level> (this session only): …"
+    const m = /^Set effort level to ([^\s(]+)/.exec(rawLine.trim());
+    const level = m ? m[1]!.trim() : rawLine.trim();
+    sessionPart = `Set effort level to ${level} in this session.`;
+  }
+  if (restoreError) return `${sessionPart} The default for new sessions may have changed: ${restoreError}`;
+  return `${sessionPart} Your default for new sessions was kept.`;
+}
 /** How long after a turn ends the transcript is read, so its last line is written. */
 const SETTLE_MS = 400;
 /** Where no window helper is set up: every request says so. */
@@ -88,6 +121,10 @@ export const PICKER_IDLE_MS = 180_000;
 const FRONT_FRAME_MS = 66;
 /** How long after /model or /effort confirmation to keep watching for delayed settings writes. */
 const RESTORE_WATCH_MS = 4_000;
+/** How often to check whether the front pane width changed while in mixed reality. */
+const LAYOUT_POLL_MS = 2_000;
+/** Lower bound for pane-width polling: re-fit when below this. */
+const MIN_FIT_COLS_POLL = FRONT_COLS - 4; // 116 when FRONT_COLS=120
 const TILE_FRAME_MS = 1000;
 
 type PickerEntry = { kind: 'windows'; label: string; detail: string; hwnd: number } | { kind: 'folders'; label: string; detail: string; path: string };
@@ -139,6 +176,8 @@ export class Bridge {
   private lastFitFocusId: string | null = null;
   /** Serialization: the pending fit promise (newer call supersedes an in-flight one). */
   private fitSeq = 0;
+  /** Interval timer that polls front-pane width while in mixed reality to catch layout changes. */
+  private layoutPollTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly herdr: HerdrClient,
@@ -224,8 +263,10 @@ export class Bridge {
     this.clients.add(send);
     return () => {
       this.clients.delete(send);
-      // When a page disconnects, treat it as leaving MR (it may have crashed without sending).
+      // A page that disconnects without calling /api/mr false may have crashed: give it a grace
+      // period (RESTORE_GRACE_MS) in case the XR session reconnects before restoring the window.
       if (this.mrPages.delete(pageId) && this.mrPages.size === 0) {
+        this.stopLayoutPoll();
         this.scheduleMrRestore();
       }
     };
@@ -235,9 +276,11 @@ export class Bridge {
 
   /**
    * Called by the server when a page enters or leaves mixed reality. Tracks per-page MR state.
-   * Fits while any page is in MR; restores (after grace) when none are.
-   * Re-entering within grace period cancels the restore timer.
-   * Re-fits when the focused session changes while in MR.
+   * Fits while any page is in MR; restores when none are.
+   * Explicit leave (/api/mr false) restores promptly; a disconnect (page gone without leaving) uses
+   * a grace period in case the XR session reconnects.
+   * Re-entering within grace period cancels any pending restore.
+   * Re-fits when the focused session changes while in MR; also polls for layout changes every 2 s.
    */
   setMixedReality(pageId: string, inMR: boolean): void {
     if (inMR) {
@@ -246,14 +289,23 @@ export class Bridge {
       // Cancel any pending restore.
       if (this.restoreTimer) { clearTimeout(this.restoreTimer); this.restoreTimer = null; }
       void this.doFit().catch(() => undefined);
-      if (!wasInMR) this.lastFitFocusId = this.shelf().focusedId ?? null;
+      if (!wasInMR) {
+        this.lastFitFocusId = this.shelf().focusedId ?? null;
+        this.startLayoutPoll();
+      }
     } else {
       this.mrPages.delete(pageId);
-      if (this.mrPages.size === 0) this.scheduleMrRestore();
+      if (this.mrPages.size === 0) {
+        this.stopLayoutPoll();
+        // Explicit leave: restore promptly (no grace period needed).
+        if (this.restoreTimer) { clearTimeout(this.restoreTimer); this.restoreTimer = null; }
+        this.lastFitFocusId = null;
+        void restoreWindow(this.fitState, { log: this.log, windows: this.mirrors.windowHelper() }).catch(() => undefined);
+      }
     }
   }
 
-  /** Schedules a window restore after the grace period. */
+  /** Schedules a window restore after the grace period (used when a page disconnects without leaving). */
   private scheduleMrRestore(): void {
     if (this.restoreTimer) clearTimeout(this.restoreTimer);
     this.restoreTimer = setTimeout(() => {
@@ -262,6 +314,35 @@ export class Bridge {
       void restoreWindow(this.fitState, { log: this.log, windows: this.mirrors.windowHelper() }).catch(() => undefined);
     }, RESTORE_GRACE_MS);
     this.restoreTimer.unref();
+  }
+
+  /**
+   * Starts a periodic timer that polls the front pane's column width every LAYOUT_POLL_MS.
+   * When the width is outside the fit range (> FRONT_COLS or < MIN_FIT_COLS_POLL), re-fits.
+   * This catches layout changes that the focus-change listener does not cover (e.g. tab splits).
+   */
+  private startLayoutPoll(): void {
+    if (this.layoutPollTimer) return; // already running
+    this.layoutPollTimer = setInterval(() => {
+      if (this.mrPages.size === 0) { this.stopLayoutPoll(); return; }
+      const shelf = this.shelf();
+      const front = shelf.sessions.find(s => s.id === shelf.focusedId);
+      if (!front) return;
+      void this.herdr.call('pane.layout', { pane_id: front.id }).then(layout => {
+        const panes = (layout.layout as { panes?: { pane_id?: unknown; rect?: { width?: unknown } }[] } | undefined)?.panes ?? [];
+        const rect = panes.find(p => p.pane_id === front.id)?.rect;
+        const cols = typeof rect?.width === 'number' ? rect.width : null;
+        if (cols !== null && (cols > FRONT_COLS || cols < MIN_FIT_COLS_POLL)) {
+          void this.doFit().catch(() => undefined);
+        }
+      }).catch(() => undefined);
+    }, LAYOUT_POLL_MS);
+    if (this.layoutPollTimer.unref) this.layoutPollTimer.unref();
+  }
+
+  /** Stops the layout-change polling timer. */
+  private stopLayoutPoll(): void {
+    if (this.layoutPollTimer) { clearInterval(this.layoutPollTimer); this.layoutPollTimer = null; }
   }
 
   /**
@@ -687,8 +768,8 @@ export class Bridge {
     const confirmations = (text: string) => plain(text).match(CONFIRMATION[what]) ?? [];
     const before = confirmations(await this.herdr.read(session.id, 30)).length;
 
-    // Save defaults before the command changes the settings file.
-    // If the save fails (file unreadable or corrupt), report it in the outcome rather than typing.
+    // Save the owner's defaults before the command is typed, so they can be restored afterwards.
+    // If the save fails (file unreadable or corrupt), proceed with typing but note it in the outcome.
     let token: ReturnType<typeof saveDefaults> | null = null;
     let saveError: string | null = null;
     if (this.settingsFilePath) {
@@ -738,11 +819,10 @@ export class Bridge {
       // Immediate restore is enough for the returned outcome.
     }
 
-    // Build the outcome.
+    // Build the outcome from the session's new setting, without echoing the "saved as default" clause.
     const saveNote = saveError ? ` The default for new sessions may have changed: could not read the settings file before the command (${saveError}).` : '';
     if (!confirmedText) return { ok: true, outcome: `Sent ${typed} to ${session.name}. It did not show that it took effect.${saveNote}` };
-    if (restoreError) return { ok: true, outcome: `${confirmedText}. The default for new sessions may have changed: ${restoreError}` };
-    return { ok: true, outcome: `${confirmedText}${saveNote}` };
+    return { ok: true, outcome: settingOutcome(what, confirmedText, restoreError ?? (saveError ? saveError : null)) };
   }
 
   private setVoice(on: boolean): Result {

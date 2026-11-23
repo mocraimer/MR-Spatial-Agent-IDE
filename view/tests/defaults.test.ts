@@ -36,8 +36,13 @@ test('AC-6.1: after /model, the settings file model field is restored to its ori
     const s = await setup(LAYOUT, { claudeSettingsPath: settingsPath, confirmMs: 2000 });
     try {
       await front(s, 'a1'); await focusedIs(s, 'a1');
-      await s.say('model sonnet');
+      const u = await s.say('model sonnet');
       await shows(s, 'a1', 'a1 got: /model sonnet');
+      // The outcome must say "in this session" and "default for new sessions was kept",
+      // not echo the raw "saved as your default for new sessions" from Claude Code.
+      assert.ok(u.outcome.includes('in this session'), `outcome has "in this session": ${u.outcome}`);
+      assert.ok(u.outcome.includes('Your default for new sessions was kept'), `outcome has keep clause: ${u.outcome}`);
+      assert.ok(!u.outcome.includes('saved as your default'), `outcome has no "saved as your default": ${u.outcome}`);
       // After the command, the settings file should still have the original model.
       const after = JSON.parse(readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
       assert.equal(after.model, 'claude-opus-4-5', 'original model restored');
@@ -46,7 +51,7 @@ test('AC-6.1: after /model, the settings file model field is restored to its ori
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('AC-6.2: after /effort, the settings file modelSettings is restored to its original value', async () => {
+test('AC-6.2: after /effort, the settings file modelSettings is restored and outcome says "in this session"', async () => {
   const dir = mkdtempSync('/tmp/svl-defaults-');
   try {
     const settingsPath = join(dir, 'settings.json');
@@ -59,13 +64,46 @@ test('AC-6.2: after /effort, the settings file modelSettings is restored to its 
     const s = await setup(LAYOUT, { claudeSettingsPath: settingsPath, confirmMs: 2000 });
     try {
       await front(s, 'a1'); await focusedIs(s, 'a1');
-      await s.say('effort low');
+      const u = await s.say('effort low');
       await shows(s, 'a1', 'a1 got: /effort low');
+      // The outcome must say "in this session" and "default for new sessions was kept".
+      assert.ok(u.outcome.includes('in this session'), `outcome has "in this session": ${u.outcome}`);
+      assert.ok(u.outcome.includes('Your default for new sessions was kept'), `outcome has keep clause: ${u.outcome}`);
+      assert.ok(!u.outcome.includes('saved as your default'), `outcome has no "saved as your default": ${u.outcome}`);
       // After the command, the settings file should have the original modelSettings.
       const after = JSON.parse(readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
       const ms = after.modelSettings as Record<string, Record<string, unknown>> | undefined;
       assert.deepEqual(ms?.['claude-opus-4-5']?.effortLevel, 'high', 'original effort restored');
     } finally { await s.stop(); }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// A.2 ─────────────────────────────────────────────────────────────────────────────────────────────
+
+test('A.2: /effort on a model with no prior entry creates a new id; restoreDefaults removes it', () => {
+  // A model id absent from modelSettings at save time is a "new id" case. When /effort creates
+  // `modelSettings.<new-id>.effortLevel`, restoreDefaults must remove it so the default is not
+  // permanently changed.
+  const dir = mkdtempSync('/tmp/svl-defaults-');
+  try {
+    const settingsPath = join(dir, 'settings.json');
+    // Settings at save time: no modelSettings at all.
+    const original = { model: 'claude-opus-4-5' };
+    writeFileSync(settingsPath, `${JSON.stringify(original, null, 2)}\n`, 'utf8');
+    const token = saveDefaults(settingsPath);
+
+    // /effort runs on a model with no prior entry: Claude Code adds a brand-new id.
+    const afterEffort = { model: 'claude-opus-4-5', modelSettings: { 'claude-haiku-4-5': { effortLevel: 'high' } } };
+    writeFileSync(settingsPath, `${JSON.stringify(afterEffort, null, 2)}\n`, 'utf8');
+
+    restoreDefaults(token);
+
+    const restored = JSON.parse(readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
+    assert.equal(restored.model, 'claude-opus-4-5', 'model unchanged');
+    // The new id's effortLevel must be removed; if its entry is now empty, the entry itself is gone.
+    const ms = restored.modelSettings as Record<string, Record<string, unknown>> | undefined;
+    const newEntry = ms?.['claude-haiku-4-5'];
+    assert.ok(!newEntry || !('effortLevel' in newEntry), 'new-id effortLevel removed after restore');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
