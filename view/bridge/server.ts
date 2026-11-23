@@ -8,7 +8,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createServer, type Server } from 'node:https';
 import { join } from 'node:path';
 import { AuthenticationError, type HostCertificate, type PairingAuthority } from '../../host/src/auth.js';
-import { command } from '../shared/actions.js';
+import { command, type WindowInput } from '../shared/actions.js';
 import type { BridgeEvent } from '../shared/messages.js';
 import type { Bridge } from './bridge.js';
 import { compiled, REPO } from './config.js';
@@ -20,6 +20,8 @@ const COOKIE = 'svw';
 const MAX_AUDIO_BYTES = MAX_SECONDS * SAMPLE_RATE * 4;
 /** A page that stops reading (headset asleep) is dropped past this; it reconnects and resyncs. */
 const MAX_BUFFERED = 8 * 1024 * 1024;
+/** A page with more than this not yet sent to it skips pictures until it catches up. */
+const MAX_FRAME_BUFFERED = 1024 * 1024;
 const HEARTBEAT_MS = 10_000;
 
 export interface ServerOptions {
@@ -98,6 +100,12 @@ export function startServer(options: ServerOptions): Promise<Server> {
       const body = await json(req, 4096);
       if (typeof body.focus === 'string') return send(res, 200, await bridge.act({ kind: 'focus', sessionId: body.focus }));
       if (typeof body.go === 'string') return send(res, 200, await bridge.act({ kind: 'go', projectId: body.go }));
+      if (typeof body.pick === 'number' && Number.isInteger(body.pick)) return send(res, 200, await bridge.act({ kind: 'pick', n: body.pick }));
+      if (typeof body.window === 'string') {
+        const input = windowInput(body.input);
+        if (!input) return send(res, 400, { error: 'A click is {type:"click", x, y} and a scroll {type:"wheel", x, y, delta}, with x and y from 0 to 1.' });
+        return send(res, 200, await bridge.act({ kind: 'window-input', sessionId: body.window, events: [input] }));
+      }
       let found;
       try { found = command(String(body.command)); } catch { return send(res, 400, { error: 'Unknown action.' }); }
       if (!('bridge' in found.run)) return send(res, 400, { error: 'That action is done by the page.' });
@@ -123,6 +131,8 @@ export function startServer(options: ServerOptions): Promise<Server> {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
     res.write('retry: 1000\n\n');
     const push = (event: BridgeEvent | { type: 'ping' }) => {
+      // A picture waits for nobody: a page still taking the last one skips this one; a later one follows.
+      if (event.type === 'frame' && res.writableLength > MAX_FRAME_BUFFERED) return;
       if (res.writableLength > MAX_BUFFERED) { log('dropped a page that stopped reading; it will reconnect'); res.destroy(); return; }
       res.write(`data: ${JSON.stringify(event)}\n\n`);
     };
@@ -142,6 +152,17 @@ export function startServer(options: ServerOptions): Promise<Server> {
     server.once('error', reject);
     server.listen(options.port, options.host, () => { server.off('error', reject); resolve(server); });
   });
+}
+
+/** A click or scroll on a mirrored window, as the page sends it; null when it is not one. */
+function windowInput(v: unknown): WindowInput | null {
+  if (typeof v !== 'object' || v === null) return null;
+  const o = v as Record<string, unknown>;
+  const at = (n: unknown) => typeof n === 'number' && n >= 0 && n <= 1;
+  if (!at(o.x) || !at(o.y)) return null;
+  if (o.type === 'click') return { type: 'click', x: o.x as number, y: o.y as number };
+  if (o.type === 'wheel' && typeof o.delta === 'number' && Number.isInteger(o.delta) && Math.abs(o.delta) <= 20) return { type: 'wheel', x: o.x as number, y: o.y as number, delta: o.delta };
+  return null;
 }
 
 function pathOf(req: IncomingMessage): string { return new URL(req.url ?? '/', 'https://view').pathname; }

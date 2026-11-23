@@ -5,13 +5,14 @@
  */
 import { plain } from '../shared/ansi.js';
 import { command, COMMANDS, type PageAction } from '../shared/actions.js';
-import { parseUtterance, type BridgeEvent, type PendingAsk, type PendingClose, type Session, type Shelf, type SpeechState, type Utterance } from '../shared/messages.js';
+import { parseUtterance, type BridgeEvent, type PendingAsk, type PendingClose, type Picker, type Session, type Shelf, type SpeechState, type Utterance } from '../shared/messages.js';
 import type { ViewState } from '../shared/view-state.js';
 import { arrange, columnFit, CHIP_ARC, FRONT_DISTANCE, FRONT_WIDTH, FRONT_Y, ARC, TOP, type Closed } from './layout.js';
 import { BridgeLink } from './link.js';
 import { Mic, openMicrophone, type Captured, type OpenSource } from './mic.js';
 import { VoicePlayer } from './voice.js';
 import {
+  bigScreen, drawPicker, drawWindowFront, drawWindowTile, type Picture,
   CONTROLS_SIZE, LINE_PX, drawChip, drawControls, drawTalk, TALK_SIZE, type TalkPhase, drawDraft, DRAFT_SIZE, drawFront, drawStrip, drawTile, STRIP_SIZE, EMPTY_FRONT, FRONT_SIZE, NO_SESSIONS, frontRows, lightOf, regionAt, resetFonts, terminalLines, tileRows, type ControlButton, type DraftState, type Region, type StripState,
 } from './panels.js';
 import { onArc, Scene, type Hit, type Pointer, type Rect } from './scene.js';
@@ -32,7 +33,15 @@ const state = {
   speech: { ready: false, reason: 'Connecting to the PC…' } as SpeechState,
   scroll: 0,
   scale: 1,
+  /** Each window mirror's latest picture, and what it says in place of one. */
+  pictures: new Map<string, Picture & { version: number }>(),
+  notes: new Map<string, string | null>(),
+  picker: null as Picker | null,
 };
+/** Where the front window mirror's picture is drawn on the front canvas, for mapping a click into the window. */
+let windowRect: Rect | null = null;
+/** Pictures being decoded, newest wins. */
+const decoding = new Map<string, number>();
 
 const NOTICE_MS = 6000;
 const CLOSED_MS = 6000;
@@ -43,10 +52,10 @@ const UTTERANCE_TIMEOUT_MS = 20_000;
 const canvas = document.getElementById('scene') as HTMLCanvasElement;
 const scene = new Scene(canvas, {
   pointer,
-  scroll: rows => scrollBy(rows),
+  scroll: rows => { if (frontSession()?.window && !state.picker) windowScroll(rows); else scrollBy(rows); },
   draggable: surface => surface === 'front',
   // The text follows the hand: dragging down brings older lines into view.
-  drag: (surface, dy) => { if (surface === 'front') scrollBy(dy / LINE_PX); },
+  drag: (surface, dy) => { if (surface !== 'front') return; if (frontSession()?.window && !state.picker) windowScroll(dy / LINE_PX); else scrollBy(dy / LINE_PX); },
   frame: () => { if (renderWanted) { renderWanted = false; renderNow(); } },
   target: hit => targetRect(hit),
 });
@@ -84,6 +93,12 @@ function apply(event: BridgeEvent): void {
           state.closed.set(s.id, { session: s, projectId: s.workspaceId, project: projectLabel(before, s), until: Date.now() + CLOSED_MS });
           state.texts.delete(s.id);
           state.textVersion.delete(s.id);
+          // A closed mirror's last picture holds GPU memory: free it now.
+          const picture = state.pictures.get(s.id);
+          if (picture && 'close' in picture.image) (picture.image as ImageBitmap).close();
+          state.pictures.delete(s.id);
+          state.notes.delete(s.id);
+          decoding.delete(s.id);
           notice(`${s.name} closed in Herdr.`);
         }
         if (before.focusedId !== event.shelf.focusedId) { state.scroll = 0; scrollExact = 0; }
@@ -105,9 +120,50 @@ function apply(event: BridgeEvent): void {
     case 'say-stop': player.stop(); break;
     case 'speech': state.speech = event.speech; break;
     case 'page': if (isPageAction(event.action)) runPage(event.action); break;
+    case 'frame': { decodeFrame(event); return; }
+    case 'window': state.notes.set(event.id, event.note); break;
+    case 'picker': state.picker = event.picker; break;
     default: return assertNever(event);
   }
   render();
+}
+
+function decodeFrame(event: Extract<BridgeEvent, { type: 'frame' }>): void {
+  const seq = (decoding.get(event.id) ?? 0) + 1;
+  decoding.set(event.id, seq);
+  const bytes = Uint8Array.from(atob(event.data), c => c.charCodeAt(0));
+  void createImageBitmap(new Blob([bytes], { type: event.mime })).then(image => {
+    if (decoding.get(event.id) !== seq) { image.close(); return; }
+    const before = state.pictures.get(event.id);
+    if (before && 'close' in before.image) (before.image as ImageBitmap).close();
+    state.pictures.set(event.id, { image, w: event.w, h: event.h, version: (before?.version ?? 0) + 1 });
+    render();
+  }, () => undefined);
+}
+
+function frontSession(): Session | null {
+  const shelf = state.shelf;
+  return shelf?.sessions.find(s => s.id === shelf.focusedId) ?? null;
+}
+
+/** A click or scroll in the front window mirror, at a point of the front canvas (or its middle). */
+function windowInput(input: { type: 'click' } | { type: 'wheel'; delta: number }, at?: { x: number; y: number }): void {
+  const s = frontSession();
+  if (!s?.window || !windowRect) return;
+  const x = at ? (at.x - windowRect.x) / windowRect.w : 0.5, y = at ? (at.y - windowRect.y) / windowRect.h : 0.5;
+  if (x < 0 || x > 1 || y < 0 || y > 1) return;
+  void link.post('/api/action', { window: s.id, input: { ...input, x, y } }).then(r => { if (!r.ok) { notice(said(r, 'The window did not take that.')); render(); } });
+}
+
+/** Scroll amounts gathered until they make whole wheel steps for a window mirror. */
+let wheelRows = 0;
+let lastFrontPoint: { x: number; y: number } | undefined;
+function windowScroll(rows: number): void {
+  wheelRows += rows;
+  const steps = Math.trunc(wheelRows / 3);
+  if (steps === 0) return;
+  wheelRows -= steps * 3;
+  windowInput({ type: 'wheel', delta: steps }, lastFrontPoint);
 }
 
 function assertNever(value: never): never { throw new Error(`Unhandled ${JSON.stringify(value)}`); }
@@ -144,8 +200,8 @@ async function focus(sessionId: string): Promise<void> {
 
 function runPage(action: PageAction): void {
   switch (action) {
-    case 'scroll-up': scroll(1); return;
-    case 'scroll-down': scroll(-1); return;
+    case 'scroll-up': if (frontSession()?.window) windowInput({ type: 'wheel', delta: 3 }); else scroll(1); return;
+    case 'scroll-down': if (frontSession()?.window) windowInput({ type: 'wheel', delta: -3 }); else scroll(-1); return;
     case 'scroll-bottom': state.scroll = 0; scrollExact = 0; break;
     case 'recenter': scene.recenter(); notice('Shelf recentred in front of you.'); break;
     case 'listening-off': stopListening(); break;
@@ -238,7 +294,10 @@ function pointer(event: Pointer, hit: Hit | null): void {
   if (event === 'button-end') { talkEnd('button'); return; }
   if (event === 'select-start') { if (target === 'talk' || target === 'mic') talkStart('pointer'); return; }
   if (event === 'select-end') { talkEnd('pointer'); return; }
+  if (hit?.surface === 'front') lastFrontPoint = { x: hit.x, y: hit.y };
+  if (!target && hit?.surface === 'front' && !state.picker && frontSession()?.window) { windowInput({ type: 'click' }, { x: hit.x, y: hit.y }); return; }
   if (!target || target === 'talk' || target === 'mic') return;
+  if (target.startsWith('pick:')) { void link.post('/api/action', { pick: Number(target.slice(5)) }).then(r => { notice(said(r, 'Picked.')); render(); }); return; }
   if (target.startsWith('session:')) { const id = target.slice(8); if (id !== state.shelf?.focusedId) void focus(id); return; }
   if (target.startsWith('go:')) { void go(target.slice(3)); return; }
   if (COMMANDS.some(c => c.id === target)) void runCommand(target);
@@ -329,7 +388,16 @@ function renderNow(): void {
   const frontHeight = frontWidth * FRONT_SIZE.h / FRONT_SIZE.w;
   const frontText = front ? state.texts.get(front.id) : undefined;
   const empty = shelf.sessions.length === 0 ? NO_SESSIONS : EMPTY_FRONT;
-  surface('front', JSON.stringify([front, front && state.textVersion.get(front.id), state.scroll, frontStale, empty, placeName]), frontWidth, onArc(0, FRONT_Y, FRONT_DISTANCE), c => {
+  const picture = front?.window ? state.pictures.get(front.id) ?? null : null;
+  const windowNote = front?.window ? state.notes.get(front.id) ?? null : null;
+  const frontKey = state.picker ? ['picker', state.picker, frontStale]
+    : front?.window ? ['window', front, picture?.version, windowNote, frontStale, placeName]
+    : [front, front && state.textVersion.get(front.id), state.scroll, frontStale, empty, placeName];
+  surface('front', JSON.stringify(frontKey), frontWidth, onArc(0, FRONT_Y, FRONT_DISTANCE), c => {
+    if (state.picker) { regions.set('front', drawPicker(c, state.picker)); windowRect = null; return; }
+    regions.delete('front');
+    if (front?.window) { windowRect = drawWindowFront(c, front, placeName, picture, windowNote, frontStale); return; }
+    windowRect = null;
     state.scroll = drawFront(c, front, placeName, frontText, state.scroll, frontStale, empty);
     // At the top of what the session holds, further scrolling back adds nothing.
     if (scrollExact > state.scroll) scrollExact = state.scroll;
@@ -371,7 +439,7 @@ function renderNow(): void {
   // Each inner list is a group: what belongs together sits together.
   const row = (groups: string[][], key: boolean): ControlButton[] => groups.flatMap(ids => ids.map((id, i) => ({ id, label: command(id).label, key, group: i === 0 })));
   const rows: ControlButton[][] = [
-    row([['next', 'back'], ['scroll-up', 'scroll-down', 'bottom'], ['smaller', 'bigger', 'recenter'], ['overview'], ['exit']], false),
+    row([['next', 'back'], ['scroll-up', 'scroll-down', 'bottom'], ['smaller', 'bigger', 'recenter'], ['overview', 'mirror', 'new-project'], ['exit']], false),
     row([['enter', 'escape', 'interrupt'], ['up', 'down', 'tab'], ['y', 'n'], ['one', 'two', 'three']], true),
     // Words: send or clear the draft in front, and how spoken prompts are sent. The one in force is lit.
     row([['send', 'scratch'], ['direct-on', 'direct-off']], false).map(b => ({ ...b, on: b.id === (state.direct ? 'direct-on' : 'direct-off') })),
@@ -410,8 +478,11 @@ function renderNow(): void {
       const id = `tile:${t.session.id}`;
       const tileStale = t.closed ? 'Closed in Herdr — nothing to do.' : stale ?? agentNote(shelf, t.session);
       const inFront = t.session.id === front?.id;
-      surface(id, JSON.stringify([t.n, t.session, inFront, tileStale, inFront ? 0 : state.textVersion.get(t.session.id)]), width, onArc(column.angle, TOP - i * step, ARC), c => {
-        drawTile(c, t.n, t.session, state.texts.get(t.session.id), inFront, tileStale);
+      const tilePicture = t.session.window && !inFront ? state.pictures.get(t.session.id) ?? null : null;
+      const tileNote = t.session.window ? state.notes.get(t.session.id) ?? null : null;
+      surface(id, JSON.stringify([t.n, t.session, inFront, tileStale, inFront ? 0 : t.session.window ? [tilePicture?.version, tileNote] : state.textVersion.get(t.session.id)]), width, onArc(column.angle, TOP - i * step, ARC), c => {
+        if (t.session.window && !inFront) drawWindowTile(c, t.n, t.session, tilePicture, tileNote, tileStale);
+        else drawTile(c, t.n, t.session, state.texts.get(t.session.id), inFront, tileStale);
       });
       used.add(id);
     });
@@ -476,11 +547,13 @@ window.viewState = () => {
     front: front?.id ?? null,
     emptyHint: front ? null : shelf && shelf.sessions.length > 0 ? EMPTY_FRONT : NO_SESSIONS,
     receiver: shelf?.focusedId ?? null,
-    frontText: front ? frontRows(plain(state.texts.get(front.id) ?? ''), state.scroll).rows : [],
+    frontText: front && !front.window ? frontRows(plain(state.texts.get(front.id) ?? ''), state.scroll, bigScreen(front)).rows : [],
+    frontWindow: front?.window ? { note: state.notes.get(front.id) ?? null, picture: state.pictures.get(front.id) ? { w: state.pictures.get(front.id)?.w ?? 0, h: state.pictures.get(front.id)?.h ?? 0, version: state.pictures.get(front.id)?.version ?? 0 } : null, rect: windowRect } : null,
+    picker: state.picker,
     place: place.overview ? { overview: true } : { overview: false, projectId: place.projectId, project: place.project },
     agentNote: shelf ? agentNote(shelf, front)?.replace(/^!/, '') ?? null : null,
     chips: chips.map(c => ({ projectId: c.projectId, project: c.project, overview: c.overview, sessions: c.sessions.map(s => ({ id: s.id, light: lightOf(s) })), angle: c.angle, width: c.width })),
-    columns: columns.map(c => ({ projectId: c.projectId, project: c.project, side: c.angle < 0 ? 'left' as const : 'right' as const, width: columnFit(c.tiles.length).width, tiles: c.tiles.map(t => ({ n: t.n, id: t.session.id, name: t.session.name, role: t.session.role, light: lightOf(t.session), closed: t.closed, inFront: t.session.id === front?.id, text: tileRows(plain(state.texts.get(t.session.id) ?? '')) })) })),
+    columns: columns.map(c => ({ projectId: c.projectId, project: c.project, side: c.angle < 0 ? 'left' as const : 'right' as const, width: columnFit(c.tiles.length).width, tiles: c.tiles.map(t => ({ n: t.n, id: t.session.id, name: t.session.name, role: t.session.role, window: t.session.window, picture: state.pictures.get(t.session.id)?.version ?? 0, light: lightOf(t.session), closed: t.closed, inFront: t.session.id === front?.id, text: tileRows(plain(state.texts.get(t.session.id) ?? '')) })) })),
     scroll: state.scroll,
     scale: state.scale,
     mic: { mode: mic.mode, open: mic.open, standby: mic.standby, problem: mic.problem },

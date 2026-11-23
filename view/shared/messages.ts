@@ -18,6 +18,10 @@ export interface Session {
   agent: string | null;
   status: AgentStatus;
   name: string;
+  /** A window mirror: a PC window shown like a session (its pane is labelled "window: …"). */
+  window: boolean;
+  /** For a full-screen program that is not an agent (a viewer such as lazygit), its screen size; else null. */
+  screen: { rows: number; cols: number } | null;
 }
 export interface Project { id: string; label: string }
 export type HerdrLink = { state: 'up' } | { state: 'down'; reason: string };
@@ -55,6 +59,22 @@ export interface PendingClose { sessionId: string; name: string }
 /** A command heard while listening is off, waiting for the owner's yes: what it will do. */
 export interface PendingAsk { label: string }
 
+/** A list the owner picks from on the shelf: the PC's windows, or folders to make a project of. */
+export interface PickerItem { n: number; label: string; detail: string }
+export interface Picker {
+  kind: 'windows' | 'folders';
+  title: string;
+  /** What the owner said to narrow the list, or "". */
+  filter: string;
+  items: PickerItem[];
+  page: number;
+  pages: number;
+  /** Said when the list is empty. */
+  empty: string | null;
+  /** For folders: the name a "Make" would give a new folder, from what was said; else null. */
+  make: string | null;
+}
+
 export type SpeechState = { ready: true } | { ready: false; reason: string };
 
 export type BridgeEvent =
@@ -74,17 +94,34 @@ export type BridgeEvent =
   | { type: 'say'; id: string }
   /** The voice was stopped: the page ends the phrase it plays and drops the ones waiting. */
   | { type: 'say-stop' }
-  | { type: 'page'; action: string };
+  | { type: 'page'; action: string }
+  /** The latest picture of a window mirror (base64 image data). */
+  | { type: 'frame'; id: string; w: number; h: number; mime: string; data: string }
+  /** What a window mirror says in place of its picture, or null when the picture is live. */
+  | { type: 'window'; id: string; note: string | null }
+  | { type: 'picker'; picker: Picker | null };
 
 type Raw = Record<string, unknown>;
 const isObj = (v: unknown): v is Raw => typeof v === 'object' && v !== null && !Array.isArray(v);
 const isStr = (v: unknown): v is string => typeof v === 'string';
+const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+
+function parsePicker(v: unknown): Picker | null {
+  if (!isObj(v) || (v.kind !== 'windows' && v.kind !== 'folders') || !isStr(v.title) || !isStr(v.filter) || !Array.isArray(v.items)) return null;
+  if (!isNum(v.page) || !isNum(v.pages) || !(v.empty === null || isStr(v.empty)) || !(v.make === null || isStr(v.make))) return null;
+  const items = v.items.map(i => isObj(i) && isNum(i.n) && isStr(i.label) && isStr(i.detail) ? { n: i.n, label: i.label, detail: i.detail } : null);
+  if (items.includes(null)) return null;
+  return { kind: v.kind, title: v.title, filter: v.filter, items: items as PickerItem[], page: v.page, pages: v.pages, empty: v.empty, make: v.make };
+}
 
 function parseSession(v: unknown): Session | null {
   if (!isObj(v) || !isStr(v.id) || !isStr(v.workspaceId) || !isStr(v.name)) return null;
   if (!(v.agent === null || isStr(v.agent)) || !AGENT_STATUSES.includes(v.status as AgentStatus)) return null;
   if (v.role !== 'task' && v.role !== 'overview-agent' && v.role !== 'project-agent') return null;
-  return { id: v.id, workspaceId: v.workspaceId, role: v.role, agent: v.agent, status: v.status as AgentStatus, name: v.name };
+  if (typeof v.window !== 'boolean') return null;
+  const screen = isObj(v.screen) && isNum(v.screen.rows) && isNum(v.screen.cols) ? { rows: v.screen.rows, cols: v.screen.cols } : null;
+  if (v.screen !== null && !screen) return null;
+  return { id: v.id, workspaceId: v.workspaceId, role: v.role, agent: v.agent, status: v.status as AgentStatus, name: v.name, window: v.window, screen };
 }
 
 function parseShelf(v: unknown): Shelf | null {
@@ -130,6 +167,13 @@ export function parseEvent(text: string): BridgeEvent | null {
     case 'say': return isStr(v.id) && /^[A-Za-z0-9-]{1,64}$/.test(v.id) ? { type: 'say', id: v.id } : null;
     case 'say-stop': return { type: 'say-stop' };
     case 'page': return isStr(v.action) ? { type: 'page', action: v.action } : null;
+    case 'frame': return isStr(v.id) && isNum(v.w) && isNum(v.h) && isStr(v.mime) && isStr(v.data) ? { type: 'frame', id: v.id, w: v.w, h: v.h, mime: v.mime, data: v.data } : null;
+    case 'window': return isStr(v.id) && (v.note === null || isStr(v.note)) ? { type: 'window', id: v.id, note: v.note } : null;
+    case 'picker': {
+      if (v.picker === null) return { type: 'picker', picker: null };
+      const picker = parsePicker(v.picker);
+      return picker ? { type: 'picker', picker } : null;
+    }
     default: return null;
   }
 }

@@ -3,13 +3,17 @@
  * the bridge's and the page's memory sampled throughout. Four stand-ins print without pause,
  * sessions open and close every half minute, and the front session changes. Prints a table and
  * a verdict: level means the last third of the run grew less than 10% over the middle third.
+ * With a window mirror (stand-in PC windows): one mirror stays, and is brought to the front every
+ * fourth round, while another is made and closed each round, its pictures flowing all the while.
  */
 import { mkdtempSync, rmSync } from 'node:fs';
+import { compiled } from '../bridge/config.js';
 import { chromium } from '@playwright/test';
 import { startView } from '../bridge/view.js';
 import { HerdrBench, OWNER_SHAPE } from './bench.js';
 
 const minutes = Number(process.argv[2] ?? 10);
+process.env.SPATIAL_WINDOW_HELPER ??= `node ${compiled('bench', 'fake-windows.js')}`;
 const bench = await HerdrBench.start(OWNER_SHAPE);
 const data = mkdtempSync('/tmp/svs-');
 // Every second and a half the owner "says" a command that fails, so the voice speaks a phrase: the soak covers the voice's queue, clips and playback too.
@@ -31,6 +35,10 @@ try {
   await page.getByRole('button', { name: 'Pair this headset' }).click();
   await page.waitForFunction(() => (window.viewState() as { link: string }).link === 'live');
   for (const name of ['ledger', 'payouts', 'terraform', 'alerts']) await bench.type(name, '/steady 100000000 4');
+  const docs = bench.workspaces.get('docs') as string;
+  await view.bridge.mirrorOrder({ mirror: 'Notepad', workspace: docs });
+  await view.mirror.tick();
+  const staying = view.mirror.shelf().sessions.find(x => x.window)?.id as string;
 
   const rows: { t: number; bridgeMb: number; pageMb: number; sessions: number }[] = [];
   const start = Date.now();
@@ -45,8 +53,14 @@ try {
       await bench.type(`churn${churn}`, '/burst 400');
       await new Promise(resolve => setTimeout(resolve, 2000));
       await bench.client.call('workspace.close', { workspace_id: extra });
+      // A mirror made and closed each round: its capture, process and pictures must all go.
+      await view.bridge.mirrorOrder({ mirror: 'Chrome', workspace: docs });
+      await view.mirror.tick();
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      const churned = view.mirror.shelf().sessions.find(x => x.window && x.id !== staying);
+      if (churned) await bench.client.call('pane.close', { pane_id: churned.id });
     }
-    await bench.client.call('pane.focus', { pane_id: bench.pane(fronts[churn % fronts.length] as string) });
+    await bench.client.call('pane.focus', { pane_id: churn % 4 === 0 ? staying : bench.pane(fronts[churn % fronts.length] as string) });
     global.gc?.();
     await cdp.send('HeapProfiler.collectGarbage');
     const metrics = (await cdp.send('Performance.getMetrics')).metrics;

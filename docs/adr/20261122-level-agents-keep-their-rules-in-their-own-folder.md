@@ -1,7 +1,7 @@
 # ADR: Level agents keep their rules in a folder of their own, and a project agent acts through one tool
 
 ## Status
-Accepted
+Accepted; amended by 20261122-pc-windows-mirrored-into-a-project: on the owner's order a project agent also opens a page or window on the PC and mirrors it into its project
 
 ## Area
 Spatial view

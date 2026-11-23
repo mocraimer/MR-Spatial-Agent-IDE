@@ -72,7 +72,7 @@ test('a spoken order to the helper starts, renames and closes sessions, closing 
 
   await order(page, 'helper, start a shell in project alpha', async () => (await inProject('alpha')).some(p => p.agent === null), 'start a shell');
   const shell = (await inProject('alpha')).find(p => p.agent === null)?.id as string;
-  await expect.poll(async () => (await viewState(page)).columns.find(c => c.project === 'alpha')?.tiles.some(t => t.id === shell)).toBe(true);
+  await expect.poll(async () => (await viewState(page)).columns.filter(c => c.project === 'alpha').some(c => c.tiles.some(t => t.id === shell))).toBe(true);
 
   await order(page, 'helper, start a claude agent in project beta', async () => (await inProject('beta')).filter(p => p.agent === 'claude').length >= 2, 'start an agent');
 

@@ -1,7 +1,7 @@
 # ADR: A thin WebXR view over the owner's Herdr sessions
 
 ## Status
-Accepted
+Accepted; narrowed by 20261122-pc-windows-mirrored-into-a-project: a window mirror shows a picture of a PC window, not text
 
 ## Area
 Spatial view

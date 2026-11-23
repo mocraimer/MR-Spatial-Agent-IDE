@@ -8,6 +8,10 @@
  *   start <shell|kind> [name]   a new session in this project
  *   prompt <pane> <text>        give a session a prompt
  *   close <pane>                ask the owner whether to close a session
+ *   mirror <address | window>   open a web address in a browser window on the PC, or take an open
+ *                               PC window by name, and mirror it into this project as a session
+ *   view <what> [which]         a new shell session showing one thing in a viewer, in the project's
+ *                               folder: changes (lazygit), diff, pr <n>, file <path>, md <path>
  */
 import { execFileSync } from 'node:child_process';
 import { createConnection } from 'node:net';
@@ -18,6 +22,8 @@ import { plain } from '../shared/ansi.js';
 import { agentName } from './agent-name.js';
 import { paneOf } from './agents.js';
 import { compiled, dataDirectory } from './config.js';
+import { asOrder, sendOrder } from './mirror-order.js';
+import { isMirrorLabel } from './mirrors.js';
 import { HerdrClient, type HerdrPane } from './herdr.js';
 
 const [command, ...rest] = process.argv.slice(2);
@@ -57,7 +63,7 @@ async function own(ref: string | undefined): Promise<HerdrPane> {
 switch (command) {
   case 'sessions': {
     for (const p of await mine()) {
-      const what = p.label === SEAT_LABEL['project-agent'] ? 'you, the project agent' : p.agent ? `agent ${p.agent}, ${p.status}` : 'shell';
+      const what = p.label === SEAT_LABEL['project-agent'] ? 'you, the project agent' : isMirrorLabel(p.label) ? 'a PC window mirrored here' : p.agent ? `agent ${p.agent}, ${p.status}` : 'shell';
       console.log(`${p.id}\t${p.label ?? p.title ?? '(no name)'}\t${what}`);
     }
     break;
@@ -73,7 +79,8 @@ switch (command) {
     if (!kind) fail('Usage: start <shell|agent kind> [name]');
     const name = rest.slice(1).join(' ').trim();
     // A new session works where the project's sessions work, not in the agent's own directory.
-    const cwd = (await mine()).find(p => p.id !== self && p.cwd)?.cwd ?? homedir();
+    // A window mirror's pane says nothing about where the project's work is.
+    const cwd = (await mine()).find(p => p.id !== self && p.cwd && !isMirrorLabel(p.label))?.cwd ?? homedir();
     const made = await herdr.call('tab.create', { workspace_id: workspaceId, cwd, focus: false });
     const paneId = paneOf(made.root_pane);
     if (name) await herdr.call('pane.rename', { pane_id: paneId, label: name });
@@ -94,6 +101,8 @@ switch (command) {
     const text = rest.slice(1).join(' ').trim();
     if (!text) fail('Usage: prompt <pane> <text>');
     if (pane.id === self) fail('That is your own session.');
+    // Keys into a mirror go to the owner's PC window: only the owner types there.
+    if (isMirrorLabel(pane.label)) fail(`${pane.id} shows a PC window; it takes no prompts from you.`);
     // Ending a shell closes its session, which needs the owner's yes: use close instead.
     if (!pane.agent && /^\s*(exit|logout)\b/i.test(text)) fail(`That would close ${pane.id}. To close a session, use: close ${pane.id}`);
     if (pane.agent) await herdr.call('agent.prompt', { target: pane.id, text });
@@ -110,5 +119,37 @@ switch (command) {
     }
     break;
   }
-  default: fail('Commands: sessions | read <pane> [lines] | start <shell|kind> [name] | prompt <pane> <text> | close <pane>');
+  case 'mirror': {
+    const target = rest.join(' ').trim();
+    if (!target) fail('Usage: mirror <web address | window name>');
+    // Always this pane's own project: the tool takes no other.
+    const r = await sendOrder(asOrder(target, workspaceId));
+    if (!r.ok) fail(r.answer);
+    console.log(r.answer);
+    break;
+  }
+  case 'view': {
+    const [what, ...which] = rest;
+    const arg = which.join(' ').trim();
+    const quoted = `'${arg.replace(/'/g, `'\\''`)}'`;
+    // Only these programs, so a viewer can never be a way to run another command.
+    const viewers: Record<string, () => string | null> = {
+      changes: () => 'lazygit',
+      diff: () => 'git diff | delta --paging=always',
+      pr: () => /^\d+$/.test(arg) ? `gh pr diff ${arg} | delta --paging=always` : null,
+      file: () => arg ? `bat --paging=always ${quoted}` : null,
+      md: () => arg ? `glow -p ${quoted}` : null,
+    };
+    const viewer = what ? viewers[what]?.() : null;
+    if (!viewer) fail('Usage: view changes | view diff | view pr <number> | view file <path> | view md <path>');
+    const cwd = (await mine()).find(p => p.id !== self && p.cwd && !isMirrorLabel(p.label))?.cwd ?? homedir();
+    const made = await herdr.call('tab.create', { workspace_id: workspaceId, cwd, focus: false });
+    const paneId = paneOf(made.root_pane);
+    const label = what === 'pr' ? `pr ${arg}` : what === 'file' || what === 'md' ? `view ${arg.split('/').pop() ?? arg}` : what as string;
+    await herdr.call('pane.rename', { pane_id: paneId, label });
+    await herdr.call('pane.send_input', { pane_id: paneId, text: viewer, keys: ['enter'] });
+    console.log(`Opened ${label} as session ${paneId}, in ${cwd}.`);
+    break;
+  }
+  default: fail('Commands: sessions | read <pane> [lines] | start <shell|kind> [name] | prompt <pane> <text> | close <pane> | mirror <address | window> | view <what> [which]');
 }

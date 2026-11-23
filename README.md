@@ -9,6 +9,7 @@ This is one person's own tool, published as is under the MIT license. It is buil
 - Windows with WSL 2, running Node 22.13 or later, [Herdr](https://github.com/herdrdev/herdr) 0.9.3 (socket protocol 22), and OpenSSL in WSL.
 - A Quest 3 on the same Wi-Fi, to use the view. The checks run without one.
 - Chromium for the browser tests: `npx playwright install chromium`.
+- For window mirrors (optional): Python 3.12 on Windows with `py -3.12 -m pip install --user windows-capture pywin32`. For viewers (optional): `lazygit`, `delta`, `bat`, `glow` and `gh` in WSL.
 
 ## Quick start
 
@@ -38,7 +39,7 @@ npm test
 npm run test:ui
 ```
 
-The view's tests never touch your Herdr. Each starts a Herdr of its own (`view/bench/bench.ts`) with scripted stand-in agents, and drives the page in desktop Chromium with Meta's WebXR emulator (IWER) for the immersive parts. The speech tests use phrases synthesized on the PC; regenerate them with `node build/view/bench/make-speech.js`. The tests of the real helper and project agent spend model quota, so they run only when asked: `VIEW_HELPER_TESTS=1 npx playwright test view/tests/helper.spec.ts view/tests/project-agent.spec.ts`. `node build/view/bench/demo.js` runs the view on a bench shaped like a real desk, and `node --expose-gc build/view/bench/soak.js [minutes]` watches its memory under sustained output.
+The view's tests never touch your Herdr. Each starts a Herdr of its own (`view/bench/bench.ts`) with scripted stand-in agents, and drives the page in desktop Chromium with Meta's WebXR emulator (IWER) for the immersive parts. The speech tests use phrases synthesized on the PC; regenerate them with `node build/view/bench/make-speech.js`. The tests of the real helper and project agent spend model quota, so they run only when asked: `VIEW_HELPER_TESTS=1 npx playwright test view/tests/helper.spec.ts view/tests/project-agent.spec.ts`. `node build/view/bench/windows-run.js [screenshot-folder]` checks window mirrors on this PC end to end with the real Windows helper, using only windows it opens itself (a test window and a browser with a temporary profile). `node build/view/bench/demo.js` runs the view on a bench shaped like a real desk, and `node --expose-gc build/view/bench/soak.js [minutes]` watches its memory under sustained output.
 
 What these checks cannot show is sharpness, comfort and your own voice in the real headset. Only wearing it shows those.
 
