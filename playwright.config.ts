@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from '@playwright/test';
 
 // Unique per checkout so concurrent agents don't wipe each other's results.
-const dirHash = createHash('sha1').update(__dirname).digest('hex').slice(0, 8);
+const dirHash = createHash('sha1').update(fileURLToPath(import.meta.url)).digest('hex').slice(0, 8);
 
 export default defineConfig({
   testDir: '.',
