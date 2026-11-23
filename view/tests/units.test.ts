@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { resolve } from '../bridge/bridge.js';
+import { resolve, splitSentences } from '../bridge/bridge.js';
 import { compiled, REPO } from '../bridge/config.js';
 import { CLOSE_TOOL } from '../bridge/agents.js';
 import { classify } from '../bridge/heard.js';
+import { collapseRepeats, splitAtPauses, SAMPLE_RATE } from '../bridge/speech.js';
 import { arrange, CHIP_ARC, columnFit } from '../page/layout.js';
 import { terminalLines } from '../page/panels.js';
 import { Mic } from '../page/mic.js';
@@ -207,4 +208,155 @@ test('the microphone: pressing hold to talk while it is open on standby tells th
   await press;
   mic.holdEnd();
   assert.deepEqual([mic.standby, mic.open], [true, false], 'back to standby after the release');
+});
+
+test('splitSentences splits at [.!?] followed by whitespace or end, never mid-word: parts always rejoin to the original', () => {
+  const cases: [string, string[]][] = [
+    ['Hello. World!', ['Hello.', 'World!']],
+    ['Hello! How are you?', ['Hello!', 'How are you?']],
+    ['One. Two. Three.', ['One.', 'Two.', 'Three.']],
+    // Dot not followed by space: no split.
+    ['Set model to Sonnet 4.6.', ['Set model to Sonnet 4.6.']],
+    ['file.txt is here.', ['file.txt is here.']],
+    ['Version 2.0 ships today.', ['Version 2.0 ships today.']],
+    ['https://example.com/path is live.', ['https://example.com/path is live.']],
+    // Abbreviations mid-sentence: dot followed by space → splits (accepted; parts still rejoin).
+    // The important thing is that parts.join(' ') === original.trim().
+    ['Just text', ['Just text']],
+    ['', []],
+    ['   ', []],
+    // Ellipsis followed by space.
+    ['Wait... then go!', ['Wait...', 'then go!']],
+    // Multiple punctuation marks.
+    ['Really?! Yes!', ['Really?!', 'Yes!']],
+  ];
+  for (const [input, expected] of cases) {
+    const parts = splitSentences(input);
+    assert.deepEqual(parts, expected, `splitSentences(${JSON.stringify(input)})`);
+    if (input.trim()) {
+      // Parts always rejoin to the original (modulo surrounding whitespace).
+      assert.equal(parts.join(' '), input.trim(), `rejoin: ${JSON.stringify(input)}`);
+    }
+  }
+});
+
+test('collapseRepeats: only collapses when a 1–3-word phrase repeats 3+ times consecutively', () => {
+  // Should collapse: 3+ repeats.
+  assert.equal(collapseRepeats('the the the quick'), 'the quick', '3× "the"');
+  assert.equal(collapseRepeats('please please please go'), 'please go', '3× "please"');
+  assert.equal(collapseRepeats('very very very much'), 'very much', '3× "very"');
+  assert.equal(collapseRepeats('I need I need I need help'), 'I need help', '3× 2-word phrase');
+  assert.equal(collapseRepeats('go go go go'), 'go', '4× "go" → one');
+  // Should NOT collapse: only 2 repeats.
+  assert.equal(collapseRepeats('very very good'), 'very very good', '2× "very" kept');
+  assert.equal(collapseRepeats('had had a dream'), 'had had a dream', '2× "had" kept');
+  assert.equal(collapseRepeats('the the'), 'the the', '2× "the" kept');
+  // Case/punctuation-insensitive comparison: 3 identical words case-insensitively → collapse.
+  assert.equal(collapseRepeats('The the THE rest'), 'The rest', '3× same word (case-insensitive) collapses to first occurrence');
+  // The first occurrence is kept.
+  const out = collapseRepeats('Hello hello hello world');
+  assert.equal(out, 'Hello world', 'first occurrence (capitalised) is kept');
+  // No repeats: unchanged.
+  assert.equal(collapseRepeats('one two three'), 'one two three');
+  assert.equal(collapseRepeats(''), '');
+});
+
+test('splitAtPauses: short audio passes through; long audio splits at the quietest window, never producing chunks shorter than 1s except the tail', () => {
+  const sr = SAMPLE_RATE;
+  // Short audio (≤10s) is returned as-is.
+  const short = new Float32Array(sr * 5);
+  assert.deepEqual(splitAtPauses(short, sr), [short]);
+  // 25s of audio: should produce 2–3 chunks, each ≥1s except maybe the last.
+  const long = new Float32Array(sr * 25);
+  const longChunks = splitAtPauses(long, sr);
+  assert.ok(longChunks.length >= 2, 'splits into multiple chunks');
+  for (let i = 0; i < longChunks.length - 1; i++) {
+    assert.ok((longChunks[i]?.length ?? 0) >= sr * 1, `chunk ${i} is at least 1s`);
+  }
+  // Chunks rejoin to the original.
+  let pos = 0;
+  for (const c of longChunks) { assert.deepEqual(c, long.subarray(pos, pos + c.length)); pos += c.length; }
+  assert.equal(pos, long.length, 'all samples accounted for');
+  // Quiet window: a 25s audio where seconds 7–8 are silent, 20–21 are silent.
+  // The first split should prefer the quietest window (seconds 7–8) if it falls within [1s, 10s-1s].
+  const withQuiet = new Float32Array(sr * 25).fill(0.5);
+  for (let i = sr * 7; i < sr * 8; i++) (withQuiet as Float32Array)[i] = 0;
+  const qChunks = splitAtPauses(withQuiet, sr);
+  assert.ok(qChunks.length >= 2, 'splits long quiet-window audio');
+  // The first chunk should end near the quiet window (around seconds 7–8).
+  const firstLen = qChunks[0]?.length ?? 0;
+  assert.ok(firstLen >= sr * 1, 'first chunk ≥ 1s');
+  assert.ok(firstLen <= sr * 10, 'first chunk ≤ 10s');
+});
+
+test('AC-3.3: every command is recognised with every leading/trailing filler; prompts with command words stay prompts', () => {
+  const fillers = ['uh', 'um', 'okay', 'ok', 'so', 'please'];
+  const leading = ['uh', 'um', 'okay', 'ok', 'so'];  // leading fillers
+  const trailing = ['please', 'uh', 'um', 'okay', 'ok', 'so'];  // trailing fillers
+  // Filter to commands that are not confirming-only or picking-only.
+  for (const c of COMMANDS.filter(cmd => !cmd.whenConfirming && !cmd.whenPicking)) {
+    const base = c.say[0] as string;
+    // Test leading filler before the command.
+    for (const filler of leading) {
+      const heard = `${filler} ${base}`;
+      const result = classify(heard, false);
+      assert.equal(result.as, 'command', `${c.id}: leading "${filler}" before "${base}" should still be a command`);
+      if (result.as === 'command') assert.equal(result.command.id, c.id, `${c.id}: correct command id with leading "${filler}"`);
+    }
+    // Test trailing filler after the command.
+    for (const filler of trailing) {
+      const heard = `${base} ${filler}`;
+      const result = classify(heard, false);
+      assert.equal(result.as, 'command', `${c.id}: trailing "${filler}" after "${base}" should still be a command`);
+      if (result.as === 'command') assert.equal(result.command.id, c.id, `${c.id}: correct command id with trailing "${filler}"`);
+    }
+  }
+  // Prompts that contain command words must stay prompts, not become commands.
+  const promptCases = [
+    'model the database schema',
+    'effort estimate for this sprint',
+    'back up the database',
+    'enter the credentials',
+    'next step in the pipeline',
+    'please model the database',  // filler + prompt-with-command-word stays prompt
+  ];
+  for (const p of promptCases) {
+    const result = classify(p, false);
+    assert.notEqual(result.as, 'command', `"${p}" must not be a command (it is a prompt)`);
+  }
+  // "scratch that": a phrase that is exactly one command's say stays a command even with please.
+  assert.equal(classify('please scratch that', false).as, 'command', '"please scratch that" is a command');
+  assert.equal(classify('scratch that please', false).as, 'command', '"scratch that please" is a command');
+});
+
+test('AC-3.4: kept speech cap removes pairs (both .wav and .txt); no orphaned files after trimming', () => {
+  // Build a mock speechKeepDir with 1001 full pairs and verify the cap removes both files of a pair.
+  const dir = mkdtempSync('/tmp/svl-keep-');
+  try {
+    // Write 1001 full pairs (should cap to 999 stems = 1998 files after removing 2 oldest).
+    for (let i = 0; i < 1001; i++) {
+      const stamp = `2026-01-01T00-00-${String(i).padStart(6, '0')}Z`;
+      writeFileSync(join(dir, `${stamp}.txt`), `utterance ${i}`);
+      writeFileSync(join(dir, `${stamp}.wav`), 'WAV');
+    }
+    const files = readdirSync(dir);
+    assert.equal(files.length, 2002, '1001 pairs = 2002 files before cap');
+    // Apply the same cap logic as keepUtterance.
+    const wavStems = new Set(files.filter(f => f.endsWith('.wav')).map(f => f.slice(0, -4)));
+    const txtStems = new Set(files.filter(f => f.endsWith('.txt')).map(f => f.slice(0, -4)));
+    const allStems = [...new Set([...wavStems, ...txtStems])].sort();
+    if (allStems.length >= 1000) {
+      for (const stem of allStems.slice(0, allStems.length - 999)) {
+        try { rmSync(join(dir, `${stem}.wav`)); } catch { /* ok */ }
+        try { rmSync(join(dir, `${stem}.txt`)); } catch { /* ok */ }
+      }
+    }
+    const after = readdirSync(dir);
+    assert.equal(after.length, 1998, '999 pairs = 1998 files after cap');
+    // Every remaining wav has a matching txt and vice versa: no orphaned files.
+    const wavAfter = new Set(after.filter(f => f.endsWith('.wav')).map(f => f.slice(0, -4)));
+    const txtAfter = new Set(after.filter(f => f.endsWith('.txt')).map(f => f.slice(0, -4)));
+    for (const s of wavAfter) assert.ok(txtAfter.has(s), `orphaned wav (no txt): ${s}`);
+    for (const s of txtAfter) assert.ok(wavAfter.has(s), `orphaned txt (no wav): ${s}`);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

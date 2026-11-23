@@ -19,33 +19,40 @@ export const SPEECH_DTYPE = 'q8';
 export const SAMPLE_RATE = 16000;
 /** Maximum chunk length for one model call: ~10 seconds at 16kHz. */
 const MAX_CHUNK = SAMPLE_RATE * 10;
-/** Minimum silence gap to split at: ~200ms. */
+/** Minimum chunk length after a split: ~1 second (protects against micro-chunks). */
+const MIN_CHUNK = SAMPLE_RATE * 1;
+/** Width of one silence-scanning window: ~200ms. */
 const PAUSE_WINDOW = Math.round(SAMPLE_RATE * 0.2);
-/** RMS energy below this is considered silence (–40 dBFS ≈ 0.01). */
-const SILENCE_RMS = 0.01;
 
 /**
- * Split audio into chunks of at most `MAX_CHUNK` samples, breaking at the last silence gap before
- * the limit. If no silence is found within a chunk, the chunk is cut hard at the limit.
- * Short audio (≤MAX_CHUNK) is returned as-is.
+ * Split audio into chunks of at most ~10 seconds, breaking at the quietest 200ms window found
+ * between start+1s and end-1s. If no such window exists the chunk is cut hard at the limit.
+ * Short audio (≤MAX_CHUNK) is returned as-is. No chunk shorter than ~1s is produced, except
+ * the final tail.
  */
 export function splitAtPauses(audio: Float32Array, sampleRate: number = SAMPLE_RATE): Float32Array[] {
   const max = Math.round(sampleRate * 10);
+  const min = Math.round(sampleRate * 1);
+  const win = Math.round(sampleRate * 0.2);
   if (audio.length <= max) return [audio];
   const chunks: Float32Array[] = [];
   let start = 0;
   while (start < audio.length) {
     const end = Math.min(start + max, audio.length);
     if (end === audio.length) { chunks.push(audio.subarray(start)); break; }
-    // Find the last silence gap in the window [start, end) by scanning backwards.
-    const win = Math.round(sampleRate * 0.2);
-    let splitAt = end;
-    for (let i = end - win; i > start + win; i -= win) {
-      const slice = audio.subarray(i, i + win);
-      let sumSq = 0;
-      for (let j = 0; j < slice.length; j++) sumSq += (slice[j] ?? 0) * (slice[j] ?? 0);
-      const rms = Math.sqrt(sumSq / slice.length);
-      if (rms < SILENCE_RMS) { splitAt = i + win; break; }
+    // Scan all 200ms windows in [start+min, end-min] and find the quietest one.
+    const scanStart = start + min;
+    const scanEnd = end - min - win;
+    let splitAt = end; // fallback: hard cut
+    if (scanStart <= scanEnd) {
+      let quietestRms = Infinity;
+      for (let i = scanStart; i <= scanEnd; i += win) {
+        const slice = audio.subarray(i, i + win);
+        let sumSq = 0;
+        for (let j = 0; j < slice.length; j++) sumSq += (slice[j] ?? 0) * (slice[j] ?? 0);
+        const rms = Math.sqrt(sumSq / slice.length);
+        if (rms < quietestRms) { quietestRms = rms; splitAt = i + win; }
+      }
     }
     chunks.push(audio.subarray(start, splitAt));
     start = splitAt;
@@ -53,19 +60,40 @@ export function splitAtPauses(audio: Float32Array, sampleRate: number = SAMPLE_R
   return chunks;
 }
 
+/** Lower-case the word and strip punctuation, for case/punctuation-insensitive comparison. */
+function normWord(w: string): string { return w.toLowerCase().replace(/[^\w]/g, ''); }
+
 /**
  * Collapse immediate repeated word sequences that speech recognition produces when the speaker
- * pauses or stammers: "the the the quick" → "the quick", "please please" → "please".
- * Only collapses runs of 2+ identical consecutive words/phrases.
+ * pauses or stammers. Only collapses when the same 1–3-word phrase repeats 3 or more times
+ * consecutively (so "very very" is kept, "the the the" is collapsed to "the"). Comparison
+ * ignores case and punctuation; the first occurrence's capitalisation is kept.
  */
 export function collapseRepeats(text: string): string {
   if (!text) return text;
-  // Split into words, then collapse runs of identical consecutive words.
-  const words = text.split(/\s+/);
+  const words = text.trim().split(/\s+/);
   const out: string[] = [];
-  for (const word of words) {
-    if (out.length > 0 && out[out.length - 1] === word) continue; // skip repeat
-    out.push(word);
+  let i = 0;
+  while (i < words.length) {
+    let collapsed = false;
+    // Try phrase lengths from 3 down to 1; take the longest that repeats 3+ times.
+    for (let len = Math.min(3, Math.floor((words.length - i) / 3)); len >= 1; len--) {
+      const phrase = words.slice(i, i + len);
+      const normPhrase = phrase.map(normWord);
+      let count = 1;
+      while (i + count * len + len <= words.length) {
+        const next = words.slice(i + count * len, i + count * len + len).map(normWord);
+        if (next.length !== len || next.some((w, j) => w !== normPhrase[j])) break;
+        count++;
+      }
+      if (count >= 3) {
+        out.push(...phrase); // keep first occurrence
+        i += count * len;
+        collapsed = true;
+        break;
+      }
+    }
+    if (!collapsed) { out.push(words[i] as string); i++; }
   }
   return out.join(' ');
 }

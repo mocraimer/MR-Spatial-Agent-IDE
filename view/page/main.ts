@@ -29,7 +29,7 @@ const state = {
   confirm: null as PendingClose | null,
   ask: null as PendingAsk | null,
   direct: false,
-  voice: { feedback: true, reading: false, trouble: false },
+  voice: { feedback: true, reading: false, trouble: false, standingIn: false },
   speech: { ready: false, reason: 'Connecting to the PC…' } as SpeechState,
   scroll: 0,
   scale: 1,
@@ -115,7 +115,7 @@ function apply(event: BridgeEvent): void {
     case 'confirm': state.confirm = event.pending; break;
     case 'ask': state.ask = event.ask; break;
     case 'direct': state.direct = event.on; break;
-    case 'voice': state.voice = { feedback: event.feedback, reading: event.reading, trouble: event.trouble }; break;
+    case 'voice': state.voice = { feedback: event.feedback, reading: event.reading, trouble: event.trouble, standingIn: event.standingIn ?? false }; break;
     case 'say': player.enqueue(event.id); break;
     case 'say-stop': player.stop(); break;
     case 'speech': state.speech = event.speech; break;
@@ -416,6 +416,7 @@ function renderNow(): void {
     direct: state.direct,
     voiceOff: !state.voice.feedback,
     voiceProblem: state.voice.trouble || player.problem !== null,
+    voiceStandingIn: state.voice.standingIn,
     reading: state.voice.reading,
     confirm: state.confirm,
     ask: state.ask,

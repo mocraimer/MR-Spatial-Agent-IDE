@@ -448,6 +448,8 @@ export interface StripState {
   /** Spoken feedback is off, the voice failed, and finished replies are read aloud. */
   voiceOff: boolean;
   voiceProblem: boolean;
+  /** A fallback voice (Windows) is standing in while the preferred voice (Kokoro) loads. */
+  voiceStandingIn?: boolean;
   reading: boolean;
   /** A close that waits for the owner's answer, or a command heard in standby: at most one. */
   confirm: PendingClose | null;
@@ -529,6 +531,7 @@ export function drawStrip(canvas: HTMLCanvasElement, st: StripState): Region[] {
   if (st.direct) right -= chip(ctx, 'Sending at once', right, h / 2, 32, AMBER, 'right') + 16;
   // The voice is a standing setting too: off, or reading each reply, it shows whenever it holds; a voice that failed shows until it works again.
   if (st.voiceProblem) right -= chip(ctx, 'Voice problem', right, h / 2, 32, AMBER, 'right') + 16;
+  if (st.voiceStandingIn) right -= chip(ctx, 'Windows voice', right, h / 2, 32, AMBER, 'right') + 16;
   if (st.voiceOff) right -= chip(ctx, 'Voice off', right, h / 2, 32, AMBER, 'right') + 16;
   else if (st.reading) right -= chip(ctx, 'Reading replies', right, h / 2, 32, ACCENT, 'right') + 16;
   const sayX = 1250, sayW = Math.max(300, right - sayX);

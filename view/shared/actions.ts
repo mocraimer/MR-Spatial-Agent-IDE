@@ -134,7 +134,7 @@ export const COMMANDS: readonly Command[] = [
   // Keep speech: viewOnly because nothing reaches a session. Off by default; persisted.
   { id: 'keep-speech-on', label: 'Keep my speech', does: 'Keep each utterance as audio and text in the data folder', say: ['keep my speech', 'save my speech', 'record my speech'], run: { bridge: { kind: 'keep-speech', on: true } }, viewOnly: true },
   { id: 'keep-speech-off', label: 'Stop keeping speech', does: 'Stop keeping utterances', say: ['stop keeping my speech', 'dont keep my speech', 'stop saving my speech'], run: { bridge: { kind: 'keep-speech', on: false } }, viewOnly: true },
-  { id: 'delete-speech', label: 'Delete my speech', does: 'Delete all kept utterances', say: ['delete my speech', 'delete my recordings', 'clear my speech'], run: { bridge: { kind: 'delete-speech' } }, viewOnly: true },
+  { id: 'delete-speech', label: 'Delete my speech', does: 'Delete all kept utterances', say: ['delete my speech', 'delete my recordings', 'clear my speech'], run: { bridge: { kind: 'delete-speech' } } },
 ];
 
 export function command(id: string): Command {

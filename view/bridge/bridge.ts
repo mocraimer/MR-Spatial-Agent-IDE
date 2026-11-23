@@ -25,6 +25,29 @@ import type { Frame, Windows } from './windows.js';
 
 export interface Transcriber { state(): SpeechState; transcribe(audio: Float32Array): Promise<string> }
 
+/**
+ * Split a phrase into sentences at [.!?]+ followed by whitespace or end-of-string. Splits like
+ * "Hello! World?" → ["Hello!", "World?"] but "v4.6." → ["v4.6."] and "file.txt is here." stays
+ * whole. The parts always rejoin to the original text (modulo surrounding whitespace).
+ */
+export function splitSentences(phrase: string): string[] {
+  if (!phrase.trim()) return [];
+  const parts: string[] = [];
+  const re = /[.!?]+(?:\s+|$)/g;
+  let start = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(phrase)) !== null) {
+    // End of punctuation run (before the whitespace).
+    const end = m.index + m[0].trimEnd().length;
+    const part = phrase.slice(start, end).trim();
+    if (part) parts.push(part);
+    start = m.index + m[0].length;
+  }
+  const tail = phrase.slice(start).trim();
+  if (tail) parts.push(tail);
+  return parts.length > 0 ? parts : [phrase.trim()];
+}
+
 /** Encode float32 PCM samples (–1..1) as a 16-bit mono WAV at the given sample rate. */
 function pcmToWav(samples: Float32Array, sampleRate: number): Buffer {
   const dataLen = samples.length * 2;
@@ -114,6 +137,8 @@ export class Bridge {
   private readonly drafts = new Drafts();
   /** Null when the bridge has no voice: it then speaks nothing and says nothing about it. */
   private readonly say: Say | null;
+  /** The voice object itself, for standingIn queries. */
+  private readonly voice: Voice | undefined;
   private readonly transcripts: string;
   private readonly confirmMs: number;
   private readonly sessionOf: (paneId: string) => Promise<string | null>;
@@ -147,6 +172,7 @@ export class Bridge {
     this.transcripts = options.transcripts ?? TRANSCRIPT_ROOT;
     this.confirmMs = options.confirmMs ?? 2500;
     this.sessionOf = options.sessionOf ?? (paneId => this.herdrSessionOf(paneId));
+    this.voice = options.voice;
     this.say = options.voice ? new Say(options.voice, event => this.broadcast(event), text => this.broadcast({ type: 'notice', text }), this.log, () => this.announceVoice()) : null;
     this.mirrors = options.mirrors ?? new Mirrors(herdr, NO_WINDOWS, '');
     this.pickerIdleMs = options.pickerIdleMs ?? PICKER_IDLE_MS;
@@ -198,7 +224,7 @@ export class Bridge {
     send({ type: 'confirm', pending: this.questions.closeView() });
     send({ type: 'ask', ask: this.questions.commandView() });
     send({ type: 'direct', on: this.settings.direct });
-    send({ type: 'voice', feedback: this.settings.voice, reading: this.settings.readReplies, trouble: this.say?.failed ?? false });
+    send({ type: 'voice', feedback: this.settings.voice, reading: this.settings.readReplies, trouble: this.say?.failed ?? false, standingIn: this.voice?.standingIn?.() ?? false });
     send({ type: 'speech', speech: this.speech.state() });
     send({ type: 'picker', picker: this.pickerView() });
     for (const s of shelf.sessions.filter(x => x.window)) {
@@ -604,18 +630,17 @@ export class Bridge {
   }
 
   /**
-   * Speaks a phrase when there is one and the owner has the voice on. Splits into sentences so
-   * each is made and sent to the page as soon as it is ready. Returns whether anything was queued.
+   * Speaks a phrase when there is one and the owner has the voice on. Splits into sentences and
+   * queues the whole phrase as one group so the queue cap counts it as a single slot. Within the
+   * group, sentences stream one by one so the first phrase reaches the page before later ones are
+   * synthesised. Returns whether anything was queued.
    */
   private speak(phrase: string | null): boolean {
     if (phrase === null || !this.settings.voice || !this.say) return false;
-    // Split on sentence-ending punctuation. Each sentence queues separately so the voice
-    // streams the first word to the page before later sentences are even synthesised.
-    const parts = phrase.match(/[^.!?]+(?:[.!?]+(?=\s|$)|$)/g)?.map(s => s.trim()).filter(Boolean);
-    if (!parts || parts.length === 0) return this.say.say(phrase);
-    let queued = false;
-    for (const part of parts) queued = this.say.say(part) || queued;
-    return queued;
+    // Split at [.!?] followed by whitespace or end-of-string only. This preserves "4.6", ".txt",
+    // "Dr." followed by a word, etc. — the parts always rejoin to the whole text (modulo spaces).
+    const parts = splitSentences(phrase);
+    return this.say.sayGroup(parts.length > 0 ? parts : [phrase]);
   }
 
   /**
@@ -659,21 +684,31 @@ export class Bridge {
     return { ok: true, outcome: (on ? 'Reading each finished reply aloud. Say “stop reading replies” to stop.' : 'Replies are not read aloud.') + note + saved, silent: true };
   }
 
-  private announceVoice(): void { this.broadcast({ type: 'voice', feedback: this.settings.voice, reading: this.settings.readReplies, trouble: this.say?.failed ?? false }); }
+  private announceVoice(): void {
+    const standingIn = this.voice?.standingIn?.() ?? false;
+    this.broadcast({ type: 'voice', feedback: this.settings.voice, reading: this.settings.readReplies, trouble: this.say?.failed ?? false, standingIn });
+  }
 
   private keepUtterance(audio: Float32Array, text: string): void {
     try {
       const dir = this.speechKeepDir!;
       mkdirSync(dir, { recursive: true });
-      const existing = readdirSync(dir).filter(f => f.endsWith('.wav'));
-      // Cap at 1,000; trim oldest first (names sort lexicographically by timestamp).
-      if (existing.length >= 1000) {
-        existing.sort();
-        for (const f of existing.slice(0, existing.length - 999)) rmSync(join(dir, f));
+      const files = readdirSync(dir);
+      // Collect all stems (name without extension) that have either a .wav or a .txt file.
+      const allStems = [...new Set([
+        ...files.filter(f => f.endsWith('.wav')).map(f => f.slice(0, -4)),
+        ...files.filter(f => f.endsWith('.txt')).map(f => f.slice(0, -4)),
+      ])].sort();
+      // Cap at 1,000 pairs; trim oldest first (stems sort lexicographically by timestamp).
+      if (allStems.length >= 1000) {
+        for (const stem of allStems.slice(0, allStems.length - 999)) {
+          try { rmSync(join(dir, `${stem}.wav`)); } catch { /* ok if already missing */ }
+          try { rmSync(join(dir, `${stem}.txt`)); } catch { /* ok if already missing */ }
+        }
       }
-      const name = `${new Date().toISOString().replace(/[:.]/g, '-')}`;
-      writeFileSync(join(dir, `${name}.txt`), text);
-      writeFileSync(join(dir, `${name}.wav`), pcmToWav(audio, 16000));
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      writeFileSync(join(dir, `${stamp}.txt`), text);
+      writeFileSync(join(dir, `${stamp}.wav`), pcmToWav(audio, 16000));
     } catch (error) {
       this.log(`keep speech failed: ${(error as Error).message}`);
     }

@@ -45,6 +45,8 @@ export interface Voice {
   problem(): string | null;
   /** A WAV of the text. Rejects with a message that holds none of the words. */
   speak(text: string): Promise<Buffer>;
+  /** True when a fallback voice is standing in for the preferred one (e.g. Windows while Kokoro loads). */
+  standingIn?(): boolean;
 }
 
 export class WindowsVoice implements Voice {
@@ -117,13 +119,27 @@ export class KokoroVoice implements Voice {
   }
 
   problem(): string | null {
-    // Always delegate to the fallback; the fallback (Windows) covers while Kokoro loads or fails.
+    // Kokoro is ready: no problem, even if the fallback has one.
+    if (this.state === 'ready') return null;
+    // Loading or failed: delegate to the fallback which is standing in.
     return this.fallback.problem();
   }
+
+  /** True while Windows is standing in (Kokoro is still loading or has failed). */
+  standingIn(): boolean { return this.state !== 'ready'; }
 
   speak(text: string): Promise<Buffer> {
     if (this.state === 'ready' && this.worker) return this.workerSpeak(text);
     return this.fallback.speak(text);
+  }
+
+  /** Reject all pending phrases and mark state as failed; called on unexpected worker death. */
+  private workerDied(reason: string): void {
+    this.state = 'failed';
+    this.worker = null;
+    for (const { reject } of this.pending.values()) reject(new Error('the voice stopped'));
+    this.pending.clear();
+    this.onFailed(reason);
   }
 
   private start(): void {
@@ -147,21 +163,35 @@ export class KokoroVoice implements Voice {
         this.pending.delete(msg.id);
       }
     });
+    // Handle unexpected worker death in any state.
     this.worker.on('error', err => {
       if (this.state === 'loading') {
         this.state = 'failed';
         this.worker = null;
         this.onFailed(err.message);
+      } else {
+        this.workerDied(err.message);
       }
-      for (const { reject } of this.pending.values()) reject(new Error('the voice stopped'));
-      this.pending.clear();
+    });
+    this.worker.on('exit', code => {
+      // A graceful exit (code 0) after a 'failed' message is expected; ignore it.
+      if (this.worker === null) return;
+      // Any other exit (crash, OOM) while the worker is still tracked is a failure.
+      this.workerDied(`worker exited with code ${code ?? '?'}`);
     });
   }
 
   private workerSpeak(text: string): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       const id = this.nextId++;
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error('the voice did not answer in time'));
+      }, SYNTHESIS_MS);
+      this.pending.set(id, {
+        resolve: (wav: Buffer) => { clearTimeout(timer); resolve(wav); },
+        reject: (err: Error) => { clearTimeout(timer); reject(err); },
+      });
       this.worker!.postMessage({ type: 'speak', id, text });
     });
   }
