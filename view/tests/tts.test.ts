@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { describe, test } from 'node:test';
 import { KokoroVoice, WindowsVoice, KOKORO_MODEL, KOKORO_VOICE, PHRASE_MAX } from '../bridge/tts.js';
 
 /** A stand-in for powershell.exe: a node script run as the voice's executable. */
@@ -62,6 +62,11 @@ test('a voice that hangs is stopped after its bound, one that makes no audio or 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+// KokoroVoice tests run serially: each test starts a worker thread that loads the
+// onnxruntime native addon. Concurrent loads of the same native addon in separate
+// workers cause "Module did not self-register" on some Node versions.
+describe('KokoroVoice', { concurrency: false }, () => {
+
 test('KokoroVoice with a missing model falls back to the Windows voice and reports failure', async () => {
   const dir = mkdtempSync('/tmp/svl-kokoro-');
   try {
@@ -70,13 +75,14 @@ test('KokoroVoice with a missing model falls back to the Windows voice and repor
     let failReason: string | null = null;
     // Use a path that does not exist; the worker will fail to load the model.
     const v = new KokoroVoice(missingModel, KOKORO_VOICE, windows, () => undefined, r => { failReason = r; });
-    // Before the worker fails, speak() uses the fallback.
+    // Before the worker fails (while loading), problem() delegates to fallback and standingIn is true.
     assert.equal(v.voiceId, KOKORO_VOICE, 'af_heart is the default voice id');
-    // problem() delegates to fallback.
-    assert.equal(v.problem(), windows.problem());
+    assert.equal(v.problem(), windows.problem(), 'problem() delegates to fallback while loading');
+    assert.equal(v.standingIn(), true, 'standing in while loading');
     v.stop();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
 
 // AC-2.1: Real Kokoro synthesis. Set KOKORO_TEST_DIR to a writable directory; the model is
 // downloaded there if not already present. The test verifies the voice is af_heart and the
@@ -99,11 +105,15 @@ test('the real Kokoro voice (af_heart) makes a 24kHz WAV', { skip: kokoroTestDir
       modelPath, KOKORO_VOICE, windows,
       async () => {
         try {
+          // AC-2.1: voiceId=af_heart from running voice, 24kHz output, phrases came from Kokoro.
           assert.equal(v.voiceId, KOKORO_VOICE, 'voice is af_heart');
+          assert.equal(v.problem(), null, 'problem() is null when Kokoro is ready (not Windows problem)');
+          assert.equal(v.standingIn(), false, 'standingIn is false when Kokoro is ready');
+          // speak() uses Kokoro (state=ready), not Windows.
           const wav = await v.speak('Hello from Kokoro.');
           assert.equal(wav.toString('ascii', 0, 4), 'RIFF', 'output is a WAV');
           const hz = wav.readUInt32LE(24);
-          assert.equal(hz, 24000, '24kHz sample rate');
+          assert.equal(hz, 24000, '24kHz sample rate — came from Kokoro, not Windows (22050 Hz)');
           assert.ok(wav.length > 10_000, 'some audio was made');
           console.log(`# Kokoro af_heart: ${wav.length} bytes, ${hz} Hz, made in ${Date.now() - started} ms`);
           v.stop();
@@ -114,6 +124,8 @@ test('the real Kokoro voice (af_heart) makes a 24kHz WAV', { skip: kokoroTestDir
     );
   });
 });
+
+}); // describe KokoroVoice
 
 const real = new WindowsVoice();
 test('the real Windows voice makes a WAV of a phrase with quotes, dollar signs, new lines and accents', { skip: real.problem() ?? false }, async () => {

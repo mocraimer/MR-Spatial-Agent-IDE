@@ -152,7 +152,10 @@ export class KokoroVoice implements Voice {
         this.onReady();
       } else if (msg.type === 'failed') {
         this.state = 'failed';
-        this.worker?.terminate();
+        // Do NOT call terminate() here: terminating a worker that loaded the onnxruntime
+        // native addon corrupts its global registration state, causing subsequent workers in
+        // the same process to fail. The worker exits naturally after sending 'failed' because
+        // it registers no message listener on failure (see kokoro-worker.ts).
         this.worker = null;
         this.onFailed(msg.reason);
       } else if (msg.type === 'done') {
