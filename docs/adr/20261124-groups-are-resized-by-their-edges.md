@@ -14,10 +14,12 @@ pinch gesture, and grabbing any edge of a panel to drag the whole group.
 
 ## Decision
 Grabbing any edge of a panel in a group drags the whole group uniformly about the
-head (the anchor origin). The scale is applied to all world-space positions within
-the group — y-offsets, radii, and dy — while azimuth angles are unchanged (scaling
-leaves the group at the same angular position in the arc). Canvas pixel resolutions
-are unchanged so text stays crisp; only world-space sizes scale. The bounds are
+group's own centre at constant distance. All arc radii are kept fixed; panel widths
+scale by k; each surface's vertical offset from the group's centre height and its
+angular offset from the group's centre angle both scale by k, so that the group's
+angular size (what the owner sees) actually grows and panels stay evenly spaced.
+Canvas pixel resolutions are unchanged so text stays crisp; only world-space sizes
+and angular separations scale. The bounds are
 0.6×–1.8×. The scale is kept in localStorage alongside az/dy for each group, and
 Recenter resets it to 1.0. While a scale drag is active, the edge affordance fills
 to 90 % opacity; at rest it draws at 22 % opacity (matching the 7 % grab zone
@@ -38,7 +40,7 @@ width) so the owner can discover the interaction without being told.
 - One direct-manipulation gesture — no mode switch, no increments
 - The same edge-grab mechanic works in both controller and hand-tracking modes
 - Scale stored with place, so the layout survives a restart without resetting
-- Uniform scaling about the head keeps the group centred in the arc
+- Scaling about the group's own centre keeps panels evenly spaced and the group visually centred
 
 ### Negative
 - The 7 % grab zone slightly reduces the usable inner area of each panel

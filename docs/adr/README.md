@@ -24,4 +24,5 @@
 | 2026-11-23 | [`npm run view` runs a supervisor that restarts the bridge when a new build lands](20261123-the-view-supervisor-restarts-the-bridge-on-new-builds.md) | Accepted | Spatial view |
 | 2026-11-23 | [Typing from the headset](20261123-typing-from-the-headset.md) | Accepted; narrows [20261121-thin-webxr-view-over-herdr](20261121-thin-webxr-view-over-herdr.md) and [20261122-levels-ride-on-herdr-workspaces](20261122-levels-ride-on-herdr-workspaces.md), which said the desk keyboard was the only way to type. | Spatial view |
 | 2026-11-24 | [Level agents run on explicit Sonnet 5.5 and project agents use auto permission mode](20261124-level-agents-run-on-explicit-sonnet-5-5-and-project-agents-use-auto-mode.md) | Accepted | Spatial view |
+| 2026-11-24 | [Groups are resized by grabbing any edge](20261124-groups-are-resized-by-their-edges.md) | Accepted | Spatial view |
 | 2026-11-24 | [Tabs opened by the view carry descriptive labels](20261124-tabs-opened-by-the-view-carry-descriptive-labels.md) | Accepted | Spatial view |
