@@ -81,11 +81,18 @@ test('the window list by voice: "mirror", a name narrows it, a number picks; "mo
   await expect.poll(async () => (await viewState(page)).picker?.page).toBe(1);
   await speak(page, 'previous');
   await expect.poll(async () => (await viewState(page)).picker?.page).toBe(0);
-  // By hand too.
+  // By hand too — the More and Previous buttons sit in the bottom 7 % edge zone of the front
+  // canvas; before the fix, pressing them started a resize instead of turning the page.
   await tapOn(page, 'hand', 'front', 'more');
   await expect.poll(async () => (await viewState(page)).picker?.page).toBe(1);
   await tapOn(page, 'hand', 'front', 'previous');
   await expect.poll(async () => (await viewState(page)).picker?.page).toBe(0);
+  // Confirm no resize happened — screensScale must still be 1.0.
+  const raw = await page.evaluate(() => localStorage.getItem('spatial-view-group-offsets'));
+  if (raw) {
+    const d = JSON.parse(raw) as [[number, number, number], [number, number, number]];
+    expect(d[0][2] ?? 1, 'screensScale still 1.0 — More/Previous did not trigger resize').toBeCloseTo(1.0, 2);
+  }
   await speak(page, 'docs viewer');
   await expect.poll(async () => (await viewState(page)).picker?.items.map(i => i.label)).toEqual(['Window 13 docs viewer']);
   expect((await viewState(page)).last?.outcome).toMatch(/matches "docs viewer"/);
