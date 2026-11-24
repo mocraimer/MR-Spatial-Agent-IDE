@@ -43,6 +43,17 @@ dataset with the candidates evaluated).
 The streaming small model requires audio length divisible by 80 (frame_len). The production
 `LocalSpeech.transcribe()` pads each chunk by up to 79 silent samples before inference.
 
+## Known gaps
+
+**"press two" — systematic miss on Windows TTS voice (measured 2026-11-24):**
+`Workmind/moonshine-streaming-small-ONNX` hears "Press hue." (not "press two") for the
+Windows Speech `SpeechSynthesizer` WAV in 100 % of runs. The bridge classifies it as a prompt;
+delivery to a shell pane returns `ok: false` — no key is sent. This is a voice+model mismatch,
+not a general command accuracy regression: the model's command error rate on the 45-phrase
+Windows TTS set (1/45, 2.2 %) is better than tiny q8 (3/45, 6.7 %+), so AC-3.1 is met.
+"hue" was not added to `SOUNDS_LIKE` (it is not a homophone for "two"). The owner's kept-speech
+recordings will re-measure this phrase. See `docs/SPEECH.md` for the full gap record.
+
 ## Alternatives Considered
 - **Fix Moonshine tiny q8 forever**: Simple but may miss improvements from v2 models.
 - **Switch to Moonshine v2 Medium unconditionally**: Better WER expected, but latency unknown on

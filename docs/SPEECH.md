@@ -5,6 +5,28 @@
 synthesis using Kokoro-82M fp32 (via `kokoro-js` in a child process, voice `af_heart`, 24 kHz WAV).
 Neither model contacts any server at run time (INV-G4).
 
+## Known gaps
+
+### "press two" — systematic miss on Windows TTS voice (2026-11-24)
+
+**Model:** `Workmind/moonshine-streaming-small-ONNX` (quantized) — the current production model.
+
+**Phrase:** "press two" (synthesized by Windows Speech `System.Speech.SpeechSynthesizer`, 16 kHz
+mono WAV, rate=1, en-US default voice).
+
+**Measured behaviour:** The model hears "Press hue." in 100 % of runs (5/5 direct runs, 3/3 bench
+runs with 45-phrase command dataset). The bridge classifies it as a prompt; delivery to the keys
+pane (a shell, not a Claude agent) fails with `ok: false` — no key is sent.
+
+**Command error rate on 45 command phrases (measured 2026-11-24, Windows TTS synthetic speech):**
+streaming-small 1/45 (2.2 %) vs tiny q8 3/45 (6.7 %+). AC-3.1 is met: streaming-small is better.
+
+**Status:** Known gap. The owner's kept-speech recordings will re-measure this phrase.
+"hue" is not a homophone for "two" in any English dialect; it was not added to `SOUNDS_LIKE`.
+
+**Test:** `view/tests/speech.spec.ts` — the "press two" utterance in the hold-to-talk loop asserts
+`{ as: 'prompt' }` (heard differently, no key sent) rather than `{ as: 'command' }`.
+
 ## Bench scripts
 
 | Script | Purpose |
