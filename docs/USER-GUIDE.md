@@ -217,11 +217,12 @@ The view restores your default model and effort after each command, so only the 
 
 The view speaks short answers aloud in the headset: what a command did ("Pressed enter in a1", "No project or session is called …"), a failure, and each question that waits for your yes ("Close logs? Say yes or no."). It does not speak noise, words that were ignored, or a prompt typed as a draft. A phrase is the first sentence of the outcome, at most about 100 characters. The strip and the notices still show everything in writing.
 
-The voice is made on the PC by Windows' own speech (the voices Microsoft David and Microsoft Zira) and played in the headset; nothing leaves the PC, and nothing is paid for. It needs Windows PowerShell, reached from WSL at `/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe` (set `VIEW_POWERSHELL` to use another path). If it cannot speak, a notice says so, the written answers go on, and it is tried again with the next phrase.
+The voice is the Kokoro-82M neural model ("af_heart"), running on the PC's CPU. It is downloaded once by `npm run view:setup` (~311 MB) into the view's data directory and then never reaches the network. Each answer is spoken in sentence-sized pieces as soon as each sentence is ready, so the first phrase plays within about one second. While the model loads at startup (~7 s) the Windows voice (Microsoft David or Zira via PowerShell) plays instead; if Kokoro fails to load, the Windows voice stays on and a notice says so. Set `VIEW_POWERSHELL` to use a PowerShell at a different path.
 
 - **Quiet** (or "stop talking") ends the phrase being played and drops those that wait. While a phrase plays the microphone hears nothing, so the voice is never taken for you; that includes your own "quiet", so select **Quiet** to stop a phrase in the middle.
 - **Voice off** ("voice off") silences all spoken answers and reply reading, and the strip shows "Voice off". **Voice on** brings them back. The voice starts on; the setting is kept across restarts.
 - **Reading replies** is off until you say **"read replies"**. Then, when a turn ends in the session in front, its reply is read once: the start of it, whole sentences up to about 600 characters, with code left out and links said as "a link". **"read that"** reads the last reply of the session in front once, whether or not reading is on. Both work for Claude Code sessions only: the reply is taken from the transcript Claude Code keeps for the session, and what is read is never written to the log. The strip shows "Reading replies" while it is on; say "stop reading replies" to stop.
+- **Keep my speech** ("keep my speech") saves each utterance as a 16kHz mono WAV file and a text file in the view's data directory under `speech-kept/`. This is off by default; say "stop keeping my speech" to stop. At most 1,000 utterances are kept (oldest are trimmed). Say "delete my speech" to delete all kept utterances. Nothing is sent to the network.
 
 ### Every spoken form
 
@@ -255,6 +256,9 @@ A command must be the whole utterance. These are all the forms, each in quotatio
 | Answer a question that waits | "yes", "confirm", "yes close it", "close it"; "no", "cancel", "dont close", "keep it" |
 | Mirror a PC window, New project | "mirror", "mirror a window", "show windows", "show pc windows", "pc windows"; "new project", "add project", "add a project", "make a project" |
 | In a list | a number ("two", "number two", "pick two"); "more", "next page", "show more"; "previous", "previous page"; "cancel", "close list", "close the list", "never mind"; "make it", "make new", "make a new folder", "make that", or "make" and a name; any other words narrow it |
+| Keep my speech | "keep my speech", "save my speech", "record my speech" |
+| Stop keeping speech | "stop keeping my speech", "dont keep my speech", "stop saving my speech" |
+| Delete my speech | "delete my speech", "delete my recordings", "clear my speech" |
 
 ## Closing, and what the agents may do
 

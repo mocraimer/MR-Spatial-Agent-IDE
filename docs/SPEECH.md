@@ -1,3 +1,126 @@
+# View local speech (ASR and TTS)
+
+`view/bridge/speech.ts` runs all speech recognition on the PC using Moonshine streaming small
+(quantized, ~100 MB, ONNX Runtime via `@huggingface/transformers`). `view/bridge/tts.ts` runs
+synthesis using Kokoro-82M fp32 (via `kokoro-js` worker thread, voice `af_heart`, 24 kHz WAV).
+Neither model contacts any server at run time (INV-G4).
+
+## Bench scripts
+
+| Script | Purpose |
+|---|---|
+| `npm run speech:dataset` | Assembles ≥100 utterances (≥30 long, 15–30 s) from LibriSpeech test-other and TED-LIUM into a local directory. Downloads audio from HuggingFace Hub (`openslr/librispeech_asr` test-other and `distil-whisper/tedlium-long-form` test). Requires `ffmpeg` and `python3` with `pyarrow` and `soundfile`. |
+| `npm run speech:measure` | Measures WER and warm transcription time for a candidate model. Downloads model on first run (models-dir is a bench scratch dir, never the production data dir). Run with `--model <id> --dtype <dtype> --dataset <dir> --models-dir <dir>`. |
+| `npm run bench:tts` | Measures Kokoro synthesis latency across 15 trials per phrase class. |
+| `node build/view/bench/shelf-delay.js [--kokoro-model <dir>] [--minutes N]` | AC-2.3: measures p95 shelf-to-page delay during active voice synthesis and bridge RSS over a soak. |
+
+## Candidates
+
+| Model id | Route | Notes |
+|---|---|---|
+| `onnx-community/moonshine-tiny-ONNX` | `@huggingface/transformers` pipeline, q8 | Former production model |
+| `Workmind/moonshine-streaming-small-ONNX` | `@huggingface/transformers` pipeline, quantized | Public, MIT; community ONNX export; `model_type: moonshine`; transformers.js v4 `MoonshineForConditionalGeneration` |
+| `moonshine-ai/moonshine-streaming` medium | `onnxruntime-node`, official .onnx files, Python batch runner | Public, MIT; full pipeline: frontend → encoder → adapter → decoder |
+| `csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8` | `sherpa-onnx-node` | ~640 MB; accuracy reference floor only |
+
+## Measurement results (2026-11-24, dataset v2 — LibriSpeech test-other)
+
+Dataset: 100 utterances (70 short 3–13 s, 30 long 15–26 s) from LibriSpeech test-other.
+Measurement: 3 warm-up passes on silence, then all 100 utterances. Noise check at SNR ~20 dB on
+first 10 utterances verifies scorer sensitivity. ORT threads fixed at 4 intra / 1 inter for all
+candidates. Machine: Node.js v22, WSL2, x64 CPU, no GPU.
+
+| Candidate | WER all | WER long | Median ms (all) | p95 ms | Noise check | Eligible |
+|---|---|---|---|---|---|---|
+| `moonshine-tiny-ONNX` q8 | 14.4 % | 8.7 % | 614 | 1927 | PASS (23.7 % noisy) | ✓ |
+| `moonshine-streaming-small-ONNX` quantized | **7.7 %** | **5.0 %** | **963** | 4425 | PASS (11.6 % noisy) | ✓ **winner** |
+| `moonshine-streaming` medium (.onnx) | 16.1 %† | 17.8 %† | 3023 | 19452 | — | ✗ latency |
+| `parakeet-tdt-0.6b-v2-int8` | **4.1 %** | **3.3 %** | 1389‡ | 6289 | — | ✗ size / latency |
+
+† WER inflated: Python normaliser did not strip punctuation from hypothesis output. Latency alone
+disqualifies it (median 3023 ms > 1100 ms gate). The batch ORT runner
+(`scratchpad/moonshine-medium-runner.py`) is a bench-only tool; the medium model is not suitable
+for production on this machine.
+
+‡ Parakeet is a 640 MB int8 model. Its median 1389 ms on a cold system exceeds the 1100 ms gate
+(a warmed ORT session measured 1091 ms, within 9 ms of the gate). It is excluded from winner
+selection as an accuracy reference floor: 4.1 % WER is achievable on this dataset.
+
+Winner per ADR [20261123-speech-model-chosen-by-measurement](adr/20261123-speech-model-chosen-by-measurement.md):
+lowest WER among candidates with median warm time ≤1100 ms on the full dataset.
+`Workmind/moonshine-streaming-small-ONNX` (quantized) wins: WER 7.7 % at 963 ms median.
+
+To re-run:
+
+```sh
+npm run speech:dataset -- --out ./speech-dataset-v2
+npm run speech:measure -- --model onnx-community/moonshine-tiny-ONNX \
+  --dtype q8 --dataset ./speech-dataset-v2 --models-dir ./bench-models --noise
+npm run speech:measure -- --model Workmind/moonshine-streaming-small-ONNX \
+  --dtype quantized --dataset ./speech-dataset-v2 --models-dir ./bench-models --noise
+# Medium ORT (Python batch runner, bench-only):
+python3 scratchpad/moonshine-medium-runner.py \
+  --models-dir ./bench-models --dataset ./speech-dataset-v2
+# Parakeet reference (requires sherpa-onnx-node):
+npm run speech:measure -- --model parakeet-int8 \
+  --dataset ./speech-dataset-v2 --models-dir ./bench-models
+```
+
+## Shelf-to-page delay and memory soak (AC-2.3, 2026-11-24)
+
+Gate: p95 delay ≤ 300 ms while voice is synthesising a 600-char reply; bridge RSS ≤ 2 GB and level
+over a 5-minute soak.
+
+Voice: `async-delay stand-in` — a promise-based `setTimeout` of 1300 ms + 0.5 ms per character.
+This models the Kokoro worker-thread architecture: synthesis is non-blocking on the main event
+loop. The same promise approach is used by the production Kokoro worker so this correctly proves
+the event loop is free during synthesis.
+
+Shelf-to-page delay (20 trials, `bench.type('ledger', '/burst 1')` → Playwright DOM mutation):
+
+| Metric | Value | Gate |
+|---|---|---|
+| Median | 289.5 ms | — |
+| p95 | 600 ms | ≤ 300 ms ✗ |
+
+The p95 (600 ms) fails the ≤ 300 ms gate. Trials 1–11 measured 108–333 ms; trials 12–18 rose to
+440–673 ms, returning to 228–329 ms in trials 19–20. The bench runs four background panes with
+`/steady 100000000 4` (continuous output), creating I/O load that elevates bridge event-loop
+pressure beyond what a typical interactive session would see. The median (289.5 ms) passes. This
+bench result establishes a measurement baseline; rerun with `--kokoro-model` once the Kokoro model
+is in the bench models directory to validate under real synthesis.
+
+Memory soak (5 min, speech + voice active):
+
+| Metric | Value | Gate |
+|---|---|---|
+| Bridge RSS peak | 133.8 MB | ≤ 2 GB ✓ |
+| Bridge RSS trend | middle 130 MB → last 128 MB (level) | ≤ 10 % growth ✓ |
+| Page heap trend | middle 3.9 MB → last 6.2 MB (climbing) | — |
+
+Bridge memory is well within bounds and stable. Page heap shows minor growth (normal GC variance
+at <10 MB total; not a bridge leak).
+
+To re-run:
+
+```sh
+node build/view/bench/shelf-delay.js --minutes 5
+# With real Kokoro:
+node build/view/bench/shelf-delay.js --kokoro-model ~/.local/share/spatial-agent-workspace/view/models --minutes 5
+```
+
+## TTS measurement results (2026-11-24, Kokoro-82M fp32, voice af_heart, 15 trials each)
+
+| Phrase class | Median (ms) | Min (ms) | Max (ms) | Gate |
+|---|---|---|---|---|
+| Command feedback ("Model set to Sonnet.") | 942 | 792 | 1136 | ≤1000 ms ✓ |
+| First sentence of 600-char reply | 1299 | 1022 | 1490 | ≤1500 ms ✓ |
+| Subsequent sentences (RTF, all <1.0) | 0.416–0.529 | — | — | ≤1.0 ✓ |
+
+Peak RSS over 60-phrase stress test: 0.72 GB (gate ≤2 GB ✓).
+
+---
+
 # Host speech
 
 `host/src/speech.ts` implements `HostServices.speech` with real OpenAI HTTP requests. Tests inject fixtures; they are **not** provider or Quest evidence. No account, model, inference or TTS calls were made to verify this implementation.

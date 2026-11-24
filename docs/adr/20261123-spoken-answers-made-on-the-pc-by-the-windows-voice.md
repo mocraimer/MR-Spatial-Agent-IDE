@@ -1,7 +1,7 @@
 # ADR: Spoken answers are made on the PC by the Windows voice, and replies are read only when asked
 
 ## Status
-Accepted
+Superseded by [20261123-kokoro-replaces-windows-voice](20261123-kokoro-replaces-windows-voice.md): Kokoro-82M is now the default; the Windows voice is the fallback while Kokoro loads or if it fails
 
 ## Area
 Spatial view

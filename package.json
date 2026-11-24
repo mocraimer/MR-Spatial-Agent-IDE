@@ -17,7 +17,9 @@
     "start": "node build/host/src/main.js",
     "test:ui": "npm run build && playwright test",
     "view": "node build/view/bridge/supervise.js",
-    "view:setup": "node build/view/bridge/setup.js"
+    "view:setup": "node build/view/bridge/setup.js",
+    "speech:dataset": "node build/view/bench/download-speech-dataset.js",
+    "speech:measure": "node build/view/bench/speech-measure.js"
   },
   "devDependencies": {
     "@eslint/js": "^9.13.0",
@@ -27,11 +29,13 @@
     "agent-system": "file:vendor/coordinator-api",
     "eslint": "^9.13.0",
     "iwer": "^2.8.0",
+    "sherpa-onnx-node": "^2.0.3",
     "typescript": "^5.6.3",
     "typescript-eslint": "^8.12.0"
   },
   "dependencies": {
     "@huggingface/transformers": "^4.3.2",
-    "fs-native-extensions": "1.5.1"
+    "fs-native-extensions": "1.5.1",
+    "kokoro-js": "^1.2.1"
   }
 }

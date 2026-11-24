@@ -15,7 +15,11 @@ export const CLIPS_KEPT = 6;
 
 export class Say {
   private readonly clips = new Map<string, Buffer>();
-  private waiting: string[] = [];
+  /**
+   * Each entry is a group: one spoken text split into sentences. The queue cap counts groups,
+   * not individual sentences, so a long reply does not push out earlier ones sentence-by-sentence.
+   */
+  private waiting: string[][] = [];
   private working = false;
   /** Bumped by a stop: audio made before it is thrown away. */
   private epoch = 0;
@@ -36,11 +40,23 @@ export class Say {
   /** The voice failed and has not worked since. */
   get failed(): boolean { return this.failing; }
 
-  /** Queues a phrase; returns false when the voice cannot work at all. */
-  say(text: string): boolean {
+  /**
+   * Queues one sentence; the sentence is its own group. Returns false when the voice cannot work.
+   * For multi-sentence text use `sayGroup` so the queue cap counts the whole text as one slot.
+   */
+  say(text: string): boolean { return this.sayGroup([text]); }
+
+  /**
+   * Queues a group of sentences as one spoken text. The waiting cap counts groups: a long reply
+   * split into 6 sentences is one group and takes one slot, not six. Within a group, sentences are
+   * streamed one by one so the first phrase reaches the page before later ones are synthesised.
+   * Returns false when the voice cannot work at all.
+   */
+  sayGroup(texts: string[]): boolean {
+    if (texts.length === 0) return false;
     const problem = this.voice.problem();
     if (problem) { this.fail(problem); return false; }
-    this.waiting.push(text);
+    this.waiting.push(texts);
     while (this.waiting.length > WAITING_MAX) this.waiting.shift();
     void this.run();
     return true;
@@ -58,17 +74,20 @@ export class Say {
     if (this.working) return;
     this.working = true;
     try {
-      for (let text = this.waiting.shift(); text !== undefined; text = this.waiting.shift()) {
+      for (let group = this.waiting.shift(); group !== undefined; group = this.waiting.shift()) {
         const epoch = this.epoch;
-        try {
-          const wav = await this.voice.speak(text);
-          if (epoch !== this.epoch) continue;
-          if (this.failing) { this.failing = false; this.trouble(false); }
-          const id = randomUUID();
-          this.clips.set(id, wav);
-          while (this.clips.size > CLIPS_KEPT) this.clips.delete(this.clips.keys().next().value as string);
-          this.emit({ type: 'say', id });
-        } catch (error) { this.fail((error as Error).message); }
+        for (const text of group) {
+          if (epoch !== this.epoch) break; // stop was called: abandon this group
+          try {
+            const wav = await this.voice.speak(text);
+            if (epoch !== this.epoch) break;
+            if (this.failing) { this.failing = false; this.trouble(false); }
+            const id = randomUUID();
+            this.clips.set(id, wav);
+            while (this.clips.size > CLIPS_KEPT) this.clips.delete(this.clips.keys().next().value as string);
+            this.emit({ type: 'say', id });
+          } catch (error) { this.fail((error as Error).message); break; }
+        }
       }
     } finally { this.working = false; }
   }

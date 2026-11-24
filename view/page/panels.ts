@@ -465,6 +465,8 @@ export interface StripState {
   /** Spoken feedback is off, the voice failed, and finished replies are read aloud. */
   voiceOff: boolean;
   voiceProblem: boolean;
+  /** A fallback voice (Windows) is standing in while the preferred voice (Kokoro) loads. */
+  voiceStandingIn?: boolean;
   reading: boolean;
   /** A close that waits for the owner's answer, or a command heard in standby: at most one. */
   confirm: PendingClose | null;
@@ -542,7 +544,7 @@ export function drawStrip(canvas: HTMLCanvasElement, st: StripState): Region[] {
   // The standing chips, drawn from the right edge first; what is heard gets what remains.
   // With 3+ chips use compact labels so the heard text always keeps at least MIN_SAY_W pixels.
   const MIN_SAY_W = 350;
-  const chipCount = (st.link ? 1 : 0) + (st.direct ? 1 : 0) + (st.voiceProblem ? 1 : 0) + ((st.voiceOff || st.reading) ? 1 : 0);
+  const chipCount = (st.link ? 1 : 0) + (st.direct ? 1 : 0) + (st.voiceProblem ? 1 : 0) + (st.voiceStandingIn ? 1 : 0) + ((st.voiceOff || st.reading) ? 1 : 0);
   const compact = chipCount >= 3;
   let right = w - 40;
   if (st.link) right -= chip(ctx, st.link, right, h / 2, 28, AMBER, 'right') + 16;
@@ -550,6 +552,7 @@ export function drawStrip(canvas: HTMLCanvasElement, st: StripState): Region[] {
   if (st.direct) right -= chip(ctx, compact ? 'Direct' : 'Sending at once', right, h / 2, 32, AMBER, 'right') + 16;
   // The voice is a standing setting too: off, or reading each reply, it shows whenever it holds; a voice that failed shows until it works again.
   if (st.voiceProblem) right -= chip(ctx, compact ? 'Voice!' : 'Voice problem', right, h / 2, 32, AMBER, 'right') + 16;
+  if (st.voiceStandingIn) right -= chip(ctx, compact ? 'Win voice' : 'Windows voice', right, h / 2, 32, AMBER, 'right') + 16;
   if (st.voiceOff) right -= chip(ctx, 'Voice off', right, h / 2, 32, AMBER, 'right') + 16;
   else if (st.reading) right -= chip(ctx, compact ? 'Reading' : 'Reading replies', right, h / 2, 32, ACCENT, 'right') + 16;
   // The speech area always keeps at least MIN_SAY_W pixels so heard text is readable.

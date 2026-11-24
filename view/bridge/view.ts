@@ -12,7 +12,8 @@ import { Mirrors } from './mirrors.js';
 import { HelperWindows, type Windows } from './windows.js';
 import { startServer } from './server.js';
 import { Settings } from './settings.js';
-import { WindowsVoice, type Voice } from './tts.js';
+import { KokoroVoice, WindowsVoice, KOKORO_MODEL, KOKORO_VOICE, type Voice } from './tts.js';
+import { existsSync } from 'node:fs';
 import { LocalSpeech, modelDirectory } from './speech.js';
 
 export interface ViewOptions {
@@ -63,9 +64,35 @@ export async function startView(options: ViewOptions): Promise<RunningView> {
   const closeSocket = join(options.dataDirectory, 'helper.sock');
   const agents = options.agents ?? new HerdrLevelAgents(herdr, claudeAgents(join(options.dataDirectory, 'agents')), closeSocket);
   const settings = new Settings(options.dataDirectory);
-  const voice = options.voice === undefined ? new WindowsVoice() : options.voice;
+  // A mutable ref for the bridge, so Kokoro callbacks (which fire ~7 s after startup) can
+  // reach the bridge that is created below. The closure captures the ref object by reference.
+  const ref: { bridge?: Bridge } = {};
+  let voice: Voice | null;
+  if (options.voice !== undefined) {
+    voice = options.voice;
+  } else {
+    const kokoro_model = join(modelDirectory(options.dataDirectory), KOKORO_MODEL);
+    const windows = new WindowsVoice();
+    if (!existsSync(kokoro_model)) {
+      log(`Kokoro model not found; using Windows voice. Run \`npm run view:setup\` once to download it.`);
+      voice = windows;
+    } else {
+      voice = new KokoroVoice(
+        kokoro_model,
+        KOKORO_VOICE,
+        windows,
+        () => { log('Kokoro voice ready'); },
+        reason => {
+          log(`Kokoro voice failed: ${reason}`);
+          ref.bridge?.notice(`The Kokoro voice failed to load. The Windows voice is being used instead.`);
+        },
+      );
+    }
+  }
   const mirrors = new Mirrors(herdr, options.windows ?? new HelperWindows(log), join(options.dataDirectory, 'mirror.sock'), log);
-  const bridge = new Bridge(herdr, mirror, speech, agents, { closeAnswerMs: options.closeAnswerMs, standbyAnswerMs: options.standbyAnswerMs, log, settings, mirrors, ...(voice ? { voice } : {}), ...(options.transcripts ? { transcripts: options.transcripts } : {}), ...(options.confirmMs ? { confirmMs: options.confirmMs } : {}) });
+  const speechKeepDir = join(options.dataDirectory, 'speech-kept');
+  const bridge = new Bridge(herdr, mirror, speech, agents, { closeAnswerMs: options.closeAnswerMs, standbyAnswerMs: options.standbyAnswerMs, log, settings, mirrors, speechKeepDir, ...(voice ? { voice } : {}), ...(options.transcripts ? { transcripts: options.transcripts } : {}), ...(options.confirmMs ? { confirmMs: options.confirmMs } : {}) });
+  ref.bridge = bridge;
   const closeServer: NetServer = serveCloseRequests(closeSocket, ref => bridge.requestClose(ref), log);
   mirrors.serve(order => bridge.mirrorOrder(order));
   const pairing = new PairingAuthority(join(options.dataDirectory, 'pairing'));
@@ -93,6 +120,7 @@ export async function startView(options: ViewOptions): Promise<RunningView> {
     async stop() {
       mirror.stop();
       bridge.stop();
+      if (voice instanceof KokoroVoice) voice.stop();
       mirrors.close();
       server.closeAllConnections();
       await new Promise(resolve => server.close(resolve));

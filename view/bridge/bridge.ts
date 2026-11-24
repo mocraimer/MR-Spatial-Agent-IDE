@@ -5,6 +5,8 @@
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { claudeSettingsPath, saveDefaults, restoreDefaults } from './claude-settings.js';
+import { join } from 'node:path';
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { shelfOrder, type BridgeAction, type Command, type EffortLevel, type KeyName, type ModelName } from '../shared/actions.js';
 import { plain } from '../shared/ansi.js';
 import { currentProject, type BridgeEvent, type Picker, type Project, type Session, type Shelf, type SpeechState, type Utterance } from '../shared/messages.js';
@@ -16,7 +18,7 @@ import type { Mirror } from './mirror.js';
 import { Questions } from './question.js';
 import { Say } from './say.js';
 import { Settings } from './settings.js';
-import { feedbackFor, replyPhrase } from './spoken.js';
+import { feedbackFor, replyPhrase, splitSentences } from './spoken.js';
 import { lastReply, TRANSCRIPT_ROOT } from './transcript.js';
 import type { Voice } from './tts.js';
 import { Mirrors } from './mirrors.js';
@@ -26,6 +28,24 @@ import { fitWindow, restoreWindow, newFitState, RESTORE_GRACE_MS, type FitState 
 import { FRONT_COLS } from '../shared/front-cols.js';
 
 export interface Transcriber { state(): SpeechState; transcribe(audio: Float32Array): Promise<string> }
+
+export { splitSentences } from './spoken.js';
+
+/** Encode float32 PCM samples (–1..1) as a 16-bit mono WAV at the given sample rate. */
+function pcmToWav(samples: Float32Array, sampleRate: number): Buffer {
+  const dataLen = samples.length * 2;
+  const buf = Buffer.allocUnsafe(44 + dataLen);
+  buf.write('RIFF', 0); buf.writeUInt32LE(36 + dataLen, 4); buf.write('WAVE', 8);
+  buf.write('fmt ', 12); buf.writeUInt32LE(16, 16); buf.writeUInt16LE(1, 20);
+  buf.writeUInt16LE(1, 22); buf.writeUInt32LE(sampleRate, 24);
+  buf.writeUInt32LE(sampleRate * 2, 28); buf.writeUInt16LE(2, 32); buf.writeUInt16LE(16, 34);
+  buf.write('data', 36); buf.writeUInt32LE(dataLen, 40);
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i] ?? 0));
+    buf.writeInt16LE(s < 0 ? s * 0x8000 : s * 0x7fff, 44 + i * 2);
+  }
+  return buf;
+}
 
 type Send = (event: BridgeEvent) => void;
 export type CloseAnswer = 'closed' | 'declined' | 'no-answer' | 'unknown-session' | 'ambiguous' | 'busy' | 'failed';
@@ -59,6 +79,8 @@ export interface BridgeOptions {
    * CLAUDE_CONFIG_DIR). Pass null to skip the restore entirely (no settings file available).
    */
   claudeSettingsPath?: string | null;
+  /** Where kept utterance WAVs and texts are stored; without it, keeping speech is a no-op. */
+  speechKeepDir?: string;
 }
 /** What a command came to; `silent` marks one whose own speech is the answer. */
 type Result = { ok: boolean; outcome: string; silent?: true; say?: string };
@@ -148,6 +170,8 @@ export class Bridge {
   private readonly drafts = new Drafts();
   /** Null when the bridge has no voice: it then speaks nothing and says nothing about it. */
   private readonly say: Say | null;
+  /** The voice object itself, for standingIn queries. */
+  private readonly voice: Voice | undefined;
   private readonly transcripts: string;
   private readonly confirmMs: number;
   private readonly sessionOf: (paneId: string) => Promise<string | null>;
@@ -178,6 +202,7 @@ export class Bridge {
   private fitSeq = 0;
   /** Interval timer that polls front-pane width while in mixed reality to catch layout changes. */
   private layoutPollTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly speechKeepDir: string | undefined;
 
   constructor(
     private readonly herdr: HerdrClient,
@@ -194,10 +219,12 @@ export class Bridge {
     this.transcripts = options.transcripts ?? TRANSCRIPT_ROOT;
     this.confirmMs = options.confirmMs ?? 2500;
     this.sessionOf = options.sessionOf ?? (paneId => this.herdrSessionOf(paneId));
+    this.voice = options.voice;
     this.say = options.voice ? new Say(options.voice, event => this.broadcast(event), text => this.broadcast({ type: 'notice', text }), this.log, () => this.announceVoice()) : null;
     this.mirrors = options.mirrors ?? new Mirrors(herdr, NO_WINDOWS, '');
     this.settingsFilePath = options.claudeSettingsPath !== undefined ? options.claudeSettingsPath : claudeSettingsPath();
     this.pickerIdleMs = options.pickerIdleMs ?? PICKER_IDLE_MS;
+    this.speechKeepDir = options.speechKeepDir;
     agents.onChange(() => { this.logAgentStarts(); this.broadcast({ type: 'shelf', shelf: this.shelf() }); });
     mirror.listen({
       shelf: shelf => {
@@ -252,7 +279,7 @@ export class Bridge {
     send({ type: 'confirm', pending: this.questions.closeView() });
     send({ type: 'ask', ask: this.questions.commandView() });
     send({ type: 'direct', on: this.settings.direct });
-    send({ type: 'voice', feedback: this.settings.voice, reading: this.settings.readReplies, trouble: this.say?.failed ?? false });
+    send({ type: 'voice', feedback: this.settings.voice, reading: this.settings.readReplies, trouble: this.say?.failed ?? false, standingIn: this.voice?.standingIn?.() ?? false });
     send({ type: 'speech', speech: this.speech.state() });
     send({ type: 'picker', picker: this.pickerView() });
     for (const s of shelf.sessions.filter(x => x.window)) {
@@ -361,6 +388,9 @@ export class Bridge {
     await fitWindow(front.id, workspaceLabel, this.fitState, { log: this.log, notice, herdr: this.herdr, windows: this.mirrors.windowHelper() });
   }
 
+  /** Sends a notice to every connected page. */
+  notice(text: string): void { this.broadcast({ type: 'notice', text }); }
+
   /** The audio of a spoken phrase, for the page to fetch. */
   clip(id: string): Buffer | undefined { return this.say?.clip(id); }
 
@@ -420,6 +450,8 @@ export class Bridge {
         }
         case 'picker-make': return await this.makeFromPicker(null);
         case 'pick': return await this.pick(shelf, action.n);
+        case 'keep-speech': return this.setKeepSpeech(action.on);
+        case 'delete-speech': return this.deleteSpeech();
         case 'window-input': {
           const s = shelf.sessions.find(x => x.id === action.sessionId);
           if (!s?.window) return { ok: false, outcome: 'That session is not a window mirror.' };
@@ -463,6 +495,7 @@ export class Bridge {
     try { heard = (await this.speech.transcribe(audio)).trim(); } catch (error) {
       return record('', { as: 'nothing', ok: false, outcome: `Speech could not be read: ${(error as Error).message}` });
     }
+    if (this.settings.keepSpeech && this.speechKeepDir && heard) this.keepUtterance(audio, heard);
     const shelf = this.shelf();
     const taken = classify(heard, this.questions.waiting, this.picker !== null);
     // A command waiting for its yes is dropped by anything the owner says but a yes or a no. Noise that came to no words is not something said.
@@ -755,10 +788,18 @@ export class Bridge {
     return { ok: true, outcome: `Cleared the draft in ${name(shelf, target)}` };
   }
 
-  /** Speaks a phrase when there is one and the owner has the voice on. Returns whether it was queued. */
+  /**
+   * Speaks a phrase when there is one and the owner has the voice on. Splits into sentences and
+   * queues the whole phrase as one group so the queue cap counts it as a single slot. Within the
+   * group, sentences stream one by one so the first phrase reaches the page before later ones are
+   * synthesised. Returns whether anything was queued.
+   */
   private speak(phrase: string | null): boolean {
     if (phrase === null || !this.settings.voice || !this.say) return false;
-    return this.say.say(phrase);
+    // Split at [.!?] followed by whitespace or end-of-string only. This preserves "4.6", ".txt",
+    // "Dr." followed by a word, etc. — the parts always rejoin to the whole text (modulo spaces).
+    const parts = splitSentences(phrase);
+    return this.say.sayGroup(parts.length > 0 ? parts : [phrase]);
   }
 
   /**
@@ -850,7 +891,53 @@ export class Bridge {
     return { ok: true, outcome: (on ? 'Reading each finished reply aloud. Say “stop reading replies” to stop.' : 'Replies are not read aloud.') + note + saved, silent: true };
   }
 
-  private announceVoice(): void { this.broadcast({ type: 'voice', feedback: this.settings.voice, reading: this.settings.readReplies, trouble: this.say?.failed ?? false }); }
+  private announceVoice(): void {
+    const standingIn = this.voice?.standingIn?.() ?? false;
+    this.broadcast({ type: 'voice', feedback: this.settings.voice, reading: this.settings.readReplies, trouble: this.say?.failed ?? false, standingIn });
+  }
+
+  private keepUtterance(audio: Float32Array, text: string): void {
+    try {
+      const dir = this.speechKeepDir!;
+      mkdirSync(dir, { recursive: true });
+      const files = readdirSync(dir);
+      // Collect all stems (name without extension) that have either a .wav or a .txt file.
+      const allStems = [...new Set([
+        ...files.filter(f => f.endsWith('.wav')).map(f => f.slice(0, -4)),
+        ...files.filter(f => f.endsWith('.txt')).map(f => f.slice(0, -4)),
+      ])].sort();
+      // Cap at 1,000 pairs; trim oldest first (stems sort lexicographically by timestamp).
+      if (allStems.length >= 1000) {
+        for (const stem of allStems.slice(0, allStems.length - 999)) {
+          try { rmSync(join(dir, `${stem}.wav`)); } catch { /* ok if already missing */ }
+          try { rmSync(join(dir, `${stem}.txt`)); } catch { /* ok if already missing */ }
+        }
+      }
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      writeFileSync(join(dir, `${stamp}.txt`), text);
+      writeFileSync(join(dir, `${stamp}.wav`), pcmToWav(audio, 16000));
+    } catch (error) {
+      this.log(`keep speech failed: ${(error as Error).message}`);
+    }
+  }
+
+  private setKeepSpeech(on: boolean): Result {
+    const saved = this.save(() => this.settings.setKeepSpeech(on), `keep speech turned ${on ? 'on' : 'off'}`);
+    const note = on ? 'Each utterance is kept as audio and text in the data folder on this PC.' : 'Utterances are no longer kept.';
+    return { ok: true, outcome: note + saved, silent: true };
+  }
+
+  private deleteSpeech(): Result {
+    if (!this.speechKeepDir) return { ok: false, outcome: 'No speech has been kept.' };
+    try {
+      const files = readdirSync(this.speechKeepDir);
+      for (const f of files) rmSync(join(this.speechKeepDir, f));
+      this.log('kept speech deleted');
+      return { ok: true, outcome: `Deleted ${files.length} kept utterance${files.length === 1 ? '' : 's'}.`, silent: true };
+    } catch (error) {
+      return { ok: false, outcome: `Could not delete kept speech: ${(error as Error).message}` };
+    }
+  }
 
   /**
    * Runs a settings write and logs it. A file that cannot be written is logged too, and the setting
