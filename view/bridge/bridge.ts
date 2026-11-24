@@ -279,7 +279,7 @@ export class Bridge {
     send({ type: 'confirm', pending: this.questions.closeView() });
     send({ type: 'ask', ask: this.questions.commandView() });
     send({ type: 'direct', on: this.settings.direct });
-    send({ type: 'voice', feedback: this.settings.voice, reading: this.settings.readReplies, trouble: this.say?.failed ?? false, standingIn: this.voice?.standingIn?.() ?? false });
+    send({ type: 'voice', feedback: this.settings.voice, reading: this.settings.readReplies, trouble: this.say?.failed ?? false, standingIn: this.voice?.standingIn?.() ?? false, keepSpeech: this.settings.keepSpeech });
     send({ type: 'speech', speech: this.speech.state() });
     send({ type: 'picker', picker: this.pickerView() });
     for (const s of shelf.sessions.filter(x => x.window)) {
@@ -893,7 +893,7 @@ export class Bridge {
 
   private announceVoice(): void {
     const standingIn = this.voice?.standingIn?.() ?? false;
-    this.broadcast({ type: 'voice', feedback: this.settings.voice, reading: this.settings.readReplies, trouble: this.say?.failed ?? false, standingIn });
+    this.broadcast({ type: 'voice', feedback: this.settings.voice, reading: this.settings.readReplies, trouble: this.say?.failed ?? false, standingIn, keepSpeech: this.settings.keepSpeech });
   }
 
   private keepUtterance(audio: Float32Array, text: string): void {

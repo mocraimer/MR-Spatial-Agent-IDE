@@ -35,7 +35,7 @@ const state = {
   confirm: null as PendingClose | null,
   ask: null as PendingAsk | null,
   direct: false,
-  voice: { feedback: true, reading: false, trouble: false, standingIn: false },
+  voice: { feedback: true, reading: false, trouble: false, standingIn: false, keepSpeech: false },
   speech: { ready: false, reason: 'Connecting to the PC…' } as SpeechState,
   scroll: 0,
   scale: 1,
@@ -212,7 +212,7 @@ function apply(event: BridgeEvent): void {
     case 'confirm': state.confirm = event.pending; break;
     case 'ask': state.ask = event.ask; break;
     case 'direct': state.direct = event.on; break;
-    case 'voice': state.voice = { feedback: event.feedback, reading: event.reading, trouble: event.trouble, standingIn: event.standingIn ?? false }; break;
+    case 'voice': state.voice = { feedback: event.feedback, reading: event.reading, trouble: event.trouble, standingIn: event.standingIn ?? false, keepSpeech: event.keepSpeech ?? false }; break;
     case 'say': player.enqueue(event.id); break;
     case 'say-stop': player.stop(); break;
     case 'speech': state.speech = event.speech; break;
@@ -730,6 +730,7 @@ function renderNow(): void {
     voiceProblem: state.voice.trouble || player.problem !== null,
     voiceStandingIn: state.voice.standingIn,
     reading: state.voice.reading,
+    keepSpeech: state.voice.keepSpeech,
     confirm: state.confirm,
     ask: state.ask,
   };
@@ -791,8 +792,8 @@ function renderNow(): void {
     row([['send', 'scratch'], ['direct-on', 'direct-off']], false).map(b => ({ ...b, on: b.id === (state.direct ? 'direct-on' : 'direct-off') })),
     // Words for the session in front: its model and effort (typed into it as /model and /effort).
     row([['model-haiku', 'model-sonnet', 'model-opus'], ['effort-low', 'effort-medium', 'effort-high', 'effort-xhigh', 'effort-max']], false),
-    // The voice: whether answers are spoken and replies read, reading the last reply now, and stopping.
-    row([['voice-on', 'voice-off'], ['read-on', 'read-off'], ['read-last', 'voice-stop']], false).map(b => ({ ...b, on: b.id === (state.voice.feedback ? 'voice-on' : 'voice-off') || b.id === (state.voice.reading ? 'read-on' : 'read-off') })),
+    // The voice: spoken feedback, reading replies, keeping speech (lit when on), and stopping.
+    row([['voice-on', 'voice-off'], ['read-on', 'read-off'], ['read-last', 'voice-stop'], ['keep-speech-on', 'keep-speech-off'], ['delete-speech']], false).map(b => ({ ...b, on: b.id === (state.voice.feedback ? 'voice-on' : 'voice-off') || b.id === (state.voice.reading ? 'read-on' : 'read-off') || (b.id === 'keep-speech-on' && state.voice.keepSpeech) })),
   ].map((btns, i) => i === 0 ? btns.map(b => b.id === 'keyboard' ? { ...b, on: state.keyboardOpen } : b) : btns);
 
   // Controls group: Talk at the natural default position, rows stacking below it.
@@ -901,7 +902,7 @@ window.viewState = () => {
     ask: state.ask,
     drafts: shelf?.drafts ?? [],
     direct: state.direct,
-    voice: { feedback: state.voice.feedback, reading: state.voice.reading, trouble: state.voice.trouble, playing: player.playing, played: player.played, problem: player.problem },
+    voice: { feedback: state.voice.feedback, reading: state.voice.reading, trouble: state.voice.trouble, keepSpeech: state.voice.keepSpeech, playing: player.playing, played: player.played, problem: player.problem },
     immersive: scene.immersive,
     keyboardOpen: state.keyboardOpen,
     surfaces: [...scene.surfaces.keys()],
