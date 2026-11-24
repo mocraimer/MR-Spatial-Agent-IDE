@@ -998,3 +998,38 @@ test('AC-9.1: edge drag of talk panel (controls group) scales controls group; sc
   expect(screensScale, 'screensScale unchanged after controls resize').toBeCloseTo(1.0, 2);
   expect(Math.abs(frontWidthAfter - frontWidthBefore) / (frontWidthBefore || 1), 'front panel unchanged').toBeLessThan(0.01);
 });
+
+test('AC-9.1: edge affordance screenshots — rest, hover and drag states on front and talk panels', async ({ page }) => {
+  test.setTimeout(90_000);
+  const shot = (name: string) => page.screenshot({ path: test.info().outputPath(`${name}.png`) });
+  r = await rig([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' as const }] }]);
+  await emulateQuest(page);
+  await pair(page, r);
+  await enterMixedReality(page);
+  await expect.poll(async () => (await viewState(page)).surfaces).toContain('front');
+
+  // Rest state: no ray near any edge.
+  await aim(page, 'controller', 'front', 0.5, 0.5);
+  await page.waitForTimeout(100);
+  await shot('edge-rest-front');
+
+  // Hover state on front panel right edge.
+  await aim(page, 'controller', 'front', 0.97, 0.5);
+  await page.waitForTimeout(200);
+  await shot('edge-hover-front');
+
+  // Drag state: trigger held on front panel right edge.
+  await setPressed(page, 'controller', 1);
+  await page.waitForTimeout(200);
+  await shot('edge-drag-front');
+  await setPressed(page, 'controller', 0);
+  await page.waitForTimeout(100);
+
+  // Rest and hover on the talk panel (a control panel).
+  await aim(page, 'controller', 'talk', 0.5, 0.5);
+  await page.waitForTimeout(100);
+  await shot('edge-rest-talk');
+  await aim(page, 'controller', 'talk', 0.97, 0.5);
+  await page.waitForTimeout(200);
+  await shot('edge-hover-talk');
+});
