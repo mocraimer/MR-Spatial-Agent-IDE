@@ -16,6 +16,7 @@ import { Bridge, type Transcriber } from '../bridge/bridge.js';
 import { DEFAULT_MIRROR, Mirror } from '../bridge/mirror.js';
 import { Mirrors } from '../bridge/mirrors.js';
 import type { Windows, WindowRect, FoundWindow } from '../bridge/windows.js';
+import { newFitState, persistFitState, restoreWindow } from '../bridge/window-fit.js';
 import type { BridgeEvent } from '../shared/messages.js';
 
 const noAgents: LevelAgents = {
@@ -269,6 +270,54 @@ test('Fix: concurrent doFit calls do not corrupt restoreRect with the already-fi
       disconnect();
       mirror.stop();
     }
+  } finally {
+    await bench.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+// ── Fix-#2: fit-state persistence across bridge restarts ─────────────────────────────────────────
+
+test('Fix-#2: a restarted bridge loads persisted fit state and can restore the window', async () => {
+  // The bridge persists {hwnd, restoreRect, restoreMaximized} after each fit so a restarted
+  // bridge can restore the window without having been the one that fitted it.
+  //
+  // This test verifies the round-trip: persistFitState → loadFitState (via Bridge constructor) →
+  // restoreWindow uses the loaded rect, not null/zero.
+  const bench = await HerdrBench.start([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' }] }]);
+  const dataDir = mkdtempSync('/tmp/svmr-persist-');
+  try {
+    const originalRect = { left: 0, top: 0, right: 1920, bottom: 1200 };
+    const fake = makeFakeWindows({ initialRect: { left: 0, top: 0, right: 1440, bottom: 1200 } });
+
+    // ── Simulate Bridge A's fit: write the fit state directly (avoids the REFLOW_WAIT_MS loop). ──
+    const stateA = newFitState();
+    stateA.hwnd = 42;                                       // the terminal window's hwnd
+    stateA.restoreRect = { ...originalRect };               // original wide rect
+    stateA.restoreMaximized = false;
+    stateA.lastFitRect = { left: 0, top: 0, right: 1440, bottom: 1200 };  // fitted rect
+    persistFitState(stateA, dataDir);
+
+    // ── Bridge B: constructor loads the persisted state ──────────────────────────────────────────
+    const mirrorB = new Mirror(bench.client, DEFAULT_MIRROR);
+    const bridgeB = new Bridge(bench.client, mirrorB, new FakeSpeech(), noAgents, {
+      mirrors: new Mirrors(bench.client, fake.windows, bench.socketPath),
+      claudeSettingsPath: null, fitDataDir: dataDir,
+    });
+
+    // After construction, Bridge B must have the loaded state.
+    assert.equal(bridgeB.fitState.hwnd, 42, 'bridge B loaded hwnd from persisted state');
+    assert.deepEqual(bridgeB.fitState.restoreRect, originalRect, 'bridge B loaded restoreRect from persisted state');
+
+    // Directly restore: Bridge B uses the loaded restoreRect (original wide rect).
+    // The current fake rect is 1440px (the fitted rect from Bridge A); after restore it must be 1920px.
+    await restoreWindow(bridgeB.fitState, { log: () => undefined, windows: fake.windows });
+
+    const restoredWidth = fake.currentRect.right - fake.currentRect.left;
+    assert.equal(restoredWidth, originalRect.right - originalRect.left,
+      `bridge B must restore to original width (${originalRect.right - originalRect.left}); got ${restoredWidth}`);
+
+    mirrorB.stop();
   } finally {
     await bench.stop();
     rmSync(dataDir, { recursive: true, force: true });

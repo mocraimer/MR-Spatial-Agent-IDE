@@ -95,7 +95,8 @@ export async function startView(options: ViewOptions): Promise<RunningView> {
   }
   const mirrors = new Mirrors(herdr, options.windows ?? new HelperWindows(log), join(options.dataDirectory, 'mirror.sock'), log);
   const speechKeepDir = join(options.dataDirectory, 'speech-kept');
-  const bridge = new Bridge(herdr, mirror, speech, agents, { closeAnswerMs: options.closeAnswerMs, standbyAnswerMs: options.standbyAnswerMs, log, settings, mirrors, speechKeepDir, ...(voice ? { voice } : {}), ...(options.transcripts ? { transcripts: options.transcripts } : {}), ...(options.confirmMs ? { confirmMs: options.confirmMs } : {}) });
+  const fitDataDir = options.dataDirectory;
+  const bridge = new Bridge(herdr, mirror, speech, agents, { closeAnswerMs: options.closeAnswerMs, standbyAnswerMs: options.standbyAnswerMs, log, settings, mirrors, speechKeepDir, fitDataDir, ...(voice ? { voice } : {}), ...(options.transcripts ? { transcripts: options.transcripts } : {}), ...(options.confirmMs ? { confirmMs: options.confirmMs } : {}) });
   ref.bridge = bridge;
   const closeServer: NetServer = serveCloseRequests(closeSocket, ref => bridge.requestClose(ref), log);
   mirrors.serve(order => bridge.mirrorOrder(order));

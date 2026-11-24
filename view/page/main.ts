@@ -224,6 +224,10 @@ function apply(event: BridgeEvent): void {
       if (lastBridgeInstance !== null && lastBridgeInstance !== event.id) {
         notice('The view restarted.');
         player.stop();
+        // Re-register as an MR page so the new bridge can track us and re-fit the window.
+        if (scene.immersive) {
+          void link.post('/api/mr', { inMR: true, pageId: event.pageId }).catch(() => undefined);
+        }
       }
       lastBridgeInstance = event.id;
       bridgePageId = event.pageId;
@@ -869,7 +873,7 @@ function updatePage(): void {
 declare global {
   interface Window {
     viewState(): ViewState;
-    viewTest: { text(id: string): string[]; feed(samples: number[]): void; fakeMic(refuse?: boolean): void; worldPoint(id: string, x: number, y: number): [number, number, number] | null; region(surface: string, id: string): { x: number; y: number } | null };
+    viewTest: { text(id: string): string[]; feed(samples: number[]): void; fakeMic(refuse?: boolean): void; worldPoint(id: string, x: number, y: number): [number, number, number] | null; region(surface: string, id: string): { x: number; y: number } | null; simulateInstance(id: string, pageId: string): void };
   }
 }
 window.viewState = () => {
@@ -921,6 +925,8 @@ window.viewTest = {
     const c = canvases.get(surface);
     return r && c ? { x: (r.x + r.w / 2) / c.width, y: (r.y + r.h / 2) / c.height } : null;
   },
+  /** Injects a fake instance event for Playwright tests that simulate a bridge restart. */
+  simulateInstance: (id, pageId) => apply({ type: 'instance', id, pageId }),
 };
 
 render();

@@ -24,7 +24,7 @@ import type { Voice } from './tts.js';
 import { Mirrors } from './mirrors.js';
 import { addProject, folders, loose as squeezed, makeProject, newProjectRoot, projectRoots, takenFolders } from './projects.js';
 import type { Frame, Windows } from './windows.js';
-import { fitWindow, restoreWindow, newFitState, RESTORE_GRACE_MS, type FitState } from './window-fit.js';
+import { fitWindow, restoreWindow, newFitState, persistFitState, loadFitState, clearFitState, RESTORE_GRACE_MS, type FitState } from './window-fit.js';
 import { FRONT_COLS } from '../shared/front-cols.js';
 
 export interface Transcriber { state(): SpeechState; transcribe(audio: Float32Array): Promise<string> }
@@ -81,6 +81,12 @@ export interface BridgeOptions {
   claudeSettingsPath?: string | null;
   /** Where kept utterance WAVs and texts are stored; without it, keeping speech is a no-op. */
   speechKeepDir?: string;
+  /**
+   * Directory for persisting window fit state across bridge restarts. When set, the bridge writes
+   * fit-state.json after a successful fit and clears it after restore; on startup it loads any
+   * previously persisted state so a restarted bridge can restore the window correctly.
+   */
+  fitDataDir?: string;
 }
 /** What a command came to; `silent` marks one whose own speech is the answer. */
 type Result = { ok: boolean; outcome: string; silent?: true; say?: string };
@@ -206,6 +212,7 @@ export class Bridge {
   /** Interval timer that polls front-pane width while in mixed reality to catch layout changes. */
   private layoutPollTimer: ReturnType<typeof setInterval> | null = null;
   private readonly speechKeepDir: string | undefined;
+  private readonly fitDataDir: string | undefined;
   /** Set true when stop() is called; lets the watchLoop exit early. */
   private stopped = false;
   /** The restore token from the most recent live watchLoop (null when no loop is running). */
@@ -232,6 +239,8 @@ export class Bridge {
     this.settingsFilePath = options.claudeSettingsPath !== undefined ? options.claudeSettingsPath : claudeSettingsPath();
     this.pickerIdleMs = options.pickerIdleMs ?? PICKER_IDLE_MS;
     this.speechKeepDir = options.speechKeepDir;
+    this.fitDataDir = options.fitDataDir;
+    if (options.fitDataDir) loadFitState(this.fitState, options.fitDataDir);
     agents.onChange(() => { this.logAgentStarts(); this.broadcast({ type: 'shelf', shelf: this.shelf() }); });
     mirror.listen({
       shelf: shelf => {
@@ -340,7 +349,9 @@ export class Bridge {
         // Explicit leave: restore promptly (no grace period needed).
         if (this.restoreTimer) { clearTimeout(this.restoreTimer); this.restoreTimer = null; }
         this.lastFitFocusId = null;
-        void restoreWindow(this.fitState, { log: this.log, windows: this.mirrors.windowHelper() }).catch(() => undefined);
+        void restoreWindow(this.fitState, { log: this.log, windows: this.mirrors.windowHelper() })
+          .then(() => { if (this.fitDataDir) clearFitState(this.fitDataDir); })
+          .catch(() => undefined);
       }
     }
   }
@@ -351,7 +362,9 @@ export class Bridge {
     this.restoreTimer = setTimeout(() => {
       this.restoreTimer = null;
       this.lastFitFocusId = null;
-      void restoreWindow(this.fitState, { log: this.log, windows: this.mirrors.windowHelper() }).catch(() => undefined);
+      void restoreWindow(this.fitState, { log: this.log, windows: this.mirrors.windowHelper() })
+        .then(() => { if (this.fitDataDir) clearFitState(this.fitDataDir); })
+        .catch(() => undefined);
     }, RESTORE_GRACE_MS);
     this.restoreTimer.unref();
   }
@@ -402,6 +415,7 @@ export class Bridge {
       const workspaceLabel = shelf.projects.find(p => p.id === front.workspaceId)?.label ?? '';
       const notice = (text: string) => this.broadcast({ type: 'notice', text });
       await fitWindow(front.id, workspaceLabel, this.fitState, { log: this.log, notice, herdr: this.herdr, windows: this.mirrors.windowHelper() });
+      if (this.fitDataDir && this.fitState.hwnd !== null) persistFitState(this.fitState, this.fitDataDir);
     }).catch(() => undefined);
     this.fitChain = chain;
     return chain;
