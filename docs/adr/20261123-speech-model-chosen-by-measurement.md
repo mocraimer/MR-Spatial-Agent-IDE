@@ -1,8 +1,7 @@
 # ADR: Speech model is chosen by measurement against a frozen utterance set
 
 ## Status
-Accepted; extends [20261121-local-speech-on-the-pc](20261121-local-speech-on-the-pc.md): winner confirmed by measurement on 2026-11-24 — `Workmind/moonshine-streaming-small-ONNX` (quantized) is
-now the production model, replacing Moonshine tiny q8.
+Accepted; extends [20261121-local-speech-on-the-pc](20261121-local-speech-on-the-pc.md): winner confirmed by measurement on 2026-11-24 — `Workmind/moonshine-streaming-small-ONNX` (quantized) is now the production model, replacing Moonshine tiny q8.
 
 ## Area
 Spatial view
