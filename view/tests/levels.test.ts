@@ -283,3 +283,29 @@ test('the level tool starts an agent under a name Herdr accepts, whatever the ow
     assert.equal(bare.status, 0, `an agent with no name of its own: ${bare.out}`);
   } finally { await s.stop(); rmSync(bin, { recursive: true, force: true }); }
 });
+
+test('AC-10.1: level-tool view opens a tab whose pane carries the right label for each viewer kind', async () => {
+  // "view changes" → 'changes'; "view diff" → 'diff'; "view pr N" → 'pr N';
+  // "view file path/name.ts" → 'view name.ts'; "view md path/doc.md" → 'view doc.md'.
+  const s = await setup();
+  try {
+    const me = s.bench.pane('a1');
+    const alpha = ws(s, 'alpha');
+    const cases: Array<[string[], string]> = [
+      [['view', 'changes'], 'changes'],
+      [['view', 'diff'], 'diff'],
+      [['view', 'pr', '42'], 'pr 42'],
+      [['view', 'file', 'src/foo.ts'], 'view foo.ts'],
+      [['view', 'md', 'docs/guide.md'], 'view guide.md'],
+    ];
+    for (const [args, expectedLabel] of cases) {
+      const r = await tool(s, me, alpha, args);
+      assert.equal(r.status, 0, `${args.join(' ')}: ${r.out}`);
+      const pane = (await s.snap()).panes.find(p => p.label === expectedLabel);
+      assert.ok(pane, `${args.join(' ')}: pane labelled "${expectedLabel}" found`);
+      assert.equal(pane?.workspaceId, alpha, `${args.join(' ')}: opened in its own project`);
+      // Clean up so the workspace does not fill with panes.
+      await s.bench.client.call('pane.close', { pane_id: pane?.id as string });
+    }
+  } finally { await s.stop(); }
+});
