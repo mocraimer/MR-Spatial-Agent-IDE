@@ -31,10 +31,12 @@ const GUARD = compiled('bridge', 'guard.js');
 export const CLOSE_SOCKET_ENV = 'SPATIAL_VIEW_HELPER_SOCKET';
 
 /**
- * What both kinds of level agent run on: Sonnet at medium effort. It is written into each agent's
+ * What both kinds of level agent run on: Sonnet 5.5 at medium effort. It is written into each agent's
  * folder settings as well as its start arguments, so an agent Herdr resumes (with no arguments) keeps it.
+ * The full model id is used so the alias "sonnet" (which resolved to 4.6 in this Claude Code build)
+ * never silently points to an older model.
  */
-export const LEVEL_MODEL = 'sonnet';
+export const LEVEL_MODEL = 'claude-sonnet-5-5';
 export const LEVEL_EFFORT = 'medium';
 const LEVEL_ARGS = ['--model', LEVEL_MODEL, '--effort', LEVEL_EFFORT];
 
@@ -111,7 +113,8 @@ export function claudeHelper(directory: string): AgentOptions {
 /**
  * A project agent: Claude Code on Sonnet at medium effort. It may read, and it
  * acts on sessions only through the level tool, which keeps it to its own project; anything
- * else meets Claude Code's own permission prompt, which shows as a waiting session.
+ * else it approves automatically in auto permission mode (the owner chose this over the
+ * per-prompt default mode).
  */
 export function claudeProjectAgent(directory: string): AgentOptions {
   const file = join(directory, '.claude', 'settings.json');
@@ -119,8 +122,8 @@ export function claudeProjectAgent(directory: string): AgentOptions {
   return {
     kind: 'claude',
     cwd: directory,
-    args: [...LEVEL_ARGS, '--settings', file, '--strict-mcp-config'],
-    prepare: () => { write(directory, settings({ allow, defaultMode: 'default' }), PROJECT_INSTRUCTIONS); },
+    args: [...LEVEL_ARGS, '--permission-mode', 'auto', '--settings', file, '--strict-mcp-config'],
+    prepare: () => { write(directory, settings({ allow, defaultMode: 'auto' }), PROJECT_INSTRUCTIONS); },
   };
 }
 
@@ -178,7 +181,7 @@ export class HerdrLevelAgents implements LevelAgents {
       agent.prepare?.();
       const env = { ...agent.env, [CLOSE_SOCKET_ENV]: this.closeSocket };
       const made = workspace
-        ? await this.herdr.call('tab.create', { workspace_id: workspace.id, cwd: agent.cwd, focus: false, env })
+        ? await this.herdr.call('tab.create', { workspace_id: workspace.id, cwd: agent.cwd, focus: false, env, label: SEAT_LABEL[role] })
         : await this.herdr.call('workspace.create', { label: OVERVIEW_LABEL, cwd: agent.cwd, focus: false, env });
       const paneId = paneOf(made.root_pane);
       await this.herdr.call('pane.rename', { pane_id: paneId, label: SEAT_LABEL[role] });
@@ -264,7 +267,7 @@ short lines: the owner reads your answer in a headset.
 - Asked what is going on or what waits: \`herdr agent list\` gives every session's state
   (\`blocked\` means it waits on the owner); \`herdr agent read <pane>\` shows what one says.
   Answer per project, waiting sessions first.
-- To start a session in a project: \`herdr tab create --workspace <id> --no-focus\` gives a pane.
+- To start a session in a project: \`herdr tab create --workspace <id> --no-focus --label "<name>"\` gives a pane. Always pass a descriptive \`--label\` naming what will run in the tab (for example the agent kind or task).
   With no project named, use your own workspace. Leave the pane as a shell, or start an agent in
   it with \`herdr agent start <name> --kind <kind> --pane <pane>\` (kind \`claude\` unless the owner
   names another).
@@ -300,7 +303,7 @@ Everything you do with sessions goes through one tool, which keeps to your proje
 - \`node ${LEVEL_TOOL} sessions\` lists your project's sessions: pane id, name, agent or shell, state
   (\`blocked\` means it waits on the owner).
 - \`node ${LEVEL_TOOL} read <pane> [lines]\` prints what a session shows.
-- \`node ${LEVEL_TOOL} start shell [name]\` or \`start claude [name]\` starts a new session in your project.
+- \`node ${LEVEL_TOOL} start shell [name]\` or \`start claude [name]\` starts a new session in your project. Always pass a descriptive \`name\` so the tab carries what runs in it.
 - \`node ${LEVEL_TOOL} prompt <pane> <text>\` gives a session a prompt.
 - \`node ${LEVEL_TOOL} close <pane>\` asks the owner whether to close a session; it closes only on
   their yes and prints what happened.

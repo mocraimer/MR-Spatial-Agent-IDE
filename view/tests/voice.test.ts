@@ -84,11 +84,11 @@ test('"model sonnet" and "effort extra high" type the exact slash command into t
     const model = await s.say('set model to sonnet');
     assert.equal(model.as, 'command');
     assert.equal(model.ok, true);
-    assert.match(model.outcome, /Set model to sonnet in this session/, 'outcome says "in this session"');
+    assert.match(model.outcome, /Set model to claude-sonnet-5-5 in this session/, 'outcome says "in this session"');
     assert.match(model.outcome, /Your default for new sessions was kept/, 'outcome says default was kept');
     assert.ok(!model.outcome.includes('saved as your default'), 'outcome has no "saved as your default"');
-    await shows(s, 'a1', 'a1 got: /model sonnet');
-    assert.deepEqual(await spoken(voice, 1), ['Set model to sonnet in this session.']);
+    await shows(s, 'a1', 'a1 got: /model claude-sonnet-5-5');
+    assert.deepEqual(await spoken(voice, 1), ['Set model to claude-sonnet-5-5 in this session.']);
     const effort = await s.say('effort extra high');
     assert.match(effort.outcome, /^Set effort level to xhigh/);
     await shows(s, 'a1', 'a1 got: /effort xhigh');
@@ -96,7 +96,7 @@ test('"model sonnet" and "effort extra high" type the exact slash command into t
     await front(s, 'a2'); await focusedIs(s, 'a2');
     const late = await s.say('model haiku', s.bench.pane('a1'));
     assert.equal(late.ok, true);
-    await shows(s, 'a1', 'a1 got: /model haiku');
+    await shows(s, 'a1', 'a1 got: /model claude-haiku-5-5');
     assert.equal((await s.text(s.bench.pane('a2'))).includes('got:'), false, 'the session now in front got nothing');
   } finally { await s.stop(); }
 });
@@ -107,10 +107,10 @@ test('two commands said close together are carried out one after the other, each
   try {
     await front(s, 'a1'); await focusedIs(s, 'a1');
     const [model, effort] = await Promise.all([s.say('model opus'), s.say('effort high')]);
-    assert.match(model.outcome, /^Set model to opus/);
+    assert.match(model.outcome, /^Set model to claude-opus-5-5/);
     assert.match(effort.outcome, /^Set effort level to high/);
     const shown = await s.text(s.bench.pane('a1'));
-    assert.ok(shown.indexOf('a1 got: /model opus') >= 0 && shown.indexOf('a1 got: /effort high') > shown.indexOf('a1 got: /model opus'), 'typed in the order said');
+    assert.ok(shown.indexOf('a1 got: /model claude-opus-5-5') >= 0 && shown.indexOf('a1 got: /effort high') > shown.indexOf('a1 got: /model claude-opus-5-5'), 'typed in the order said');
   } finally { await s.stop(); }
 });
 
@@ -175,7 +175,7 @@ test('a repeated command is confirmed by its own new line, not by the old one', 
   const s = await setup(LAYOUT, { voice: new FakeVoice(), confirmMs: 600 });
   try {
     await front(s, 'a1'); await focusedIs(s, 'a1');
-    assert.match((await s.say('model opus')).outcome, /^Set model to opus/);
+    assert.match((await s.say('model opus')).outcome, /^Set model to claude-opus-5-5/);
     await s.bench.type('a1', '/confirm off');
     const again = await s.say('model opus');
     assert.match(again.outcome, /did not show that it took effect/, 'the earlier confirmation is not taken for this one');
@@ -193,9 +193,9 @@ test('with listening off the command is asked first and typed only after a yes; 
     await settle();
     assert.equal((await s.text(s.bench.pane('a1'))).includes('got:'), false, 'nothing before the yes');
     const yes = await s.sayStandby('yes');
-    assert.match(yes.outcome, /^Answered yes: Set the model to sonnet in a1\. Set model to sonnet/);
-    await shows(s, 'a1', 'a1 got: /model sonnet');
-    assert.equal((await spoken(voice, 2))[1], 'Set model to sonnet in this session.', 'the answer is what the session said, not the yes');
+    assert.match(yes.outcome, /^Answered yes: Set the model to sonnet in a1\. Set model to claude-sonnet-5-5/);
+    await shows(s, 'a1', 'a1 got: /model claude-sonnet-5-5');
+    assert.equal((await spoken(voice, 2))[1], 'Set model to claude-sonnet-5-5 in this session.', 'the answer is what the session said, not the yes');
     await s.sayStandby('effort low');
     assert.match((await s.sayStandby('no')).outcome, /^Answered no/);
     await s.sayStandby('effort low');
