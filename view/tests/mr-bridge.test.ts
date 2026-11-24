@@ -7,7 +7,8 @@
  *   When the pane grows above FRONT_COLS or shrinks below MIN_FIT_COLS the bridge re-fits.
  */
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { HerdrBench } from '../bench/bench.js';
 import type { LevelAgents } from '../bridge/agents.js';
@@ -318,6 +319,40 @@ test('Fix-#2: a restarted bridge loads persisted fit state and can restore the w
       `bridge B must restore to original width (${originalRect.right - originalRect.left}); got ${restoredWidth}`);
 
     mirrorB.stop();
+  } finally {
+    await bench.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+// ── NL1: fit-state.json lifecycle ────────────────────────────────────────────────────────────────
+
+test('NL1: fit-state.json is kept after bridge.stop() so a restarted bridge can restore', async () => {
+  // The file must survive stop() — a supervisor restart creates a new bridge that reads it
+  // and restores the window.  Clearing it here would break the restart-restore path.
+  const bench = await HerdrBench.start([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' }] }]);
+  const dataDir = mkdtempSync('/tmp/svmr-nl1-');
+  try {
+    const fake = makeFakeWindows({ initialRect: { left: 0, top: 0, right: 1440, bottom: 1200 } });
+    const stateA = newFitState();
+    stateA.hwnd = 42;
+    stateA.restoreRect = { left: 0, top: 0, right: 1920, bottom: 1200 };
+    stateA.restoreMaximized = false;
+    stateA.lastFitRect = { left: 0, top: 0, right: 1440, bottom: 1200 };
+    persistFitState(stateA, dataDir);
+
+    const mirror = new Mirror(bench.client, DEFAULT_MIRROR);
+    const bridge = new Bridge(bench.client, mirror, new FakeSpeech(), noAgents, {
+      mirrors: new Mirrors(bench.client, fake.windows, bench.socketPath),
+      claudeSettingsPath: null, fitDataDir: dataDir,
+    });
+
+    bridge.stop();
+
+    assert.ok(existsSync(join(dataDir, 'fit-state.json')),
+      'fit-state.json must remain after stop() — a restarted bridge reads it to restore the window');
+
+    mirror.stop();
   } finally {
     await bench.stop();
     rmSync(dataDir, { recursive: true, force: true });

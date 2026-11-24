@@ -280,6 +280,9 @@ export class Bridge {
       this.pendingRestoreToken = null;
       try { restoreDefaults(token); } catch { /* best effort */ }
     }
+    // fit-state.json is intentionally NOT cleared here.  On a supervisor restart the new bridge
+    // reads it via loadFitState and can restore the window without having been the one that fitted
+    // it.  The file is removed only after restoreWindow() completes (via clearFitState).
   }
 
   /** Herdr's sessions as the mirror holds them, with which level agents are starting or failed. */
