@@ -1,7 +1,7 @@
 # ADR: Shelf surfaces move as two independent groups
 
 ## Status
-Accepted
+Accepted; extended by [20261124-groups-are-resized-by-their-edges](20261124-groups-are-resized-by-their-edges.md): groups can also be scaled by grabbing any panel edge, not only moved by their grab bars
 
 ## Area
 Spatial view
