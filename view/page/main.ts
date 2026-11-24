@@ -662,7 +662,7 @@ function renderNow(): void {
   const activeEdgeGrab = scene.activeEdgeGrab;
   /**
    * Wraps a draw function with a four-state edge affordance:
-   *   rest (always): thin strip at 12 % opacity — signals "this edge resizes"
+   *   rest (always): 7 % strip at 22 % opacity — wide enough to see on dark panels; matches the grab zone
    *   hover:  45 % opacity — confirms the ray is in the grab region
    *   drag:   90 % opacity — unambiguous grab confirmation
    * The strip is always drawn for all four edges; only the active/hovered one is brighter.
@@ -674,10 +674,11 @@ function renderNow(): void {
       draw(c);
       const ctx = c.getContext('2d');
       if (!ctx) return;
-      const t = Math.round(c.width * 0.025); // 2.5% of canvas width ≈ 28mm at 1m
+      // t matches EDGE_FRAC (7 %) so the visible strip coincides exactly with the grab zone.
+      const t = Math.round(c.width * 0.07);
       ctx.save();
-      // Rest state: all four edges at 12 % to aid discoverability.
-      ctx.fillStyle = 'rgba(108,182,255,0.12)';
+      // Rest state: 7 % strip at 22 % opacity — wide enough to see on dark panels.
+      ctx.fillStyle = 'rgba(108,182,255,0.22)';
       ctx.fillRect(0, 0, t, c.height);               // left
       ctx.fillRect(c.width - t, 0, t, c.height);     // right
       ctx.fillRect(0, 0, c.width, t);                 // top
