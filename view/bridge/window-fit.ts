@@ -38,6 +38,11 @@ export interface FitOptions {
   herdr: HerdrClient;
   /** The Windows helper for reading and setting the terminal rect. */
   windows: Windows;
+  /**
+   * Directory that holds fit-state.json.  When set, fitWindow clears the file if it discovers
+   * the remembered hwnd is stale (window replaced between restarts).
+   */
+  persistDir?: string | undefined;
 }
 
 export interface FitState {
@@ -77,14 +82,33 @@ export async function fitWindow(paneId: string, workspaceLabel: string, state: F
   if (frontCols <= TARGET_COLS) return frontCols; // Already fits.
 
   // 2. Find the terminal window.
-  let hwnd: number;
-  let currentWidth: number;
-  let currentHeight: number;
+  // eslint-disable-next-line prefer-const
+  let hwnd!: number;
+  // eslint-disable-next-line prefer-const
+  let currentWidth!: number;
+  // eslint-disable-next-line prefer-const
+  let currentHeight!: number;
+
+  // Try to use the remembered hwnd.  If getRect fails the window was replaced between restarts;
+  // clear the stale state and fall through to findWindow below.
+  let resolvedFromCache = false;
   if (state.hwnd !== null) {
-    // We already have the window; check for hand-resize and re-read its rect.
     await checkHandResize(state, opts);
+    let r: { rect: WindowRect; maximized: boolean } | null = null;
     try {
-      const { rect, maximized } = await opts.windows.getRect(state.hwnd);
+      r = await opts.windows.getRect(state.hwnd);
+    } catch {
+      // NF1: hwnd is stale — the terminal was replaced between bridge restarts.
+      opts.log(`window-fit: remembered hwnd=${state.hwnd} no longer exists; clearing stale state and re-finding the window`);
+      state.hwnd = null;
+      state.restoreRect = null;
+      state.restoreMaximized = false;
+      state.lastFitRect = null;
+      if (opts.persistDir) clearFitState(opts.persistDir);
+      // state.hwnd is now null; fall through to the findWindow block below.
+    }
+    if (r !== null && state.hwnd !== null) {
+      const { rect, maximized } = r;
       if (maximized) {
         // Owner maximized it; restore first so we can resize.
         await opts.windows.setRect(state.hwnd, state.restoreRect ?? rect);
@@ -92,17 +116,16 @@ export async function fitWindow(paneId: string, workspaceLabel: string, state: F
         const after = await opts.windows.getRect(state.hwnd);
         currentWidth = after.rect.right - after.rect.left;
         currentHeight = after.rect.bottom - after.rect.top;
-        hwnd = state.hwnd;
       } else {
         currentWidth = rect.right - rect.left;
         currentHeight = rect.bottom - rect.top;
-        hwnd = state.hwnd;
       }
-    } catch (error) {
-      opts.log(`window-fit: could not read window rect: ${(error as Error).message}`);
-      return null;
+      hwnd = state.hwnd;
+      resolvedFromCache = true;
     }
-  } else {
+  }
+
+  if (!resolvedFromCache) {
     // 3. Find the window for this workspace.
     let found: Awaited<ReturnType<typeof opts.windows.findWindow>>;
     try {

@@ -417,7 +417,7 @@ export class Bridge {
       if (!front) return;
       const workspaceLabel = shelf.projects.find(p => p.id === front.workspaceId)?.label ?? '';
       const notice = (text: string) => this.broadcast({ type: 'notice', text });
-      await fitWindow(front.id, workspaceLabel, this.fitState, { log: this.log, notice, herdr: this.herdr, windows: this.mirrors.windowHelper() });
+      await fitWindow(front.id, workspaceLabel, this.fitState, { log: this.log, notice, herdr: this.herdr, windows: this.mirrors.windowHelper(), persistDir: this.fitDataDir });
       if (this.fitDataDir && this.fitState.hwnd !== null) persistFitState(this.fitState, this.fitDataDir);
     }).catch(() => undefined);
     this.fitChain = chain;
