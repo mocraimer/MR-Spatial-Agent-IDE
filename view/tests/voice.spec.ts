@@ -99,7 +99,7 @@ test('the model and effort buttons type the slash command into the session in fr
   test.setTimeout(90_000);
   await start(page);
   await tap(page, 'controller', 'controls-3', 'model-sonnet');
-  await expect.poll(async () => (await r.bench.client.read(r.bench.pane('a1'), 40)).includes('a1 got: /model sonnet')).toBe(true);
+  await expect.poll(async () => (await r.bench.client.read(r.bench.pane('a1'), 40)).includes('a1 got: /model claude-sonnet-5-5')).toBe(true);
   await tap(page, 'hand', 'controls-3', 'effort-xhigh');
   await expect.poll(async () => (await r.bench.client.read(r.bench.pane('a1'), 40)).includes('a1 got: /effort xhigh')).toBe(true);
   await shot(page, 'model-and-effort-controls');
@@ -124,7 +124,7 @@ test('each voice action is also done by speaking it: voice off and on, read repl
   await speak(page, 'stop talking');
   await expect.poll(async () => (await viewState(page)).last?.outcome).toBe('The voice is stopped.');
   await speak(page, 'set model to opus');
-  await expect.poll(async () => (await r.bench.client.read(r.bench.pane('a1'), 40)).includes('a1 got: /model opus')).toBe(true);
+  await expect.poll(async () => (await r.bench.client.read(r.bench.pane('a1'), 40)).includes('a1 got: /model claude-opus-5-5')).toBe(true);
   await speak(page, 'effort max');
   await expect.poll(async () => (await r.bench.client.read(r.bench.pane('a1'), 40)).includes('a1 got: /effort max')).toBe(true);
 });
