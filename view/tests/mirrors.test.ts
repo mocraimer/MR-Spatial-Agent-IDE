@@ -102,6 +102,10 @@ test('the window list shows the PC\'s windows; a pick makes a mirror session in 
     assert.equal(session?.window, true);
     assert.equal(session?.name, 'window: Untitled - Notepad');
     assert.equal(s.mirror.shelf().focusedId, id, 'a picked window comes to the front');
+    // AC-10.1: tab.list must include the mirror's label so the Herdr tab bar names it.
+    const tabsR = await s.bench.client.call('tab.list', { workspace_id: alpha });
+    const tabLabels = (tabsR.tabs as Array<{ label: string }>).map(t => t.label);
+    assert.ok(tabLabels.includes('window: Untitled - Notepad'), `tab.list includes mirror label; got: ${JSON.stringify(tabLabels)}`);
     const before = s.frames(id);
     await new Promise(r => setTimeout(r, 1200));
     assert.ok(s.frames(id) > before, 'pictures keep coming while it is in front');
