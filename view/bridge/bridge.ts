@@ -301,7 +301,7 @@ export class Bridge {
     send({ type: 'confirm', pending: this.questions.closeView() });
     send({ type: 'ask', ask: this.questions.commandView() });
     send({ type: 'direct', on: this.settings.direct });
-    send({ type: 'voice', feedback: this.settings.voice, reading: this.settings.readReplies, trouble: this.say?.failed ?? false, standingIn: this.voice?.standingIn?.() ?? false });
+    send({ type: 'voice', feedback: this.settings.voice, reading: this.settings.readReplies, trouble: this.say?.failed ?? false, standingIn: this.voice?.standingIn?.() ?? false, keepSpeech: this.settings.keepSpeech });
     send({ type: 'speech', speech: this.speech.state() });
     send({ type: 'picker', picker: this.pickerView() });
     for (const s of shelf.sessions.filter(x => x.window)) {
@@ -928,7 +928,7 @@ export class Bridge {
 
   announceVoice(): void {
     const standingIn = this.voice?.standingIn?.() ?? false;
-    this.broadcast({ type: 'voice', feedback: this.settings.voice, reading: this.settings.readReplies, trouble: this.say?.failed ?? false, standingIn });
+    this.broadcast({ type: 'voice', feedback: this.settings.voice, reading: this.settings.readReplies, trouble: this.say?.failed ?? false, standingIn, keepSpeech: this.settings.keepSpeech });
   }
 
   private keepUtterance(audio: Float32Array, text: string): void {
@@ -960,6 +960,7 @@ export class Bridge {
 
   private setKeepSpeech(on: boolean): Result {
     const saved = this.save(() => this.settings.setKeepSpeech(on), `keep speech turned ${on ? 'on' : 'off'}`);
+    this.announceVoice();
     const note = on ? 'Each utterance is kept as audio and text in the data folder on this PC.' : 'Utterances are no longer kept.';
     return { ok: true, outcome: note + saved, silent: true };
   }

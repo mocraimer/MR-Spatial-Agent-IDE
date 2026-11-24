@@ -40,7 +40,7 @@ export interface ViewState {
   /** Direct sending is on. */
   direct: boolean;
   /** The voice: spoken feedback and reading replies as set, and what the player is doing. */
-  voice: { feedback: boolean; reading: boolean; /** The PC's voice failed and has not worked since. */ trouble: boolean; playing: boolean; played: number; problem: string | null };
+  voice: { feedback: boolean; reading: boolean; /** The PC's voice failed and has not worked since. */ trouble: boolean; /** Whether utterances are being saved to disk. */ keepSpeech: boolean; playing: boolean; played: number; problem: string | null };
   immersive: boolean;
   keyboardOpen: boolean;
   surfaces: string[];

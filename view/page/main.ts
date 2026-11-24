@@ -35,7 +35,7 @@ const state = {
   confirm: null as PendingClose | null,
   ask: null as PendingAsk | null,
   direct: false,
-  voice: { feedback: true, reading: false, trouble: false, standingIn: false },
+  voice: { feedback: true, reading: false, trouble: false, standingIn: false, keepSpeech: false },
   speech: { ready: false, reason: 'Connecting to the PC…' } as SpeechState,
   scroll: 0,
   scale: 1,
@@ -212,7 +212,7 @@ function apply(event: BridgeEvent): void {
     case 'confirm': state.confirm = event.pending; break;
     case 'ask': state.ask = event.ask; break;
     case 'direct': state.direct = event.on; break;
-    case 'voice': state.voice = { feedback: event.feedback, reading: event.reading, trouble: event.trouble, standingIn: event.standingIn ?? false }; break;
+    case 'voice': state.voice = { feedback: event.feedback, reading: event.reading, trouble: event.trouble, standingIn: event.standingIn ?? false, keepSpeech: event.keepSpeech ?? false }; break;
     case 'say': player.enqueue(event.id); break;
     case 'say-stop': player.stop(); break;
     case 'speech': state.speech = event.speech; break;
@@ -666,7 +666,7 @@ function renderNow(): void {
   const activeEdgeGrab = scene.activeEdgeGrab;
   /**
    * Wraps a draw function with a four-state edge affordance:
-   *   rest (always): thin strip at 12 % opacity — signals "this edge resizes"
+   *   rest (always): 7 % strip at 22 % opacity — wide enough to see on dark panels; matches the grab zone
    *   hover:  45 % opacity — confirms the ray is in the grab region
    *   drag:   90 % opacity — unambiguous grab confirmation
    * The strip is always drawn for all four edges; only the active/hovered one is brighter.
@@ -678,10 +678,11 @@ function renderNow(): void {
       draw(c);
       const ctx = c.getContext('2d');
       if (!ctx) return;
-      const t = Math.round(c.width * 0.025); // 2.5% of canvas width ≈ 28mm at 1m
+      // t matches EDGE_FRAC (7 %) so the visible strip coincides exactly with the grab zone.
+      const t = Math.round(c.width * 0.07);
       ctx.save();
-      // Rest state: all four edges at 12 % to aid discoverability.
-      ctx.fillStyle = 'rgba(108,182,255,0.12)';
+      // Rest state: 7 % strip at 22 % opacity — wide enough to see on dark panels.
+      ctx.fillStyle = 'rgba(108,182,255,0.22)';
       ctx.fillRect(0, 0, t, c.height);               // left
       ctx.fillRect(c.width - t, 0, t, c.height);     // right
       ctx.fillRect(0, 0, c.width, t);                 // top
@@ -701,14 +702,20 @@ function renderNow(): void {
   /** Key fragment encoding edge state for a given surface id (drives canvas redraw on change). */
   const edgeKey = (id: string): string | null => hovEdge?.surface === id ? hovEdge.edge : activeEdgeGrab?.surface === id ? `drag:${activeEdgeGrab.edge}` : null;
 
-  // Derive offset matrices from the stored azimuth/height scalars, scaled about the head.
-  // Scaling about the origin means all world-space positions (az stays angular, dy and radii scale).
+  // Scale each group about its own centre at constant distance (ASM-13).
+  // All arc radii stay fixed; widths scale by k; each surface's y and angle offsets
+  // from the group centre scale by k so that angular size actually grows/shrinks.
   const sS = screensScale, cS = controlsScale;
+  // screensY/screensA: scale y/angle about the screens group centre (FRONT_Y, angle 0).
+  const screensY = (y: number) => FRONT_Y + (y - FRONT_Y) * sS;
+  const screensA = (a: number) => a * sS;
+  // controlsY: scale y about the controls group centre (CONTROLS_DEFAULT_Y, angle 0).
+  const controlsY = (y: number) => CONTROLS_DEFAULT_Y + (y - CONTROLS_DEFAULT_Y) * cS;
   const screensOffset = pose(0, screensDy * sS, 0, -screensAz);
   const controlsOffset = pose(0, controlsDy * cS, 0, -controlsAz);
 
   // ---- Screens group: front session, strip (above), tiles and chips ----
-  inGroup('front', JSON.stringify([frontKey, edgeKey('front')]), frontWidth * sS, onArc(0, FRONT_Y * sS, FRONT_DISTANCE * sS), screensOffset, withEdge('front', c => {
+  inGroup('front', JSON.stringify([frontKey, edgeKey('front')]), frontWidth * sS, onArc(0, FRONT_Y, FRONT_DISTANCE), screensOffset, withEdge('front', c => {
     if (state.picker) { regions.set('front', drawPicker(c, state.picker)); windowRect = null; return; }
     regions.delete('front');
     if (front?.window) { windowRect = drawWindowFront(c, front, placeName, picture, windowNote, frontStale); return; }
@@ -733,11 +740,12 @@ function renderNow(): void {
     voiceProblem: state.voice.trouble || player.problem !== null,
     voiceStandingIn: state.voice.standingIn,
     reading: state.voice.reading,
+    keepSpeech: state.voice.keepSpeech,
     confirm: state.confirm,
     ask: state.ask,
   };
   const stripBaseY = FRONT_Y + frontHeight / 2 + 0.06;
-  inGroup('strip', JSON.stringify(strip), stripWidth * sS, onArc(0, stripBaseY * sS, FRONT_DISTANCE * sS), screensOffset, c => { regions.set('strip', drawStrip(c, strip)); });
+  inGroup('strip', JSON.stringify(strip), stripWidth * sS, onArc(0, screensY(stripBaseY), FRONT_DISTANCE), screensOffset, c => { regions.set('strip', drawStrip(c, strip)); });
   used.add('strip');
 
   // A draft that waits says where, and the words that send or clear it, just above the strip.
@@ -750,7 +758,7 @@ function renderNow(): void {
   if (draft) {
     const barHeight = stripWidth * DRAFT_SIZE.h / DRAFT_SIZE.w;
     const draftBaseY = stripBaseY + stripHeight / 2 + 0.014 + barHeight / 2;
-    inGroup('draft', JSON.stringify(draft), stripWidth * sS, onArc(0, draftBaseY * sS, FRONT_DISTANCE * sS), screensOffset, c => drawDraft(c, draft));
+    inGroup('draft', JSON.stringify(draft), stripWidth * sS, onArc(0, screensY(draftBaseY), FRONT_DISTANCE), screensOffset, c => drawDraft(c, draft));
     used.add('draft');
   }
 
@@ -758,7 +766,7 @@ function renderNow(): void {
   for (const chip of chips) {
     const id = `chip:${chip.projectId}`;
     chipTargets.set(id, chip.overview ? 'overview' : `go:${chip.projectId}`);
-    inGroup(id, JSON.stringify([chip.project, chip.overview, chip.sessions.map(s => [s.agent, s.status])]), chip.width * sS, onArc(chip.angle, chip.y * sS, CHIP_ARC * sS), screensOffset, c => drawChip(c, chip.project, chip.sessions, chip.overview));
+    inGroup(id, JSON.stringify([chip.project, chip.overview, chip.sessions.map(s => [s.agent, s.status])]), chip.width * sS, onArc(screensA(chip.angle), screensY(chip.y), CHIP_ARC), screensOffset, c => drawChip(c, chip.project, chip.sessions, chip.overview));
     used.add(id);
   }
 
@@ -770,7 +778,7 @@ function renderNow(): void {
       const inFront = t.session.id === front?.id;
       const tilePicture = t.session.window && !inFront ? state.pictures.get(t.session.id) ?? null : null;
       const tileNote = t.session.window ? state.notes.get(t.session.id) ?? null : null;
-      inGroup(id, JSON.stringify([t.n, t.session, inFront, tileStale, inFront ? 0 : t.session.window ? [tilePicture?.version, tileNote] : state.textVersion.get(t.session.id)]), width * sS, onArc(column.angle, (TOP - i * step) * sS, ARC * sS), screensOffset, c => {
+      inGroup(id, JSON.stringify([t.n, t.session, inFront, tileStale, inFront ? 0 : t.session.window ? [tilePicture?.version, tileNote] : state.textVersion.get(t.session.id)]), width * sS, onArc(screensA(column.angle), screensY(TOP - i * step), ARC), screensOffset, c => {
         if (t.session.window && !inFront) drawWindowTile(c, t.n, t.session, tilePicture, tileNote, tileStale);
         else drawTile(c, t.n, t.session, state.texts.get(t.session.id), inFront, tileStale);
       });
@@ -781,7 +789,7 @@ function renderNow(): void {
   // Grab bar for the screens group: at the bottom of the front panel.
   const barPhysH = stripWidth * 80 / 2464; // 80px canvas height at stripWidth metres wide
   const screensBarY = FRONT_Y - frontHeight / 2 - 0.012 - barPhysH / 2;
-  inGroup('bar:screens', JSON.stringify('screens'), stripWidth * sS, onArc(0, screensBarY * sS, FRONT_DISTANCE * sS), screensOffset, c => drawBar(c, 'Screens'));
+  inGroup('bar:screens', JSON.stringify('screens'), stripWidth * sS, onArc(0, screensY(screensBarY), FRONT_DISTANCE), screensOffset, c => drawBar(c, 'Screens'));
   used.add('bar:screens');
 
   // ---- Controls group: Talk, button rows, draft bar ----
@@ -794,8 +802,8 @@ function renderNow(): void {
     row([['send', 'scratch'], ['direct-on', 'direct-off']], false).map(b => ({ ...b, on: b.id === (state.direct ? 'direct-on' : 'direct-off') })),
     // Words for the session in front: its model and effort (typed into it as /model and /effort).
     row([['model-haiku', 'model-sonnet', 'model-opus'], ['effort-low', 'effort-medium', 'effort-high', 'effort-xhigh', 'effort-max']], false),
-    // The voice: whether answers are spoken and replies read, reading the last reply now, and stopping.
-    row([['voice-on', 'voice-off'], ['read-on', 'read-off'], ['read-last', 'voice-stop']], false).map(b => ({ ...b, on: b.id === (state.voice.feedback ? 'voice-on' : 'voice-off') || b.id === (state.voice.reading ? 'read-on' : 'read-off') })),
+    // The voice: spoken feedback, reading replies, keeping speech (lit when on), and stopping.
+    row([['voice-on', 'voice-off'], ['read-on', 'read-off'], ['read-last', 'voice-stop'], ['keep-speech-on', 'keep-speech-off'], ['delete-speech']], false).map(b => ({ ...b, on: b.id === (state.voice.feedback ? 'voice-on' : 'voice-off') || b.id === (state.voice.reading ? 'read-on' : 'read-off') || (b.id === 'keep-speech-on' && state.voice.keepSpeech) })),
   ].map((btns, i) => i === 0 ? btns.map(b => b.id === 'keyboard' ? { ...b, on: state.keyboardOpen } : b) : btns);
 
   // Controls group: Talk at the natural default position, rows stacking below it.
@@ -806,20 +814,20 @@ function renderNow(): void {
   const talkProblem = mic.problem ?? (state.speech.ready ? null : state.speech.reason);
   const talkHeight = stripWidth * TALK_SIZE.h / TALK_SIZE.w;
   const talkY = CONTROLS_DEFAULT_Y;
-  inGroup('talk', JSON.stringify([[phase, talkProblem], edgeKey('talk')]), stripWidth * cS, onArc(0, talkY * cS, CONTROLS_DEFAULT_DISTANCE * cS), controlsOffset, withEdge('talk', c => { regions.set('talk', drawTalk(c, phase, talkProblem)); }));
+  inGroup('talk', JSON.stringify([[phase, talkProblem], edgeKey('talk')]), stripWidth * cS, onArc(0, CONTROLS_DEFAULT_Y, CONTROLS_DEFAULT_DISTANCE), controlsOffset, withEdge('talk', c => { regions.set('talk', drawTalk(c, phase, talkProblem)); }));
   used.add('talk');
   const controlsHeight = stripWidth * CONTROLS_SIZE.h / CONTROLS_SIZE.w;
   rows.forEach((buttons, i) => {
     const id = `controls-${i}`;
     const y = talkY - talkHeight / 2 - 0.012 - controlsHeight / 2 - i * (controlsHeight + 0.008);
-    inGroup(id, JSON.stringify([buttons, edgeKey(id)]), stripWidth * cS, onArc(0, y * cS, CONTROLS_DEFAULT_DISTANCE * cS), controlsOffset, withEdge(id, c => { regions.set(id, drawControls(c, buttons)); }));
+    inGroup(id, JSON.stringify([buttons, edgeKey(id)]), stripWidth * cS, onArc(0, controlsY(y), CONTROLS_DEFAULT_DISTANCE), controlsOffset, withEdge(id, c => { regions.set(id, drawControls(c, buttons)); }));
     used.add(id);
   });
 
   // Grab bar for the controls group: below the last controls row.
   const lastControlY = talkY - talkHeight / 2 - 0.012 - controlsHeight / 2 - (rows.length - 1) * (controlsHeight + 0.008);
   const ctrlBarY = lastControlY - controlsHeight / 2 - 0.012 - barPhysH / 2;
-  inGroup('bar:controls', JSON.stringify('controls'), stripWidth * cS, onArc(0, ctrlBarY * cS, CONTROLS_DEFAULT_DISTANCE * cS), controlsOffset, c => drawBar(c, 'Controls'));
+  inGroup('bar:controls', JSON.stringify('controls'), stripWidth * cS, onArc(0, controlsY(ctrlBarY), CONTROLS_DEFAULT_DISTANCE), controlsOffset, c => drawBar(c, 'Controls'));
   used.add('bar:controls');
   for (const id of [...scene.surfaces.keys()]) if (!used.has(id)) { scene.remove(id); canvases.delete(id); drawn.delete(id); }
   updatePage();
@@ -904,7 +912,7 @@ window.viewState = () => {
     ask: state.ask,
     drafts: shelf?.drafts ?? [],
     direct: state.direct,
-    voice: { feedback: state.voice.feedback, reading: state.voice.reading, trouble: state.voice.trouble, playing: player.playing, played: player.played, problem: player.problem },
+    voice: { feedback: state.voice.feedback, reading: state.voice.reading, trouble: state.voice.trouble, keepSpeech: state.voice.keepSpeech, playing: player.playing, played: player.played, problem: player.problem },
     immersive: scene.immersive,
     keyboardOpen: state.keyboardOpen,
     surfaces: [...scene.surfaces.keys()],

@@ -708,6 +708,20 @@ async function surfaceWorldWidth(page: Page, surface: string): Promise<number> {
   return p;
 }
 
+/**
+ * Measures the horizontal distance from the viewer origin to the centre of a surface.
+ * With the correct ASM-13 implementation the distance stays constant across scale changes.
+ */
+async function surfaceHorizontalDistance(page: Page, surface: string): Promise<number> {
+  const p = await page.evaluate((s) => {
+    const c = window.viewTest.worldPoint(s, 0.5, 0.5);
+    if (!c) return null;
+    return Math.hypot(c[0], c[2]); // xz-plane distance from origin; y is height, not depth
+  }, surface);
+  if (p === null) throw new Error(`Surface ${surface} not found`);
+  return p;
+}
+
 /** Reads screensScale and controlsScale from localStorage. */
 async function storedScales(page: Page): Promise<{ screensScale: number; controlsScale: number }> {
   const raw = await page.evaluate(() => localStorage.getItem('spatial-view-group-offsets'));
@@ -750,10 +764,19 @@ test('AC-9.1: edge grab of front panel right edge scales screens group bigger', 
   await expect.poll(async () => (await viewState(page)).surfaces).toContain('front');
 
   const widthBefore = await surfaceWorldWidth(page, 'front');
-  await dragFrontRightEdgeOut(page);
-  const widthAfter = await surfaceWorldWidth(page, 'front');
+  const distBefore = await surfaceHorizontalDistance(page, 'front');
+  await page.screenshot({ path: test.info().outputPath('front-before-scale-up.png') });
 
+  await dragFrontRightEdgeOut(page);
+
+  const widthAfter = await surfaceWorldWidth(page, 'front');
+  const distAfter = await surfaceHorizontalDistance(page, 'front');
+  await page.screenshot({ path: test.info().outputPath('front-after-scale-up.png') });
+
+  // Panel must be visibly bigger (world width grew) …
   expect(widthAfter, 'front panel grew after outward edge drag').toBeGreaterThan(widthBefore * 1.02);
+  // … and must stay at the same distance — angular size actually grew (not a zoom-out illusion).
+  expect(distAfter, 'front panel stays at same distance from viewer after scale-up').toBeCloseTo(distBefore, 1);
 
   const { screensScale } = await storedScales(page);
   expect(screensScale, 'screensScale > 1 after outward drag').toBeGreaterThan(1.0);
@@ -768,10 +791,14 @@ test('AC-9.1: edge drag inward scales screens group smaller', async ({ page }) =
   await expect.poll(async () => (await viewState(page)).surfaces).toContain('front');
 
   const widthBefore = await surfaceWorldWidth(page, 'front');
+  const distBefore = await surfaceHorizontalDistance(page, 'front');
   await dragFrontRightEdgeIn(page);
   const widthAfter = await surfaceWorldWidth(page, 'front');
+  const distAfter = await surfaceHorizontalDistance(page, 'front');
 
+  // Panel must be visibly smaller and must stay at the same distance.
   expect(widthAfter, 'front panel shrank after inward edge drag').toBeLessThan(widthBefore * 0.98);
+  expect(distAfter, 'front panel stays at same distance from viewer after scale-down').toBeCloseTo(distBefore, 1);
 
   const { screensScale } = await storedScales(page);
   expect(screensScale, 'screensScale < 1 after inward drag').toBeLessThan(1.0);
@@ -905,6 +932,9 @@ test('AC-9.1: bar:screens still moves the group after a scale change', async ({ 
   // Scale first.
   await dragFrontRightEdgeOut(page);
 
+  // Distance from viewer must still be the same as before the scale.
+  const distAfterScale = await surfaceHorizontalDistance(page, 'front');
+
   // Then drag the bar — group should still move.
   const frontBefore = await page.evaluate(() => window.viewTest.worldPoint('front', 0.5, 0.5)) as [number, number, number];
   await aim(page, 'controller', 'bar:screens', 0.5, 0.5);
@@ -916,8 +946,12 @@ test('AC-9.1: bar:screens still moves the group after a scale change', async ({ 
   await page.waitForTimeout(150);
   const frontAfter = await page.evaluate(() => window.viewTest.worldPoint('front', 0.5, 0.5)) as [number, number, number];
 
-  const dist = Math.hypot(frontAfter[0] - frontBefore[0], frontAfter[2] - frontBefore[2]);
-  expect(dist, 'screens group moved after scale + bar drag').toBeGreaterThan(0.01);
+  const movedDist = Math.hypot(frontAfter[0] - frontBefore[0], frontAfter[2] - frontBefore[2]);
+  expect(movedDist, 'screens group moved after scale + bar drag').toBeGreaterThan(0.01);
+
+  // After bar move the group must still be at approximately the same arc distance.
+  const distAfterMove = await surfaceHorizontalDistance(page, 'front');
+  expect(distAfterMove, 'front panel stays at same arc distance after bar move').toBeCloseTo(distAfterScale, 1);
 });
 
 test('AC-9.1: mouse drag of front panel right edge outward scales screens group bigger', async ({ page }) => {
@@ -997,4 +1031,39 @@ test('AC-9.1: edge drag of talk panel (controls group) scales controls group; sc
   expect(controlsScale, 'controlsScale > 1 after talk edge drag').toBeGreaterThan(1.0);
   expect(screensScale, 'screensScale unchanged after controls resize').toBeCloseTo(1.0, 2);
   expect(Math.abs(frontWidthAfter - frontWidthBefore) / (frontWidthBefore || 1), 'front panel unchanged').toBeLessThan(0.01);
+});
+
+test('AC-9.1: edge affordance screenshots — rest, hover and drag states on front and talk panels', async ({ page }) => {
+  test.setTimeout(90_000);
+  const shot = (name: string) => page.screenshot({ path: test.info().outputPath(`${name}.png`) });
+  r = await rig([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' as const }] }]);
+  await emulateQuest(page);
+  await pair(page, r);
+  await enterMixedReality(page);
+  await expect.poll(async () => (await viewState(page)).surfaces).toContain('front');
+
+  // Rest state: no ray near any edge.
+  await aim(page, 'controller', 'front', 0.5, 0.5);
+  await page.waitForTimeout(100);
+  await shot('edge-rest-front');
+
+  // Hover state on front panel right edge.
+  await aim(page, 'controller', 'front', 0.97, 0.5);
+  await page.waitForTimeout(200);
+  await shot('edge-hover-front');
+
+  // Drag state: trigger held on front panel right edge.
+  await setPressed(page, 'controller', 1);
+  await page.waitForTimeout(200);
+  await shot('edge-drag-front');
+  await setPressed(page, 'controller', 0);
+  await page.waitForTimeout(100);
+
+  // Rest and hover on the talk panel (a control panel).
+  await aim(page, 'controller', 'talk', 0.5, 0.5);
+  await page.waitForTimeout(100);
+  await shot('edge-rest-talk');
+  await aim(page, 'controller', 'talk', 0.97, 0.5);
+  await page.waitForTimeout(200);
+  await shot('edge-hover-talk');
 });

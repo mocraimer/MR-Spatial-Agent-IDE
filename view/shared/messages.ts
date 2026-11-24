@@ -89,7 +89,7 @@ export type BridgeEvent =
   | { type: 'direct'; on: boolean }
   | { type: 'speech'; speech: SpeechState }
   /** The voice settings: spoken feedback for commands, and reading each finished reply aloud. */
-  | { type: 'voice'; feedback: boolean; reading: boolean; /** The PC's voice failed and has not worked since. */ trouble: boolean; /** True while a fallback voice stands in (e.g. Windows while Kokoro loads). */ standingIn?: boolean }
+  | { type: 'voice'; feedback: boolean; reading: boolean; /** The PC's voice failed and has not worked since. */ trouble: boolean; /** True while a fallback voice stands in (e.g. Windows while Kokoro loads). */ standingIn?: boolean; /** Whether utterances are saved to disk as audio + text. */ keepSpeech?: boolean }
   /** A phrase to speak: the page fetches its audio from /api/say/<id>. */
   | { type: 'say'; id: string }
   /** The voice was stopped: the page ends the phrase it plays and drops the ones waiting. */
@@ -165,7 +165,7 @@ export function parseEvent(text: string): BridgeEvent | null {
     case 'speech':
       if (isObj(v.speech) && v.speech.ready === true) return { type: 'speech', speech: { ready: true } };
       return isObj(v.speech) && v.speech.ready === false && isStr(v.speech.reason) ? { type: 'speech', speech: { ready: false, reason: v.speech.reason } } : null;
-    case 'voice': return typeof v.feedback === 'boolean' && typeof v.reading === 'boolean' && typeof v.trouble === 'boolean' ? { type: 'voice', feedback: v.feedback, reading: v.reading, trouble: v.trouble, standingIn: v.standingIn === true } : null;
+    case 'voice': return typeof v.feedback === 'boolean' && typeof v.reading === 'boolean' && typeof v.trouble === 'boolean' ? { type: 'voice', feedback: v.feedback, reading: v.reading, trouble: v.trouble, standingIn: v.standingIn === true, keepSpeech: v.keepSpeech === true } : null;
     case 'say': return isStr(v.id) && /^[A-Za-z0-9-]{1,64}$/.test(v.id) ? { type: 'say', id: v.id } : null;
     case 'say-stop': return { type: 'say-stop' };
     case 'page': return isStr(v.action) ? { type: 'page', action: v.action } : null;
