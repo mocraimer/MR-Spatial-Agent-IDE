@@ -10,7 +10,7 @@
  * A.4: The bridge catches a delayed write (file written after the confirmation line prints).
  */
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { saveDefaults, restoreDefaults } from '../bridge/claude-settings.js';
@@ -238,6 +238,27 @@ test('A.4: bridge restores defaults when settings file is written after the conf
     else delete process.env.SPATIAL_CLAUDE_SETTINGS_FILE;
     if (prevDelay !== undefined) process.env.SPATIAL_CLAUDE_SETTINGS_WRITE_DELAY_MS = prevDelay;
     else delete process.env.SPATIAL_CLAUDE_SETTINGS_WRITE_DELAY_MS;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('atomicWrite unlinks the temp file when rename fails', () => {
+  // Make the directory read-only so renameSync cannot create the target file.
+  // Without the fix, a .settings-*.tmp file is left behind.
+  const dir = mkdtempSync('/tmp/svl-atomic-');
+  const path = join(dir, 'settings.json');
+  writeFileSync(path, '{"model":"foo"}\n', 'utf8');
+  const token = saveDefaults(path);
+  // Change the file so restoreDefaults has a delta to write.
+  writeFileSync(path, '{"model":"bar"}\n', 'utf8');
+  // Remove write permission from the dir so the rename fails.
+  chmodSync(dir, 0o555);
+  try {
+    assert.throws(() => restoreDefaults(token), 'restoreDefaults must throw when rename cannot complete');
+    const remaining = readdirSync(dir).filter(f => f.startsWith('.settings-') && f.endsWith('.tmp'));
+    assert.equal(remaining.length, 0, `no .settings-*.tmp files left behind; found: ${JSON.stringify(remaining)}`);
+  } finally {
+    chmodSync(dir, 0o755);
     rmSync(dir, { recursive: true, force: true });
   }
 });

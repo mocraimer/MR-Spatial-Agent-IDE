@@ -81,17 +81,22 @@ export async function startView(options: ViewOptions): Promise<RunningView> {
         kokoro_model,
         KOKORO_VOICE,
         windows,
-        () => { log('Kokoro voice ready'); },
+        () => {
+          log('Kokoro voice ready');
+          ref.bridge?.announceVoice(); // Broadcast updated voice state (standingIn → false).
+        },
         reason => {
           log(`Kokoro voice failed: ${reason}`);
           ref.bridge?.notice(`The Kokoro voice failed to load. The Windows voice is being used instead.`);
+          ref.bridge?.announceVoice(); // Broadcast voice state so pages show the trouble state.
         },
       );
     }
   }
   const mirrors = new Mirrors(herdr, options.windows ?? new HelperWindows(log), join(options.dataDirectory, 'mirror.sock'), log);
   const speechKeepDir = join(options.dataDirectory, 'speech-kept');
-  const bridge = new Bridge(herdr, mirror, speech, agents, { closeAnswerMs: options.closeAnswerMs, standbyAnswerMs: options.standbyAnswerMs, log, settings, mirrors, speechKeepDir, ...(voice ? { voice } : {}), ...(options.transcripts ? { transcripts: options.transcripts } : {}), ...(options.confirmMs ? { confirmMs: options.confirmMs } : {}) });
+  const fitDataDir = options.dataDirectory;
+  const bridge = new Bridge(herdr, mirror, speech, agents, { closeAnswerMs: options.closeAnswerMs, standbyAnswerMs: options.standbyAnswerMs, log, settings, mirrors, speechKeepDir, fitDataDir, ...(voice ? { voice } : {}), ...(options.transcripts ? { transcripts: options.transcripts } : {}), ...(options.confirmMs ? { confirmMs: options.confirmMs } : {}) });
   ref.bridge = bridge;
   const closeServer: NetServer = serveCloseRequests(closeSocket, ref => bridge.requestClose(ref), log);
   mirrors.serve(order => bridge.mirrorOrder(order));

@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { saveDefaults } from '../bridge/claude-settings.js';
 import { HerdrBench } from '../bench/bench.js';
 import type { LevelAgents } from '../bridge/agents.js';
 import { Bridge, type Transcriber } from '../bridge/bridge.js';
@@ -180,4 +181,71 @@ test('a Herdr call may wait longer than the default when it asks to: a slow answ
     await assert.rejects(client.call('agent.start', {}), /did not answer agent.start within 5000 ms/);
     assert.deepEqual(await client.call('agent.start', {}, 8000), { type: 'ok' });
   } finally { server.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('Fix-#3: announceVoice broadcasts the voice state including standingIn to connected pages', async () => {
+  // Pages connect before Kokoro has finished loading. While loading, the voice is "standing in"
+  // for Windows (standingIn=true). Once Kokoro fires its onReady callback, the bridge calls
+  // announceVoice() so connected pages learn the state changed.
+  //
+  // This test verifies that announceVoice() is a public method (required for view.ts to call it
+  // from the Kokoro callback) and that it broadcasts a voice event with the correct standingIn flag.
+  const s = await setup();
+  try {
+    // A fake voice that starts standing in (simulating Kokoro still loading).
+    let standing = true;
+    const fakeVoice = {
+      async speak() { return; },
+      stop() { return; },
+      standingIn: () => standing,
+    };
+    // Inject the fake voice via the bridge's internal voice field.
+    (s.bridge as unknown as Record<string, unknown>).voice = fakeVoice;
+    (s.bridge as unknown as Record<string, unknown>).say = null;
+
+    const voiceEvents: Array<{ standingIn: boolean | undefined }> = [];
+    const disconnect = s.bridge.connect(ev => {
+      if (ev.type === 'voice') voiceEvents.push({ standingIn: ev.standingIn });
+    });
+    try {
+      // Simulate Kokoro onReady: standing in transitions to false, then announceVoice() is called.
+      standing = false;
+      s.bridge.announceVoice();
+
+      assert.ok(voiceEvents.length >= 1, `voice event must have been broadcast; got ${voiceEvents.length}`);
+      assert.equal(voiceEvents[voiceEvents.length - 1]?.standingIn, false, 'standingIn=false after Kokoro ready');
+    } finally {
+      disconnect();
+    }
+  } finally { await s.stop(); }
+});
+
+test('Fix-#5: bridge.stop() drains a pending watchLoop settings token', async () => {
+  // If the bridge is stopped while a /model watchLoop is still running (within 4 s),
+  // the token must still be restored by stop(). Without the fix, stop() was synchronous
+  // and never touched pendingRestoreToken; the loop could run after the new bridge started.
+  const s = await setup();
+  const dir = mkdtempSync('/tmp/svl-bridge-stop-');
+  try {
+    const settingsPath = join(dir, 'settings.json');
+    writeFileSync(settingsPath, `{"model":"claude-opus-4-5"}\n`, 'utf8');
+
+    // Simulate the state at the moment the /model watchLoop is running: saveDefaults was
+    // called, Claude Code has since written the changed model, but the loop has not yet
+    // restored because RESTORE_WATCH_MS has not elapsed.
+    const token = saveDefaults(settingsPath);
+    writeFileSync(settingsPath, `{"model":"claude-sonnet-5-5"}\n`, 'utf8');
+
+    // Inject the pending token as if the watchLoop had just started.
+    (s.bridge as unknown as Record<string, unknown>).pendingRestoreToken = token;
+
+    // Stop the bridge. With the fix, this drains the pending token immediately.
+    s.bridge.stop();
+
+    const restored = JSON.parse(readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
+    assert.equal(restored.model, 'claude-opus-4-5', 'pending token restored synchronously on stop()');
+  } finally {
+    await s.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

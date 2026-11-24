@@ -11,6 +11,8 @@
  * period with no page connected. If the owner resizes the window by hand during the session, the
  * bridge detects the change and keeps that size on restore instead of its own (B.4).
  */
+import { readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { join } from 'node:path';
 import type { HerdrClient } from './herdr.js';
 import type { Windows, WindowRect } from './windows.js';
 import { FRONT_COLS } from '../shared/front-cols.js';
@@ -244,3 +246,44 @@ function rectEq(a: WindowRect, b: WindowRect): boolean {
 }
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
+/** File name for persisted fit state inside the data directory. */
+const FIT_STATE_FILE = 'fit-state.json';
+
+/**
+ * Writes the fitted window's original rect to `dir/fit-state.json` so a restarted bridge
+ * can restore the window even without having been the one that fitted it.
+ * Called after fitWindow successfully sets state.hwnd for the first time.
+ */
+export function persistFitState(state: FitState, dir: string): void {
+  if (!state.hwnd || !state.restoreRect) return;
+  const { hwnd, restoreRect, restoreMaximized } = state;
+  try {
+    writeFileSync(join(dir, FIT_STATE_FILE), JSON.stringify({ hwnd, restoreRect, restoreMaximized }) + '\n', 'utf8');
+  } catch { /* best effort */ }
+}
+
+/**
+ * Loads persisted fit state from `dir/fit-state.json` into `state`.
+ * Called at bridge startup before the first connect(); if no file exists, it is a no-op.
+ */
+export function loadFitState(state: FitState, dir: string): void {
+  try {
+    const data = JSON.parse(readFileSync(join(dir, FIT_STATE_FILE), 'utf8')) as unknown;
+    if (typeof data !== 'object' || data === null) return;
+    const d = data as Record<string, unknown>;
+    if (typeof d.hwnd !== 'number' || typeof d.restoreRect !== 'object' || d.restoreRect === null) return;
+    const r = d.restoreRect as Record<string, unknown>;
+    if (typeof r.left !== 'number' || typeof r.top !== 'number' || typeof r.right !== 'number' || typeof r.bottom !== 'number') return;
+    state.hwnd = d.hwnd;
+    state.restoreRect = { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+    state.restoreMaximized = d.restoreMaximized === true;
+  } catch { /* file not present or corrupt — not an error */ }
+}
+
+/**
+ * Removes the persisted fit state file after the window has been restored.
+ */
+export function clearFitState(dir: string): void {
+  try { unlinkSync(join(dir, FIT_STATE_FILE)); } catch { /* file may not exist */ }
+}

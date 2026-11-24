@@ -24,7 +24,7 @@ import type { Voice } from './tts.js';
 import { Mirrors } from './mirrors.js';
 import { addProject, folders, loose as squeezed, makeProject, newProjectRoot, projectRoots, takenFolders } from './projects.js';
 import type { Frame, Windows } from './windows.js';
-import { fitWindow, restoreWindow, newFitState, RESTORE_GRACE_MS, type FitState } from './window-fit.js';
+import { fitWindow, restoreWindow, newFitState, persistFitState, loadFitState, clearFitState, RESTORE_GRACE_MS, type FitState } from './window-fit.js';
 import { FRONT_COLS } from '../shared/front-cols.js';
 
 export interface Transcriber { state(): SpeechState; transcribe(audio: Float32Array): Promise<string> }
@@ -81,6 +81,12 @@ export interface BridgeOptions {
   claudeSettingsPath?: string | null;
   /** Where kept utterance WAVs and texts are stored; without it, keeping speech is a no-op. */
   speechKeepDir?: string;
+  /**
+   * Directory for persisting window fit state across bridge restarts. When set, the bridge writes
+   * fit-state.json after a successful fit and clears it after restore; on startup it loads any
+   * previously persisted state so a restarted bridge can restore the window correctly.
+   */
+  fitDataDir?: string;
 }
 /** What a command came to; `silent` marks one whose own speech is the answer. */
 type Result = { ok: boolean; outcome: string; silent?: true; say?: string };
@@ -191,18 +197,26 @@ export class Bridge {
   /** Path to the Claude Code settings file for restoring model/effort defaults; null to skip. */
   private readonly settingsFilePath: string | null;
   /** State for the terminal window fitting (Deliverable 1). */
-  private readonly fitState: FitState = newFitState();
+  /** @internal Exposed for tests only. */
+  readonly fitState: FitState = newFitState();
   /** Timer that restores the terminal window after all pages leave mixed reality. */
   private restoreTimer: NodeJS.Timeout | null = null;
   /** Pages currently in mixed reality, by per-connection pageId. */
   private readonly mrPages = new Set<string>();
   /** The last focused session id during a fit session, so re-fits happen on change. */
   private lastFitFocusId: string | null = null;
-  /** Serialization: the pending fit promise (newer call supersedes an in-flight one). */
+  /** Monotonic counter used to supersede queued fit calls. */
   private fitSeq = 0;
+  /** Chain that serialises fitWindow calls so they never run concurrently. */
+  private fitChain: Promise<void> = Promise.resolve();
   /** Interval timer that polls front-pane width while in mixed reality to catch layout changes. */
   private layoutPollTimer: ReturnType<typeof setInterval> | null = null;
   private readonly speechKeepDir: string | undefined;
+  private readonly fitDataDir: string | undefined;
+  /** Set true when stop() is called; lets the watchLoop exit early. */
+  private stopped = false;
+  /** The restore token from the most recent live watchLoop (null when no loop is running). */
+  private pendingRestoreToken: ReturnType<typeof saveDefaults> | null = null;
 
   constructor(
     private readonly herdr: HerdrClient,
@@ -225,6 +239,8 @@ export class Bridge {
     this.settingsFilePath = options.claudeSettingsPath !== undefined ? options.claudeSettingsPath : claudeSettingsPath();
     this.pickerIdleMs = options.pickerIdleMs ?? PICKER_IDLE_MS;
     this.speechKeepDir = options.speechKeepDir;
+    this.fitDataDir = options.fitDataDir;
+    if (options.fitDataDir) loadFitState(this.fitState, options.fitDataDir);
     agents.onChange(() => { this.logAgentStarts(); this.broadcast({ type: 'shelf', shelf: this.shelf() }); });
     mirror.listen({
       shelf: shelf => {
@@ -253,11 +269,17 @@ export class Bridge {
     this.noteTimer.unref();
   }
 
-  /** Clears the bridge's own timers. The view stops the mirror and the window mirrors itself. */
+  /** Clears the bridge's own timers and runs a final settings restore if one is pending. */
   stop(): void {
+    this.stopped = true;
     clearInterval(this.noteTimer);
     if (this.picker) clearTimeout(this.picker.timer);
     for (const f of this.frames.values()) if (f.timer) clearTimeout(f.timer);
+    if (this.pendingRestoreToken) {
+      const token = this.pendingRestoreToken;
+      this.pendingRestoreToken = null;
+      try { restoreDefaults(token); } catch { /* best effort */ }
+    }
   }
 
   /** Herdr's sessions as the mirror holds them, with which level agents are starting or failed. */
@@ -327,7 +349,9 @@ export class Bridge {
         // Explicit leave: restore promptly (no grace period needed).
         if (this.restoreTimer) { clearTimeout(this.restoreTimer); this.restoreTimer = null; }
         this.lastFitFocusId = null;
-        void restoreWindow(this.fitState, { log: this.log, windows: this.mirrors.windowHelper() }).catch(() => undefined);
+        void restoreWindow(this.fitState, { log: this.log, windows: this.mirrors.windowHelper() })
+          .then(() => { if (this.fitDataDir) clearFitState(this.fitDataDir); })
+          .catch(() => undefined);
       }
     }
   }
@@ -338,7 +362,9 @@ export class Bridge {
     this.restoreTimer = setTimeout(() => {
       this.restoreTimer = null;
       this.lastFitFocusId = null;
-      void restoreWindow(this.fitState, { log: this.log, windows: this.mirrors.windowHelper() }).catch(() => undefined);
+      void restoreWindow(this.fitState, { log: this.log, windows: this.mirrors.windowHelper() })
+        .then(() => { if (this.fitDataDir) clearFitState(this.fitDataDir); })
+        .catch(() => undefined);
     }, RESTORE_GRACE_MS);
     this.restoreTimer.unref();
   }
@@ -376,16 +402,23 @@ export class Bridge {
    * Runs a window fit for the current focused session. Serialized: each call gets a sequence
    * number; the promise abandons work if superseded by a newer call.
    */
-  private async doFit(): Promise<void> {
-    if (this.mrPages.size === 0) return;
+  private doFit(): Promise<void> {
+    // Append to the chain so only one fitWindow runs at a time (concurrent calls would
+    // both overwrite fitState.restoreRect with the already-fitted rect).
     const seq = ++this.fitSeq;
-    const shelf = this.shelf();
-    const front = shelf.sessions.find(s => s.id === shelf.focusedId);
-    if (!front) return;
-    if (seq !== this.fitSeq) return; // Superseded.
-    const workspaceLabel = shelf.projects.find(p => p.id === front.workspaceId)?.label ?? '';
-    const notice = (text: string) => this.broadcast({ type: 'notice', text });
-    await fitWindow(front.id, workspaceLabel, this.fitState, { log: this.log, notice, herdr: this.herdr, windows: this.mirrors.windowHelper() });
+    const chain = this.fitChain.then(async () => {
+      if (seq !== this.fitSeq) return; // Superseded while waiting in the chain.
+      if (this.mrPages.size === 0) return;
+      const shelf = this.shelf();
+      const front = shelf.sessions.find(s => s.id === shelf.focusedId);
+      if (!front) return;
+      const workspaceLabel = shelf.projects.find(p => p.id === front.workspaceId)?.label ?? '';
+      const notice = (text: string) => this.broadcast({ type: 'notice', text });
+      await fitWindow(front.id, workspaceLabel, this.fitState, { log: this.log, notice, herdr: this.herdr, windows: this.mirrors.windowHelper() });
+      if (this.fitDataDir && this.fitState.hwnd !== null) persistFitState(this.fitState, this.fitDataDir);
+    }).catch(() => undefined);
+    this.fitChain = chain;
+    return chain;
   }
 
   /** Sends a notice to every connected page. */
@@ -857,13 +890,15 @@ export class Bridge {
         }
       };
       tryRestore();
-      // Keep watching until the guard window closes.
+      // Keep watching until the guard window closes or the bridge is stopped.
+      this.pendingRestoreToken = token;
       const watchLoop = async () => {
-        while (Date.now() < watchUntil) {
+        while (Date.now() < watchUntil && !this.stopped) {
           await new Promise(r => setTimeout(r, 200));
-          if (!token) break;
+          if (!token || this.stopped) break;
           try { restoreDefaults(token); } catch { /* will be caught on the next full tryRestore */ }
         }
+        if (this.pendingRestoreToken === token) this.pendingRestoreToken = null;
       };
       void watchLoop().catch(() => undefined);
       // Immediate restore is enough for the returned outcome.
@@ -891,7 +926,7 @@ export class Bridge {
     return { ok: true, outcome: (on ? 'Reading each finished reply aloud. Say “stop reading replies” to stop.' : 'Replies are not read aloud.') + note + saved, silent: true };
   }
 
-  private announceVoice(): void {
+  announceVoice(): void {
     const standingIn = this.voice?.standingIn?.() ?? false;
     this.broadcast({ type: 'voice', feedback: this.settings.voice, reading: this.settings.readReplies, trouble: this.say?.failed ?? false, standingIn });
   }

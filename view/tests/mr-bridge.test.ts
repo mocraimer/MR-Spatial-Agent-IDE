@@ -16,6 +16,7 @@ import { Bridge, type Transcriber } from '../bridge/bridge.js';
 import { DEFAULT_MIRROR, Mirror } from '../bridge/mirror.js';
 import { Mirrors } from '../bridge/mirrors.js';
 import type { Windows, WindowRect, FoundWindow } from '../bridge/windows.js';
+import { newFitState, persistFitState, restoreWindow } from '../bridge/window-fit.js';
 import type { BridgeEvent } from '../shared/messages.js';
 
 const noAgents: LevelAgents = {
@@ -217,6 +218,106 @@ test('Fix-4: layout-change poll re-fits when the front pane grows above FRONT_CO
       disconnect();
       mirror.stop();
     }
+  } finally {
+    await bench.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+// ── Fix: doFit serialization ──────────────────────────────────────────────────────────────────────
+
+test('Fix: concurrent doFit calls do not corrupt restoreRect with the already-fitted rect', async () => {
+  // Before the fix, two concurrent doFit calls both passed the supersede check before either
+  // ran fitWindow. The second call overwrote fitState.restoreRect with the already-fitted
+  // (narrowed) rect, so restoreWindow would restore to the wrong (narrow) size.
+  //
+  // With the fix (fitChain), the second call waits for the first to finish before it runs.
+  // After the first fit the front-pane seq is bumped, so the second call is superseded and
+  // skips fitWindow entirely — restoreRect stays correct.
+  const bench = await HerdrBench.start([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' }] }]);
+  const dataDir = mkdtempSync('/tmp/svmr-conc-');
+  try {
+    patchPaneLayout(bench.client, 160); // pane starts at 160 cols → needs fit
+    const originalRect = { left: 0, top: 0, right: 1920, bottom: 1200 };
+    const fake = makeFakeWindows({ initialRect: { ...originalRect } });
+    const mirrors = new Mirrors(bench.client, fake.windows, bench.socketPath);
+    const mirror = new Mirror(bench.client, DEFAULT_MIRROR);
+    const speech = new FakeSpeech();
+    const bridge = new Bridge(bench.client, mirror, speech, noAgents, {
+      mirrors, claudeSettingsPath: null,
+    });
+    mirror.start();
+    await bench.waitFor(async () => mirror.shelf().sessions.length === 1, 'session in mirror');
+
+    const { pageId, disconnect } = await getPageId(bridge);
+    try {
+      // Fire three concurrent setMixedReality calls to trigger concurrent doFit chains.
+      bridge.setMixedReality(pageId, true);
+      bridge.setMixedReality(pageId, true);
+      bridge.setMixedReality(pageId, true);
+      await sleep(2000);
+
+      // After all fits have settled, restoreRect should be the ORIGINAL wide rect, not the
+      // already-fitted narrow rect. If concurrent calls corrupt state, restoreRect will equal
+      // the narrow fitted rect (less than the original width).
+      const restoreRect = bridge.fitState.restoreRect;
+      assert.ok(restoreRect !== null, 'restoreRect must be set after fit');
+      const restoreWidth = restoreRect!.right - restoreRect!.left;
+      const originalWidth = originalRect.right - originalRect.left;
+      assert.equal(restoreWidth, originalWidth,
+        `restoreRect must be the ORIGINAL width (${originalWidth}), not the fitted width; got ${restoreWidth}`);
+    } finally {
+      disconnect();
+      mirror.stop();
+    }
+  } finally {
+    await bench.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+// ── Fix-#2: fit-state persistence across bridge restarts ─────────────────────────────────────────
+
+test('Fix-#2: a restarted bridge loads persisted fit state and can restore the window', async () => {
+  // The bridge persists {hwnd, restoreRect, restoreMaximized} after each fit so a restarted
+  // bridge can restore the window without having been the one that fitted it.
+  //
+  // This test verifies the round-trip: persistFitState → loadFitState (via Bridge constructor) →
+  // restoreWindow uses the loaded rect, not null/zero.
+  const bench = await HerdrBench.start([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' }] }]);
+  const dataDir = mkdtempSync('/tmp/svmr-persist-');
+  try {
+    const originalRect = { left: 0, top: 0, right: 1920, bottom: 1200 };
+    const fake = makeFakeWindows({ initialRect: { left: 0, top: 0, right: 1440, bottom: 1200 } });
+
+    // ── Simulate Bridge A's fit: write the fit state directly (avoids the REFLOW_WAIT_MS loop). ──
+    const stateA = newFitState();
+    stateA.hwnd = 42;                                       // the terminal window's hwnd
+    stateA.restoreRect = { ...originalRect };               // original wide rect
+    stateA.restoreMaximized = false;
+    stateA.lastFitRect = { left: 0, top: 0, right: 1440, bottom: 1200 };  // fitted rect
+    persistFitState(stateA, dataDir);
+
+    // ── Bridge B: constructor loads the persisted state ──────────────────────────────────────────
+    const mirrorB = new Mirror(bench.client, DEFAULT_MIRROR);
+    const bridgeB = new Bridge(bench.client, mirrorB, new FakeSpeech(), noAgents, {
+      mirrors: new Mirrors(bench.client, fake.windows, bench.socketPath),
+      claudeSettingsPath: null, fitDataDir: dataDir,
+    });
+
+    // After construction, Bridge B must have the loaded state.
+    assert.equal(bridgeB.fitState.hwnd, 42, 'bridge B loaded hwnd from persisted state');
+    assert.deepEqual(bridgeB.fitState.restoreRect, originalRect, 'bridge B loaded restoreRect from persisted state');
+
+    // Directly restore: Bridge B uses the loaded restoreRect (original wide rect).
+    // The current fake rect is 1440px (the fitted rect from Bridge A); after restore it must be 1920px.
+    await restoreWindow(bridgeB.fitState, { log: () => undefined, windows: fake.windows });
+
+    const restoredWidth = fake.currentRect.right - fake.currentRect.left;
+    assert.equal(restoredWidth, originalRect.right - originalRect.left,
+      `bridge B must restore to original width (${originalRect.right - originalRect.left}); got ${restoredWidth}`);
+
+    mirrorB.stop();
   } finally {
     await bench.stop();
     rmSync(dataDir, { recursive: true, force: true });

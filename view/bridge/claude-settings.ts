@@ -12,7 +12,7 @@
  */
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { readFileSync, writeFileSync, renameSync, mkdirSync, statSync, chmodSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, unlinkSync, mkdirSync, statSync, chmodSync, existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 
 /** Resolves the Claude settings file path, respecting CLAUDE_CONFIG_DIR. */
@@ -62,7 +62,12 @@ function atomicWrite(path: string, content: string): void {
   if (mode !== undefined) {
     try { chmodSync(tmp, mode); } catch { /* best effort */ }
   }
-  renameSync(tmp, path);
+  try {
+    renameSync(tmp, path);
+  } catch (err) {
+    try { unlinkSync(tmp); } catch { /* best effort */ }
+    throw err;
+  }
 }
 
 export interface SaveToken {
