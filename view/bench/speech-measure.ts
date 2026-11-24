@@ -8,7 +8,8 @@
  *
  * Run after building:
  *   node build/view/bench/speech-measure.js --model <id> --dtype <dtype> \
- *     --dataset <dir> --models-dir <dir> [--runs N] [--noise]
+ *     --dataset <dir> --models-dir <dir> [--runs N] [--noise] [--long-only]
+ *     [--split-at-pauses] [--collapse-repeats]
  *
  * Measurement discipline:
  *   - Fixed run count (--runs, default 1); each run uses the same utterance order.
@@ -17,10 +18,13 @@
  *     WER on noisy input must be worse or equal (confirms the scorer is sensitive to accuracy).
  *   - Run-to-run variation: std-dev of per-utterance times across runs reported.
  *   - All candidates use the same number of warm-up calls and ORT threads (env.NUM_THREADS=1).
+ *   - loop-count: utterances where the hypothesis has repeat-loop artifacts (same 1–3-word phrase
+ *     3+ times consecutively) that the reference does not have; indicates hallucination loops.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { env, pipeline } from '@huggingface/transformers';
+import { splitAtPauses, collapseRepeats } from '../bridge/speech.js';
 
 // --------------- CLI args ---------------
 const args = process.argv.slice(2);
@@ -28,13 +32,16 @@ const get = (flag: string, def: string): string => { const i = args.indexOf(flag
 const getNum = (flag: string, def: number): number => { const v = get(flag, ''); return v ? Number(v) || def : def; };
 const getFlag = (flag: string): boolean => args.includes(flag);
 
-const MODEL_ID   = get('--model',      process.env.SPEECH_MODEL  ?? 'onnx-community/moonshine-tiny-ONNX');
-const DTYPE      = get('--dtype',      process.env.SPEECH_DTYPE  ?? 'q8');
-const DATASET    = get('--dataset',    process.env.SPEECH_DATASET ?? './speech-dataset');
-const MODELS_DIR = get('--models-dir', process.env.SPEECH_MODELS  ?? './models');
-const OUT_DIR    = get('--out',        '.');
-const RUNS       = getNum('--runs', 1);
-const DO_NOISE   = getFlag('--noise');
+const MODEL_ID       = get('--model',      process.env.SPEECH_MODEL  ?? 'onnx-community/moonshine-tiny-ONNX');
+const DTYPE          = get('--dtype',      process.env.SPEECH_DTYPE  ?? 'q8');
+const DATASET        = get('--dataset',    process.env.SPEECH_DATASET ?? './speech-dataset');
+const MODELS_DIR     = get('--models-dir', process.env.SPEECH_MODELS  ?? './models');
+const OUT_DIR        = get('--out',        '.');
+const RUNS           = getNum('--runs', 1);
+const DO_NOISE       = getFlag('--noise');
+const LONG_ONLY      = getFlag('--long-only');
+const SPLIT_PAUSES   = getFlag('--split-at-pauses');
+const DO_COLLAPSE    = getFlag('--collapse-repeats');
 
 // --------------- WER helpers ---------------
 function normalize(s: string): string {
@@ -75,6 +82,33 @@ function stddev(arr: number[]): number {
   const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
   const variance = arr.map(x => (x - mean) ** 2).reduce((a, b) => a + b, 0) / (arr.length - 1);
   return Math.sqrt(variance);
+}
+
+/**
+ * Count the number of distinct repeat-loop groups in `text`: positions where the same 1–3-word
+ * phrase appears 3 or more times consecutively (case/punctuation-insensitive). Returns the count
+ * of such groups so callers can compare hypothesis vs. reference to identify artifacts.
+ */
+function countRepeatGroups(text: string): number {
+  if (!text) return 0;
+  const words = text.trim().split(/\s+/);
+  let groups = 0;
+  let i = 0;
+  while (i < words.length) {
+    let found = false;
+    for (let len = Math.min(3, Math.floor((words.length - i) / 3)); len >= 1; len--) {
+      const phrase = words.slice(i, i + len).map(w => w.toLowerCase().replace(/[^\w]/g, ''));
+      let count = 1;
+      while (i + count * len + len <= words.length) {
+        const next = words.slice(i + count * len, i + count * len + len).map(w => w.toLowerCase().replace(/[^\w]/g, ''));
+        if (next.length !== len || next.some((w, j) => w !== phrase[j])) break;
+        count++;
+      }
+      if (count >= 3) { groups++; i += count * len; found = true; break; }
+    }
+    if (!found) i++;
+  }
+  return groups;
 }
 
 /** Add white noise at ~20dB SNR (noise amplitude ≈ 10% of RMS signal). */
@@ -201,18 +235,32 @@ async function loadTransformersModel(modelId: string, dtype: string): Promise<Tr
   // Moonshine streaming architecture requires audio padded to multiples of frame_len=80.
   const needsPad = modelId.toLowerCase().includes('streaming');
   return async (audio: Float32Array) => {
+    if (SPLIT_PAUSES) {
+      // Mirror the production path: split at pauses into ≤10s chunks, then optionally collapse.
+      const chunks = splitAtPauses(audio);
+      const parts: string[] = [];
+      for (const rawChunk of chunks) {
+        const chunk = needsPad ? padToFrameLen(rawChunk) : rawChunk;
+        const out = await rec(chunk);
+        const rs = Array.isArray(out) ? out : [out];
+        parts.push(rs.map(r => (r as { text?: string }).text ?? '').join(' ').trim());
+      }
+      const joined = parts.filter(Boolean).join(' ').trim();
+      return DO_COLLAPSE ? collapseRepeats(joined) : joined;
+    }
     const input = needsPad ? padToFrameLen(audio) : audio;
     const out = await rec(input);
     const parts = Array.isArray(out) ? out : [out];
-    return parts.map(r => (r as { text?: string }).text ?? '').join(' ').trim();
+    const text = parts.map(r => (r as { text?: string }).text ?? '').join(' ').trim();
+    return DO_COLLAPSE ? collapseRepeats(text) : text;
   };
 }
 
 // --------------- Main ---------------
 console.log(`\nSpeech measurement: ${MODEL_ID} (${DTYPE})`);
-console.log(`Dataset: ${DATASET}`);
+console.log(`Dataset: ${DATASET}${LONG_ONLY ? ' (long only)' : ''}`);
 console.log(`Models cache: ${MODELS_DIR}`);
-console.log(`Runs: ${RUNS}  Noise check: ${DO_NOISE}\n`);
+console.log(`Runs: ${RUNS}  Noise check: ${DO_NOISE}  Split pauses: ${SPLIT_PAUSES}  Collapse repeats: ${DO_COLLAPSE}\n`);
 
 mkdirSync(MODELS_DIR, { recursive: true });
 
@@ -224,15 +272,16 @@ const transcribe = MODEL_ID === 'parakeet-int8'
 const loadMs = Date.now() - t0;
 console.log(`Model loaded in ${loadMs} ms.\n`);
 
-const utterances = loadDataset(DATASET);
-console.log(`Dataset: ${utterances.length} utterances (${utterances.filter(u => u.long).length} long)\n`);
+const allUtterances = loadDataset(DATASET);
+const utterances = LONG_ONLY ? allUtterances.filter(u => u.long) : allUtterances;
+console.log(`Dataset: ${utterances.length} utterances (${utterances.filter(u => u.long).length} long)${LONG_ONLY ? ' [--long-only]' : ''}\n`);
 
 // 3 warm-up calls on silence so JIT/ORT is fully warm before the measured run.
 const silence1s = new Float32Array(16000);
 for (let w = 0; w < 3; w++) await transcribe(silence1s);
 console.log('Warm-up done (3 passes on silence).\n');
 
-type RunResult = { id: string; ref: string; hyp: string; wer: number; ms: number; long: boolean };
+type RunResult = { id: string; ref: string; hyp: string; wer: number; ms: number; long: boolean; loopCount: number };
 
 // Fixed run count so variation is reproducible.
 const allRuns: RunResult[][] = [];
@@ -244,7 +293,9 @@ for (let run = 0; run < RUNS; run++) {
     const hyp = await transcribe(u.audio);
     const ms = Date.now() - t;
     const w = wer(u.ref, hyp);
-    results.push({ id: u.id, ref: u.ref, hyp, wer: w, ms, long: u.long });
+    // Loops: repeat groups in hypothesis not present in reference (artifact indicator).
+    const loopCount = Math.max(0, countRepeatGroups(hyp) - countRepeatGroups(u.ref));
+    results.push({ id: u.id, ref: u.ref, hyp, wer: w, ms, long: u.long, loopCount });
     process.stdout.write('.');
   }
   console.log('');
@@ -277,7 +328,7 @@ if (DO_NOISE) {
     const t = Date.now();
     const hyp = await transcribe(noisyAudio);
     const ms = Date.now() - t;
-    noiseResults.push({ id: u.id, ref: u.ref, hyp, wer: wer(u.ref, hyp), ms, long: u.long });
+    noiseResults.push({ id: u.id, ref: u.ref, hyp, wer: wer(u.ref, hyp), ms, long: u.long, loopCount: 0 });
     process.stdout.write('n');
   }
   console.log('');
@@ -288,14 +339,18 @@ if (DO_NOISE) {
   console.log(noiseNote);
 }
 
+const totalLoops = results.reduce((a, r) => a + r.loopCount, 0);
+
 console.log('\n=== Summary ===');
 console.log(`Model:                 ${MODEL_ID}`);
 console.log(`Dtype:                 ${DTYPE}`);
 console.log(`Utterances:            ${results.length} (${results.filter(r => r.long).length} long)`);
 console.log(`Runs:                  ${RUNS}`);
+console.log(`Split at pauses:       ${SPLIT_PAUSES}  Collapse repeats: ${DO_COLLAPSE}`);
 console.log(`WER (all):             ${(allWer.reduce((a, b) => a + b, 0) / allWer.length * 100).toFixed(1)}%`);
 const longWer = results.filter(r => r.long).map(r => r.wer);
 console.log(`WER (long):            ${longWer.length > 0 ? (longWer.reduce((a, b) => a + b, 0) / longWer.length * 100).toFixed(1) + '%' : 'n/a'}`);
+console.log(`Loop count (total):    ${totalLoops}  (utterances with artifact repeats not in reference)`);
 console.log(`Median warm ms (all):  ${median(allMs).toFixed(0)}`);
 console.log(`Median warm ms (long): ${longMs.length > 0 ? median(longMs).toFixed(0) : 'n/a'}`);
 console.log(`p95 ms (all):          ${p95(allMs).toFixed(0)}`);
@@ -306,10 +361,13 @@ console.log(noiseNote);
 // Save results to --out dir (defaults to current directory, never the models dir).
 const outFile = join(OUT_DIR, `speech-measure-${MODEL_ID.replace(/[^a-z0-9]/gi, '-')}-${DTYPE}-${Date.now()}.json`);
 writeFileSync(outFile, JSON.stringify({
-  model: MODEL_ID, dtype: DTYPE, loadMs, runs: RUNS, results,
+  model: MODEL_ID, dtype: DTYPE, loadMs, runs: RUNS,
+  splitAtPauses: SPLIT_PAUSES, collapseRepeats: DO_COLLAPSE,
+  results,
   summary: {
     wer_all: +(allWer.reduce((a, b) => a + b, 0) / allWer.length * 100).toFixed(2),
     wer_long: longWer.length > 0 ? +(longWer.reduce((a, b) => a + b, 0) / longWer.length * 100).toFixed(2) : null,
+    loop_count: totalLoops,
     median_ms: +median(allMs).toFixed(0),
     p95_ms: +p95(allMs).toFixed(0),
     load_ms: loadMs,

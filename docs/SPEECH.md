@@ -72,7 +72,37 @@ Winner per ADR [20261123-speech-model-chosen-by-measurement](adr/20261123-speech
 lowest WER among candidates with median warm time ≤1100 ms on the full dataset.
 `Workmind/moonshine-streaming-small-ONNX` (quantized) wins: WER 7.7 % at 963 ms median.
 
+## AC-3.2 evidence — long-utterance loop-count and WER (2026-11-24, dataset v2 long subset)
+
+Subset: 30 long utterances (15–26 s) from LibriSpeech test-other, dataset v2.
+
+**Loop count** — utterances where the hypothesis has repeat-loop groups (same 1–3-word phrase, 3+
+times consecutively) that the reference does not have. Counts artifact loops only; legitimate
+repeats in the reference are excluded.
+
+| Candidate | WER long | Loop count | Median ms (long) | Pipeline |
+|---|---|---|---|---|
+| `moonshine-tiny-ONNX` q8 | 8.7 % | 0 | 743 ms | unsplit, no collapse |
+| `moonshine-streaming-small-ONNX` quantized | **6.3 %** | **0** | 2290 ms | split-at-pauses + collapse-repeats |
+
+The streaming-small path splits long audio at pauses into ≤10 s chunks and runs each through the
+model, then collapses any repeat artifacts. No repeat loops appeared on this 30-utterance frozen
+subset — `collapseRepeats` is a correctness guard against artifacts that occur in
+practice on out-of-distribution speech or longer pauses. The 2290 ms median reflects total time
+across all chunks for each utterance (each long utterance produces 2–4 chunks at ~400–1000 ms
+each).
+
 To re-run:
+
+```sh
+npm run speech:measure -- --model onnx-community/moonshine-tiny-ONNX \
+  --dtype q8 --dataset ./speech-dataset-v2 --models-dir ./bench-models --long-only
+npm run speech:measure -- --model Workmind/moonshine-streaming-small-ONNX \
+  --dtype quantized --dataset ./speech-dataset-v2 --models-dir ./bench-models \
+  --long-only --split-at-pauses --collapse-repeats
+```
+
+To re-run original full-dataset comparison:
 
 ```sh
 npm run speech:dataset -- --out ./speech-dataset-v2
