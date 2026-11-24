@@ -1,7 +1,7 @@
 # ADR: Level agents keep their rules in a folder of their own, and a project agent acts through one tool
 
 ## Status
-Accepted; amended by 20261122-pc-windows-mirrored-into-a-project: on the owner's order a project agent also opens a page or window on the PC and mirrors it into its project
+Accepted; amended by 20261122-pc-windows-mirrored-into-a-project: on the owner's order a project agent also opens a page or window on the PC and mirrors it into its project; amended by 20261124-level-agents-run-on-explicit-sonnet-5-5-and-project-agents-use-auto-mode: project agents start in auto permission mode, not the per-prompt default mode
 
 ## Area
 Spatial view

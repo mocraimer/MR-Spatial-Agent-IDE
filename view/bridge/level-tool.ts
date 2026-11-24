@@ -81,7 +81,7 @@ switch (command) {
     // A new session works where the project's sessions work, not in the agent's own directory.
     // A window mirror's pane says nothing about where the project's work is.
     const cwd = (await mine()).find(p => p.id !== self && p.cwd && !isMirrorLabel(p.label))?.cwd ?? homedir();
-    const made = await herdr.call('tab.create', { workspace_id: workspaceId, cwd, focus: false });
+    const made = await herdr.call('tab.create', { workspace_id: workspaceId, cwd, focus: false, label: name || kind });
     const paneId = paneOf(made.root_pane);
     if (name) await herdr.call('pane.rename', { pane_id: paneId, label: name });
     if (kind !== 'shell') {
@@ -143,9 +143,9 @@ switch (command) {
     const viewer = what ? viewers[what]?.() : null;
     if (!viewer) fail('Usage: view changes | view diff | view pr <number> | view file <path> | view md <path>');
     const cwd = (await mine()).find(p => p.id !== self && p.cwd && !isMirrorLabel(p.label))?.cwd ?? homedir();
-    const made = await herdr.call('tab.create', { workspace_id: workspaceId, cwd, focus: false });
-    const paneId = paneOf(made.root_pane);
     const label = what === 'pr' ? `pr ${arg}` : what === 'file' || what === 'md' ? `view ${arg.split('/').pop() ?? arg}` : what as string;
+    const made = await herdr.call('tab.create', { workspace_id: workspaceId, cwd, focus: false, label });
+    const paneId = paneOf(made.root_pane);
     await herdr.call('pane.rename', { pane_id: paneId, label });
     await herdr.call('pane.send_input', { pane_id: paneId, text: viewer, keys: ['enter'] });
     console.log(`Opened ${label} as session ${paneId}, in ${cwd}.`);

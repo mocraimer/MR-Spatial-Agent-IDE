@@ -57,9 +57,13 @@ export type BridgeAction =
 /** A click or scroll on a mirrored window, at a point given as fractions of its width and height. */
 export type WindowInput = { type: 'click'; x: number; y: number } | { type: 'wheel'; x: number; y: number; delta: number };
 
-/** The models and effort levels the owner can set by voice: Claude Code's own names. */
+/** Spoken model names (labels and voice forms) → full model ids. */
+export const MODEL_IDS = { haiku: 'claude-haiku-5-5', sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5' } as const;
+/** Short spoken names for models, used in labels and spoken forms. */
 export const MODELS = ['haiku', 'sonnet', 'opus'] as const;
-export type ModelName = (typeof MODELS)[number];
+export type ModelShortName = (typeof MODELS)[number];
+/** Full model ids as typed by the Model controls. */
+export type ModelName = (typeof MODEL_IDS)[ModelShortName];
 /** Spoken name, then the level Claude Code takes. */
 export const EFFORTS = [['low', 'low'], ['medium', 'medium'], ['high', 'high'], ['extra high', 'xhigh'], ['max', 'max']] as const;
 export type EffortLevel = (typeof EFFORTS)[number][1];
@@ -82,7 +86,7 @@ export interface Command {
 }
 
 const cap = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
-const model = (name: ModelName): Command => ({ id: `model-${name}`, label: `Model ${cap(name)}`, does: `Set the model to ${name}`, say: [`model ${name}`, `set model ${name}`, `set model to ${name}`, `model to ${name}`], run: { bridge: { kind: 'model', name } } });
+const model = (short: ModelShortName): Command => ({ id: `model-${short}`, label: `Model ${cap(short)}`, does: `Set the model to ${short}`, say: [`model ${short}`, `set model ${short}`, `set model to ${short}`, `model to ${short}`], run: { bridge: { kind: 'model', name: MODEL_IDS[short] } } });
 const effort = (spoken: string, level: EffortLevel): Command => ({ id: `effort-${level}`, label: `Effort ${spoken}`, does: `Set the effort to ${spoken}`, say: [`effort ${spoken}`, `set effort ${spoken}`, `set effort to ${spoken}`, `effort to ${spoken}`], run: { bridge: { kind: 'effort', level } } });
 const key = (id: string, label: string, k: KeyName, say: string[]): Command => ({ id, label, does: `Press ${label}`, say, run: { bridge: { kind: 'key', key: k } } });
 

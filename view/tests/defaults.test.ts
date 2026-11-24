@@ -37,7 +37,7 @@ test('AC-6.1: after /model, the settings file model field is restored to its ori
     try {
       await front(s, 'a1'); await focusedIs(s, 'a1');
       const u = await s.say('model sonnet');
-      await shows(s, 'a1', 'a1 got: /model sonnet');
+      await shows(s, 'a1', 'a1 got: /model claude-sonnet-5-5');
       // The outcome must say "in this session" and "default for new sessions was kept",
       // not echo the raw "saved as your default for new sessions" from Claude Code.
       assert.ok(u.outcome.includes('in this session'), `outcome has "in this session": ${u.outcome}`);
@@ -179,7 +179,7 @@ test('A.4: bridge restores defaults when settings file is written before the con
     try {
       await front(s, 'a1'); await focusedIs(s, 'a1');
       await s.say('model sonnet');
-      await shows(s, 'a1', 'a1 got: /model sonnet');
+      await shows(s, 'a1', 'a1 got: /model claude-sonnet-5-5');
       const after = JSON.parse(readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
       assert.equal(after.model, 'claude-opus-4-5', 'model restored (write before confirmation)');
     } finally { await s.stop(); }
@@ -227,7 +227,7 @@ test('A.4: bridge restores defaults when settings file is written after the conf
     try {
       await front(s, 'a1'); await focusedIs(s, 'a1');
       await s.say('model sonnet');
-      await shows(s, 'a1', 'a1 got: /model sonnet');
+      await shows(s, 'a1', 'a1 got: /model claude-sonnet-5-5');
       // Wait long enough for the delayed write (500 ms) and the bridge's watch loop (up to 4 s).
       await new Promise(r => setTimeout(r, 2500));
       const after = JSON.parse(readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;

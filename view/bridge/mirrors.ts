@@ -95,10 +95,11 @@ export class Mirrors {
 
   /** Makes a mirror session of a window in a workspace; returns its pane id. */
   async make(workspaceId: string, window: PcWindow, focus: boolean): Promise<string> {
-    const made = await this.herdr.call('tab.create', { workspace_id: workspaceId, cwd: homedir(), focus: false, env: { [MIRROR_SOCKET_ENV]: this.socketPath } });
+    const tabLabel = labelFor(window.title);
+    const made = await this.herdr.call('tab.create', { workspace_id: workspaceId, cwd: homedir(), focus: false, env: { [MIRROR_SOCKET_ENV]: this.socketPath }, label: tabLabel });
     const paneId = paneOf(made.root_pane);
     this.made.set(paneId, Date.now());
-    await this.herdr.call('pane.rename', { pane_id: paneId, label: labelFor(window.title) });
+    await this.herdr.call('pane.rename', { pane_id: paneId, label: tabLabel });
     await this.herdr.call('pane.send_input', { pane_id: paneId, text: `node '${MIRROR_SESSION}' ${window.hwnd}`, keys: ['enter'] });
     if (focus) await this.herdr.call('pane.focus', { pane_id: paneId });
     this.log(`mirror of "${window.title}" (${window.app}) made as ${paneId}`);

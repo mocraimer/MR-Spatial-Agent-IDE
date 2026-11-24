@@ -29,6 +29,12 @@ const setup = (layout = LAYOUT, standin: StandinAgentOptions = {}, closeAnswerMs
 
 const ws = (s: Desk, label: string) => s.bench.workspaces.get(label) as string;
 
+/** Calls herdr tab.list for a workspace and returns the labels of its tabs. */
+async function tabLabels(s: Desk, workspaceId: string): Promise<string[]> {
+  const r = await s.bench.client.call('tab.list', { workspace_id: workspaceId });
+  return (r.tabs as Array<{ label: string }>).map(t => t.label);
+}
+
 test('the helper is one, whatever state Herdr is in: none yet, a workspace of its name, closed by hand, after a restart', async () => {
   // A Herdr with a workspace labelled "helper" holding sessions of no project, and no helper agent.
   const s = await setup([...LAYOUT, { label: 'helper', panes: [{ name: 'post', kind: 'agent' }] }]);
@@ -53,6 +59,9 @@ test('the helper is one, whatever state Herdr is in: none yet, a workspace of it
     await s.bench.waitFor(async () => (await s.text(remade.paneId)).includes('received: how many sessions'), 'the order at the new helper', 20_000);
     assert.equal(await helperCount(), 1);
     assert.deepEqual(await s.seats(), [['helper', 'helper']]);
+    // AC-10.1: re-seated helper tab carries the seat label.
+    const helperWs = (await s.snap()).workspaces.find(w => w.label === 'helper')?.id as string;
+    assert.ok((await tabLabels(s, helperWs)).includes('helper'), 'helper re-seat tab label');
 
     // Herdr stopped and started: the seat comes back by its label, the agent is started in it again.
     await s.bench.stopServer();
@@ -66,6 +75,18 @@ test('the helper is one, whatever state Herdr is in: none yet, a workspace of it
   } finally { await s.stop(); }
 });
 
+test('AC-10.1: helper initial workspace and new project workspace first tab carry labels from tab.rename', async () => {
+  // Uses LAYOUT (no pre-existing helper workspace): seat(OVERVIEW) triggers workspace.create for helper.
+  const s = await setup();
+  try {
+    const first = await s.agents.seat(OVERVIEW);
+    await s.agents.ready(first.paneId);
+    const helperWs = (await s.snap()).workspaces.find(w => w.label === 'helper')?.id as string;
+    assert.ok(helperWs, 'helper workspace created');
+    assert.ok((await tabLabels(s, helperWs)).includes('helper'), 'helper workspace first tab label = helper');
+  } finally { await s.stop(); }
+});
+
 test('going into a project puts its one agent in front, every time, and sends nothing to any session', async () => {
   const s = await setup();
   try {
@@ -76,6 +97,8 @@ test('going into a project puts its one agent in front, every time, and sends no
     assert.deepEqual(await s.seats(), [['beta', 'project agent']]);
     const seat = (await s.snap()).panes.find(p => p.label === 'project agent')?.id as string;
     assert.equal(await s.focused(), seat, 'the project agent is in front');
+    // AC-10.1: project agent tab carries the seat label.
+    assert.ok((await tabLabels(s, ws(s, 'beta'))).includes('project agent'), 'project agent tab label');
     await s.agents.ready(seat);
     assert.equal(currentProject(s.bridge.shelf()), ws(s, 'beta'));
 
@@ -210,6 +233,8 @@ test('the project agent\'s tool keeps to its project, never moves the front, and
     const made = snap.panes.find(p => p.label === 'logs');
     assert.equal(made?.workspaceId, alpha, 'started in its own project');
     assert.equal(snap.focusedPaneId, s.bench.pane('b1'), 'what is in front did not move');
+    // AC-10.1: tab.list shows the named-start tab label.
+    assert.ok((await tabLabels(s, alpha)).includes('logs'), 'level-tool start (named) tab label');
 
     // Ending a shell is closing it: refused; a close asks the owner, also when the pane lost its socket variable.
     const exit = await tool(s, me, alpha, ['prompt', made?.id as string, 'exit']);
@@ -278,8 +303,40 @@ test('the level tool starts an agent under a name Herdr accepts, whatever the ow
       const made = (await s.snap()).panes.find(p => p.label === name);
       assert.ok(made, `a session named ${name}`);
       await s.bench.waitFor(async () => (await s.snap()).panes.some(p => p.id === made.id && p.agent !== null), `the agent in ${name}`);
+      // AC-10.1: tab.list includes the named-start label.
+      assert.ok((await tabLabels(s, alpha)).includes(name), `tab.list includes named-start label "${name}"`);
     }
     const bare = await tool(s, me, alpha, ['start', 'claude']);
     assert.equal(bare.status, 0, `an agent with no name of its own: ${bare.out}`);
+    // AC-10.1: unnamed start → tab.list includes kind ('claude').
+    assert.ok((await tabLabels(s, alpha)).includes('claude'), 'tab.list includes kind label for unnamed start');
   } finally { await s.stop(); rmSync(bin, { recursive: true, force: true }); }
+});
+
+test('AC-10.1: level-tool view opens a tab whose pane carries the right label for each viewer kind', async () => {
+  // "view changes" → 'changes'; "view diff" → 'diff'; "view pr N" → 'pr N';
+  // "view file path/name.ts" → 'view name.ts'; "view md path/doc.md" → 'view doc.md'.
+  const s = await setup();
+  try {
+    const me = s.bench.pane('a1');
+    const alpha = ws(s, 'alpha');
+    const cases: Array<[string[], string]> = [
+      [['view', 'changes'], 'changes'],
+      [['view', 'diff'], 'diff'],
+      [['view', 'pr', '42'], 'pr 42'],
+      [['view', 'file', 'src/foo.ts'], 'view foo.ts'],
+      [['view', 'md', 'docs/guide.md'], 'view guide.md'],
+    ];
+    for (const [args, expectedLabel] of cases) {
+      const r = await tool(s, me, alpha, args);
+      assert.equal(r.status, 0, `${args.join(' ')}: ${r.out}`);
+      const pane = (await s.snap()).panes.find(p => p.label === expectedLabel);
+      assert.ok(pane, `${args.join(' ')}: pane labelled "${expectedLabel}" found`);
+      assert.equal(pane?.workspaceId, alpha, `${args.join(' ')}: opened in its own project`);
+      // AC-10.1: tab.list must include the same label (the tab label, not just the pane label).
+      assert.ok((await tabLabels(s, alpha)).includes(expectedLabel), `${args.join(' ')}: tab.list includes "${expectedLabel}"`);
+      // Clean up so the workspace does not fill with panes.
+      await s.bench.client.call('pane.close', { pane_id: pane?.id as string });
+    }
+  } finally { await s.stop(); }
 });

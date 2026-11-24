@@ -1,7 +1,7 @@
 # ADR: The helper and the project agents run on Sonnet at medium effort
 
 ## Status
-Accepted
+Accepted; amended by 20261124-level-agents-run-on-explicit-sonnet-5-5-and-project-agents-use-auto-mode: model pinned to full id claude-sonnet-5-5 and project agents changed to auto permission mode
 
 ## Area
 Spatial view
