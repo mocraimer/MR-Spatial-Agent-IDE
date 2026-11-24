@@ -84,8 +84,10 @@ A **project** is a Herdr workspace. The view shows one place at a time, and the 
 | grey box with ">_" | a shell, not an agent |
 
 - **Strip above the front session:** the receiver, the microphone button (red = listening), the last thing heard with what it was taken as and where it went, and the link state.
-- **Below it:** the **Talk** button, then five rows of buttons: on the first, moving between sessions, scrolling, text size and re-centering, **Overview**, **Mirror**, **New project**, and **Exit MR**; on the second, the keys sent to the receiver; on the third, **Go**, **Scratch that**, and the send setting; on the fourth, the model and effort of the session in front; on the fifth, the voice.
+- **Below it:** the **Talk** button, then five rows of buttons: on the first, moving between sessions, scrolling, text size and re-centering, **Overview**, **Mirror**, **New project**, and **Exit MR**; on the second, the keys sent to the receiver; on the third, **Go**, **Scratch that**, and the send setting; on the fourth, the model and effort of the session in front; on the fifth, the voice: **Voice on/off**, **Read replies/Stop reading**, **Read that**, **Quiet**, **Keep my speech** (lit when on), **Stop keeping speech**, **Delete my speech**.
 - **Above it:** when a draft waits, a bar says in which session and the words that send or clear it.
+- **Grab bars:** a narrow horizontal bar sits below each group (Screens and Controls). Grab a bar with the trigger and drag to move the whole group in space; the new position is kept across restarts. **Recenter** resets both groups to their default positions and sizes.
+- **Edge resize:** each panel in both groups shows a blue strip along all four edges. Grab any edge with the trigger and drag outward to scale the group bigger, or inward to smaller (0.6× to 1.8×). The scale is kept across restarts; Recenter resets it to 1×.
 
 ## Talking to the agents at each level
 
@@ -119,6 +121,8 @@ Point a hand or controller at something. A ray shows where you point. Pinch (han
 | Scroll the front session back, forward, to the latest | Grab the text (pinch or trigger on it) and drag up or down; or push the thumbstick; or **Scroll up, Scroll down, Latest** | "scroll up", "scroll down", "scroll bottom" |
 | Larger or smaller text | **A+, A−** | "bigger text", "smaller text" |
 | Put the shelf in front of you again | **Recenter** | "recenter" |
+| Move the Screens or Controls group | Grab its bar (below the group) with trigger and drag | — |
+| Scale the Screens or Controls group | Grab any panel edge with trigger and drag outward (bigger) or inward (smaller) | — |
 | Type with the headset keyboard | **Keyboard** (lit while the keyboard is open; tap again to close) | "keyboard", "show keyboard", "open keyboard", "type" |
 | Leave mixed reality, back to the flat page | **Exit MR** (or the Quest's Meta button) | "leave mixed reality" |
 | Set the model of the session in front | **Model Haiku, Model Sonnet, Model Opus** (the fourth row) | "model haiku", "model sonnet", "model opus" (also "set model to sonnet") |
@@ -127,6 +131,9 @@ Point a hand or controller at something. A ray shows where you point. Pinch (han
 | Read each finished reply aloud, or stop | **Read replies**, **Stop reading** | "read replies", "stop reading replies" |
 | Read the last reply of the session in front, once | **Read that** | "read that" |
 | Stop the voice at once | **Quiet** | "stop talking", "be quiet", "quiet" |
+| Save each utterance as audio and text | **Keep my speech** (lit when on; strip shows amber "Keeping speech" / "Rec") | "keep my speech", "save my speech", "record my speech" |
+| Stop saving utterances | **Stop keeping speech** | "stop keeping my speech" |
+| Delete all saved utterances | **Delete my speech** | "delete my speech", "delete my recordings", "clear my speech" |
 | Answer a close the helper asks about | **Yes, close** / **No, keep it** in the strip, or the y / n key | "yes" / "no" |
 | Change the listening mode | the Talk button: hold it to talk, tap it to keep listening | "hold to talk", "keep listening" (also "start listening") |
 | Stop listening | Select the microphone | "stop listening" |
