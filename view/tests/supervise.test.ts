@@ -301,3 +301,42 @@ test('AC-7.1 drvfs: supervisor detects a build when the build dir is on /mnt/d (
     await new Promise<void>(resolve => sup.once('exit', () => resolve()));
   } finally { rmSync(scratchDir, { recursive: true, force: true }); }
 });
+
+test('C.3: a bridge that crashes repeatedly after the guard is only restarted once (no infinite loop)', async () => {
+  // The child always exits after 300 ms. Guard is 200 ms, so every exit is "after the guard".
+  // Without the fix, crashRestartPending is reset in start(), allowing an infinite restart loop.
+  // With the fix, the flag is NOT reset on a grace restart, so only one grace restart is given.
+  const dir = mkdtempSync('/tmp/svl-sup-');
+  try {
+    const buildDir = join(dir, 'build');
+    mkdirSync(buildDir);
+    const childPath = writeChild(dir, 'delayed_exit.mjs', DELAYED_EXIT_SCRIPT);
+
+    const lines: string[] = [];
+    const sup = spawn(process.execPath, [SUPERVISE_JS], {
+      env: {
+        ...process.env,
+        SPATIAL_BRIDGE_CHILD: childPath,
+        SPATIAL_BUILD_WATCH_DIR: buildDir,
+        SPATIAL_SETTLE_MS: '100',
+        SPATIAL_CRASH_GUARD_MS: '200',
+        SPATIAL_POLL_MS: '100',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    createInterface({ input: sup.stdout }).on('line', l => lines.push(l));
+    createInterface({ input: sup.stderr }).on('line', l => lines.push(`STDERR: ${l}`));
+
+    // Wait for the first grace restart (should happen after child 1 exits at 300 ms).
+    await waitFor(lines, () => lines.filter(l => l.includes('started')).length >= 2, 'C.3 second child started', 5000);
+
+    // Wait 1200 ms: enough time for a third restart to have happened if the loop were infinite.
+    await new Promise(resolve => setTimeout(resolve, 1200));
+
+    const starts = lines.filter(l => l.includes('started')).length;
+    assert.equal(starts, 2, `C.3 supervisor must restart only once; got ${starts} starts; lines:\n${lines.join('\n')}`);
+
+    sup.kill('SIGTERM');
+    await new Promise<void>(resolve => sup.once('exit', () => resolve()));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

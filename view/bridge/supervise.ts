@@ -78,13 +78,14 @@ function startPolling(dir: string): void {
   }, POLL_MS);
 }
 
-function start(reason: string): void {
+/** Start the bridge child. Pass `resetCrashPending=true` for new-build or initial starts. */
+function start(reason: string, resetCrashPending = false): void {
   if (stopping) return;
   log(reason);
   const proc = spawn(process.execPath, [child], { env: { ...process.env, SPATIAL_RESTARTED: '1' }, stdio: 'inherit' });
   current = proc;
   startedAt = Date.now();
-  crashRestartPending = false;
+  if (resetCrashPending) crashRestartPending = false;
   proc.once('exit', (code, signal) => {
     if (current !== proc) return;
     current = null;
@@ -94,11 +95,11 @@ function start(reason: string): void {
         log(`bridge exited after ${uptime} ms (code ${code ?? signal}); waiting for next build before restarting`);
       } else {
         log(`bridge exited (code ${code ?? signal}); restarting once`);
-        // Restart once after a clean exit (uptime ≥ guard). If THAT restart crashes within
-        // the guard, the loop above applies and waits for the next build.
+        // Restart once after a clean exit (uptime ≥ guard). If THAT restart also exits after
+        // the guard, we do NOT restart again — the grace flag was not reset by this call.
         if (!crashRestartPending) {
           crashRestartPending = true;
-          start('restarting after exit');
+          start('restarting after exit'); // resetCrashPending stays false
         }
       }
     }
@@ -118,7 +119,7 @@ function scheduleRestart(): void {
       settleTimer = setTimeout(() => {
         settleTimer = null;
         if (current !== null) { current.kill('SIGTERM'); current = null; }
-        start('new build detected; restarting');
+        start('new build detected; restarting', true);  // new build resets crash-restart guard
       }, remaining);
       return;
     }
@@ -126,7 +127,7 @@ function scheduleRestart(): void {
       current.kill('SIGTERM');
       current = null;
     }
-    start('new build detected; restarting');
+    start('new build detected; restarting', true);  // new build resets crash-restart guard
   }, SETTLE_MS);
 }
 
@@ -135,7 +136,7 @@ function scheduleRestart(): void {
 const buildDir = process.env.SPATIAL_BUILD_WATCH_DIR ?? join(here, '..', '..');
 startPolling(buildDir);
 
-start('bridge starting');
+start('bridge starting', true);  // initial start resets crash-restart guard
 
 function shutdown(): void {
   if (stopping) return;
