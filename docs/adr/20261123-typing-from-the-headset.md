@@ -1,11 +1,10 @@
 # ADR: Typing from the headset
 
 ## Status
-Accepted; narrows 20261121-thin-webxr-view-over-herdr and
-20261122-levels-ride-on-herdr-workspaces, which said the desk keyboard was the only way to type.
+Accepted; narrows 20261121-thin-webxr-view-over-herdr and 20261122-levels-ride-on-herdr-workspaces, which said the desk keyboard was the only way to type.
 
 ## Area
-Spatial view — input
+Spatial view
 
 ## Context
 The owner's desk keyboard types into Herdr's focused session (the session in front) because Herdr

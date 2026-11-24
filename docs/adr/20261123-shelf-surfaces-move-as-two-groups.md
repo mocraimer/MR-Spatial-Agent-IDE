@@ -4,7 +4,7 @@
 Accepted
 
 ## Area
-Spatial view — layout
+Spatial view
 
 ## Context
 The shelf's surfaces (front session, tiles, chips, strip, talk button, button rows, draft bar) are
