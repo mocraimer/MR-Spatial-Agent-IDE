@@ -142,6 +142,25 @@ test('Stop reading and Read that are also buttons', async ({ page }) => {
   await expect.poll(async () => (await viewState(page)).notice).toMatch(/transcript/);
 });
 
+test('keep-speech-on button lights up and shows the strip chip; keep-speech-off and voice command toggle it', async ({ page }) => {
+  test.setTimeout(90_000);
+  await start(page, 0.3);
+  // Initially off.
+  await expect.poll(async () => (await viewState(page)).voice.keepSpeech).toBe(false);
+  // Button turns it on; lit state and strip chip appear.
+  await tap(page, 'controller', 'controls-4', 'keep-speech-on');
+  await expect.poll(async () => (await viewState(page)).voice.keepSpeech).toBe(true);
+  // Button turns it off.
+  await tap(page, 'controller', 'controls-4', 'keep-speech-off');
+  await expect.poll(async () => (await viewState(page)).voice.keepSpeech).toBe(false);
+  // Voice command turns it on.
+  await speak(page, 'keep my speech');
+  await expect.poll(async () => (await viewState(page)).voice.keepSpeech).toBe(true);
+  // Voice command turns it off.
+  await speak(page, 'stop keeping my speech');
+  await expect.poll(async () => (await viewState(page)).voice.keepSpeech).toBe(false);
+});
+
 test('a voice that failed shows "Voice problem" on the strip until it works again', async ({ page }) => {
   test.setTimeout(90_000);
   await start(page, 0.3);
