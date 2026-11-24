@@ -32,6 +32,7 @@ const MODEL_ID   = get('--model',      process.env.SPEECH_MODEL  ?? 'onnx-commun
 const DTYPE      = get('--dtype',      process.env.SPEECH_DTYPE  ?? 'q8');
 const DATASET    = get('--dataset',    process.env.SPEECH_DATASET ?? './speech-dataset');
 const MODELS_DIR = get('--models-dir', process.env.SPEECH_MODELS  ?? './models');
+const OUT_DIR    = get('--out',        '.');
 const RUNS       = getNum('--runs', 1);
 const DO_NOISE   = getFlag('--noise');
 
@@ -302,8 +303,8 @@ console.log(`Load ms:               ${loadMs}`);
 if (variationNote) console.log(variationNote);
 console.log(noiseNote);
 
-// Save results.
-const outFile = join(MODELS_DIR, `speech-measure-${MODEL_ID.replace(/[^a-z0-9]/gi, '-')}-${DTYPE}-${Date.now()}.json`);
+// Save results to --out dir (defaults to current directory, never the models dir).
+const outFile = join(OUT_DIR, `speech-measure-${MODEL_ID.replace(/[^a-z0-9]/gi, '-')}-${DTYPE}-${Date.now()}.json`);
 writeFileSync(outFile, JSON.stringify({
   model: MODEL_ID, dtype: DTYPE, loadMs, runs: RUNS, results,
   summary: {

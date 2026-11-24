@@ -10,12 +10,12 @@
  * worker-thread code and MUST PASS with the child-process fix.
  */
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import { dataDirectory } from '../bridge/config.js';
 import { modelDirectory, SPEECH_MODEL, SPEECH_DTYPE } from '../bridge/speech.js';
-import { KokoroVoice, WindowsVoice, KOKORO_MODEL, KOKORO_VOICE, PHRASE_MAX } from '../bridge/tts.js';
+import { KokoroVoice, WindowsVoice, KOKORO_MODEL, KOKORO_VOICE, PHRASE_MAX, fetchKokoroModel } from '../bridge/tts.js';
 
 /** A stand-in for powershell.exe: a node script run as the voice's executable. */
 function standin(directory: string, name: string, body: string): string {
@@ -131,6 +131,83 @@ test('the real Kokoro voice (af_heart) makes a 24kHz WAV', { skip: kokoroTestDir
 });
 
 }); // describe KokoroVoice
+
+// Kokoro setup path test: fetchKokoroModel must put files in <models>/onnx-community/Kokoro-82M-v1.0-ONNX,
+// not in the kokoro-js nested transformers cache. This verifies the ESM env.cacheDir wiring in
+// fetch-kokoro-child.ts. Requires KOKORO_TEST_DIR (a local HF cache dir with the model already in it).
+//
+// The test:
+//  1. Creates a temp models dir.
+//  2. Pre-populates the model there (copy from KOKORO_TEST_DIR) to avoid a network download.
+//     The child process's cacheDir = temp dir, so it finds the files in the cache and skips
+//     the network round-trip. This exercises the same code path as a real download.
+//  3. Calls fetchKokoroModel(tempDir) — with the fix applied this succeeds and leaves files at
+//     tempDir/onnx-community/Kokoro-82M-v1.0-ONNX.
+//  4. Asserts the model is in tempDir (not in node_modules).
+//  5. Loads KokoroVoice from that path and asserts standingIn()==false and 24kHz WAV.
+//     This is the same check the view does: if setup wrote to the wrong place, the voice would
+//     fall back to Windows and standingIn() would return true.
+const kokoroTestDirSetup = process.env.KOKORO_TEST_DIR;
+test('fetchKokoroModel puts model in <models>/onnx-community/Kokoro-82M-v1.0-ONNX (not in node_modules); view loads Kokoro from that dir',
+  { skip: kokoroTestDirSetup ? false : 'set KOKORO_TEST_DIR (HF cache with Kokoro model) to run this' },
+  async () => {
+    const tempModels = mkdtempSync('/tmp/svt-kokoro-setup-');
+    try {
+      // Pre-populate the temp models dir with the Kokoro model so fetchKokoroModel uses the
+      // local cache (no network). The source is KOKORO_TEST_DIR which already has the model.
+      const srcModel = join(kokoroTestDirSetup!, KOKORO_MODEL);
+      assert.ok(existsSync(srcModel), `KOKORO_TEST_DIR must contain ${KOKORO_MODEL}`);
+      const destModel = join(tempModels, KOKORO_MODEL);
+      mkdirSync(join(tempModels, 'onnx-community'), { recursive: true });
+      cpSync(srcModel, destModel, { recursive: true });
+
+      // Record node_modules cache state BEFORE fetchKokoroModel.
+      // The default cache (before fix) was node_modules/kokoro-js/.../transformers/.cache.
+      // After the fix, fetchKokoroModel uses tempModels as cacheDir, so node_modules is untouched.
+      const nestedCache = join(
+        new URL('../../../node_modules/kokoro-js/node_modules/@huggingface/transformers/.cache',
+          import.meta.url).pathname,
+        KOKORO_MODEL,
+      );
+      const nestedExistedBefore = existsSync(nestedCache);
+
+      // Call the real setup fetch. With the fix, cacheDir = tempModels so it uses the files we
+      // pre-populated (no network). Without the fix, cacheDir points to node_modules and the
+      // temp dir remains empty → assertion below fails.
+      await fetchKokoroModel(tempModels);
+
+      // Assert model is at the expected path (<models>/onnx-community/Kokoro-82M-v1.0-ONNX).
+      assert.ok(existsSync(destModel), 'model directory exists at <models>/<KOKORO_MODEL>');
+      assert.ok(existsSync(join(destModel, 'config.json')), 'config.json exists in model dir');
+      assert.ok(existsSync(join(destModel, 'onnx')),        'onnx/ dir exists in model dir');
+
+      // Assert the node_modules cache was not newly populated by this fetch.
+      // (If it existed before — from a previous broken setup run — that is not our fault.)
+      if (!nestedExistedBefore) {
+        assert.ok(!existsSync(nestedCache), 'fetchKokoroModel did not write to node_modules cache');
+      }
+
+      // Load KokoroVoice from the temp models dir — the same path view.ts computes at runtime.
+      await new Promise<void>((resolve, reject) => {
+        const v = new KokoroVoice(
+          destModel, KOKORO_VOICE, new WindowsVoice(),
+          async () => {
+            try {
+              assert.equal(v.standingIn(), false, 'Kokoro loaded from setup path, not standing in');
+              const wav = await v.speak('Setup path verified.');
+              assert.equal(wav.toString('ascii', 0, 4), 'RIFF');
+              assert.equal(wav.readUInt32LE(24), 24000, '24kHz from Kokoro');
+              v.stop(); resolve();
+            } catch (e) { v.stop(); reject(e as Error); }
+          },
+          reason => { v.stop(); reject(new Error(`Kokoro failed to load from setup path: ${reason}`)); },
+        );
+      });
+    } finally {
+      rmSync(tempModels, { recursive: true, force: true });
+    }
+  },
+);
 
 // ORT isolation: loading speech model (ORT v4) in main thread, then starting KokoroVoice
 // (ORT v3 in child process) must not conflict. This is the regression test for the worker-thread

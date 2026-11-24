@@ -19,8 +19,12 @@
  * The parent must fork with { serialization: 'advanced' } so that Buffer payloads are
  * transferred via V8 structured clone rather than JSON.
  *
- * INV-G4: HF_HUB_OFFLINE=1 is set before kokoro-js loads.
+ * INV-G4: allowRemoteModels is set to false on the ESM transformers instance before loading.
+ * Setting process.env.HF_HUB_OFFLINE is not sufficient because transformers v3 does not read it;
+ * we must set env.allowRemoteModels directly on the ESM module instance.
  */
+import { createRequire } from 'node:module';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 type InitMessage  = { type: 'init';  modelPath: string; voiceId: string };
 type SpeakMessage = { type: 'speak'; id: number; text: string };
@@ -49,8 +53,17 @@ process.once('message', async (msg: InMessage) => {
   if (msg.type !== 'init') { send({ type: 'failed', reason: 'expected init' }); return; }
   const { modelPath, voiceId } = msg;
   try {
-    // INV-G4: block remote model loading before kokoro-js loads anything.
-    process.env.HF_HUB_OFFLINE = '1';
+    // INV-G4: set allowRemoteModels=false on the ESM transformers instance before importing
+    // kokoro-js. transformers v3 does not read HF_HUB_OFFLINE; the env property must be set
+    // directly. Import the ESM transformers first (before kokoro-js so they share the instance).
+    const kokoroMain = fileURLToPath(await import.meta.resolve('kokoro-js'));
+    const esmPath = createRequire(kokoroMain).resolve('@huggingface/transformers')
+      .replace('transformers.node.cjs', 'transformers.node.mjs');
+    const { env: tenv } = await import(pathToFileURL(esmPath).href) as {
+      env: { allowRemoteModels: boolean; allowLocalModels: boolean };
+    };
+    tenv.allowRemoteModels = false;
+    tenv.allowLocalModels  = true;
     const { KokoroTTS: Ctor } = await import('kokoro-js') as { KokoroTTS: { from_pretrained(id: string, opts: { dtype: string; device: string }): Promise<KokoroTTS> } };
     tts = await Ctor.from_pretrained(modelPath, { dtype: 'fp32', device: 'cpu' });
     send({ type: 'ready' });
