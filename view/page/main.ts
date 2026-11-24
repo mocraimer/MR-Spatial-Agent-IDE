@@ -660,24 +660,37 @@ function renderNow(): void {
   // Current edge hover / active grab — included in keys so resizable surfaces redraw on change.
   const hovEdge = scene.hoveredEdge;
   const activeEdgeGrab = scene.activeEdgeGrab;
-  /** Edge highlight overlay drawn after the main canvas content. */
+  /**
+   * Wraps a draw function with a four-state edge affordance:
+   *   rest (always): thin strip at 12 % opacity — signals "this edge resizes"
+   *   hover:  45 % opacity — confirms the ray is in the grab region
+   *   drag:   90 % opacity — unambiguous grab confirmation
+   * The strip is always drawn for all four edges; only the active/hovered one is brighter.
+   */
   const withEdge = (id: string, draw: (c: HTMLCanvasElement) => void): (c: HTMLCanvasElement) => void => {
     const hovState = hovEdge?.surface === id ? hovEdge.edge : null;
     const dragState = activeEdgeGrab?.surface === id ? activeEdgeGrab.edge : null;
-    const edgeState = hovState ?? dragState; // hover wins; fall back to grabbed edge
-    if (!edgeState) return draw;
-    const dragging = dragState !== null;
     return c => {
       draw(c);
       const ctx = c.getContext('2d');
       if (!ctx) return;
-      const t = Math.round(c.width * 0.025); // 2.5% of canvas width in px
+      const t = Math.round(c.width * 0.025); // 2.5% of canvas width ≈ 28mm at 1m
       ctx.save();
-      ctx.fillStyle = dragging ? 'rgba(108,182,255,0.9)' : 'rgba(108,182,255,0.45)';
-      if (edgeState === 'left') ctx.fillRect(0, 0, t, c.height);
-      else if (edgeState === 'right') ctx.fillRect(c.width - t, 0, t, c.height);
-      else if (edgeState === 'top') ctx.fillRect(0, 0, c.width, t);
-      else ctx.fillRect(0, c.height - t, c.width, t);
+      // Rest state: all four edges at 12 % to aid discoverability.
+      ctx.fillStyle = 'rgba(108,182,255,0.12)';
+      ctx.fillRect(0, 0, t, c.height);               // left
+      ctx.fillRect(c.width - t, 0, t, c.height);     // right
+      ctx.fillRect(0, 0, c.width, t);                 // top
+      ctx.fillRect(0, c.height - t, c.width, t);     // bottom
+      // Active edge: brighter overlay on the hovered/grabbed edge.
+      const activeEdge = hovState ?? dragState;
+      if (activeEdge) {
+        ctx.fillStyle = dragState !== null ? 'rgba(108,182,255,0.9)' : 'rgba(108,182,255,0.45)';
+        if (activeEdge === 'left') ctx.fillRect(0, 0, t, c.height);
+        else if (activeEdge === 'right') ctx.fillRect(c.width - t, 0, t, c.height);
+        else if (activeEdge === 'top') ctx.fillRect(0, 0, c.width, t);
+        else ctx.fillRect(0, c.height - t, c.width, t);
+      }
       ctx.restore();
     };
   };
