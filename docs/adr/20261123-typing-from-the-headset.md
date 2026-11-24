@@ -1,7 +1,7 @@
 # ADR: Typing from the headset
 
 ## Status
-Accepted; narrows 20261121-thin-webxr-view-over-herdr and 20261122-levels-ride-on-herdr-workspaces, which said the desk keyboard was the only way to type. Narrowed 2026-11-24: the Quest system keyboard is NOT available inside a WebXR mixed reality session (confirmed by owner on-device). Deleting in the headset uses the **⌫** and **Del wd** key-row buttons (or the floating keyboard's delete key when the hidden field is empty, via beforeinput); typed text in the session cannot be edited with the headset keyboard.
+Accepted; narrows 20261121-thin-webxr-view-over-herdr and 20261122-levels-ride-on-herdr-workspaces, which said the desk keyboard was the only way to type. Narrowed by the owner's on-device check: inside the view the Quest's floating keyboard appears and types, but its surface-keyboard mode is not available (Quest offers it only in Horizon home). Deleting text the view typed (a spoken draft) uses the **⌫** and **Del wd** key-row buttons, or the floating keyboard's delete key when its own field is empty (sent through beforeinput).
 
 ## Area
 Spatial view
@@ -58,9 +58,9 @@ Diagnostics (AC-5.3) are logged to the browser console: `[keyboard] show`, `[key
   `typeText` (headset keyboard). The locks test is updated to allow both.
 - The input focus model (hidden input focused → keyboard shown; blurred → closed) relies on the
   Quest browser firing focus/blur on the hidden element, which is not guaranteed on all browsers.
-- The Quest system keyboard is not available inside a WebXR mixed reality session (confirmed
-  on-device, 2026-11-24). The keyboard button opens the floating keyboard, but it cannot be used
-  to delete words already typed by the view. The **⌫** and **Del wd** buttons and voice commands
-  "backspace" / "delete word" reach the session directly and can shorten spoken drafts. The
-  `beforeinput` path (empty-field delete) also sends a backspace when the floating keyboard's
-  delete key is pressed and the hidden field is already empty.
+- Inside the view the Quest's floating keyboard appears and types; its surface-keyboard mode is
+  not available there (Quest offers it only in Horizon home). The floating keyboard cannot delete
+  words the view typed, because its own field starts empty: the **⌫** and **Del wd** buttons and
+  the spoken "backspace" / "delete word" reach the session directly and can shorten spoken drafts,
+  and the `beforeinput` path also sends a backspace when the floating keyboard's delete key is
+  pressed while its field is empty.
