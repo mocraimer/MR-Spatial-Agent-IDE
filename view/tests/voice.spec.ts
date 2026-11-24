@@ -98,6 +98,8 @@ test('Quiet stops the phrase at once and drops those behind it; Voice off silenc
 test('the model and effort buttons type the slash command into the session in front, as the spoken words do', async ({ page }) => {
   test.setTimeout(90_000);
   await start(page);
+  await tap(page, 'controller', 'controls-3', 'model-haiku');
+  await expect.poll(async () => (await r.bench.client.read(r.bench.pane('a1'), 40)).includes('a1 got: /model claude-haiku-5-5')).toBe(true);
   await tap(page, 'controller', 'controls-3', 'model-sonnet');
   await expect.poll(async () => (await r.bench.client.read(r.bench.pane('a1'), 40)).includes('a1 got: /model claude-sonnet-5-5')).toBe(true);
   await tap(page, 'hand', 'controls-3', 'effort-xhigh');
