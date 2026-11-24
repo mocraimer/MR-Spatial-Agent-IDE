@@ -693,3 +693,308 @@ test('AC-5.3: /api/log accepts only structured events and rejects free text', as
   expect(r.logs.some(l => l.includes('[page] keys per minute: 5')), 'keys count logged').toBe(true);
   expect(r.logs.some(l => l.includes('typed text')), 'typed text absent from log').toBe(false);
 });
+
+// ---- AC-9.1: group edge resize -------------------------------------------------------
+
+/** Helpers for measuring the world width of a surface (left-to-right at mid-height). */
+async function surfaceWorldWidth(page: Page, surface: string): Promise<number> {
+  const p = await page.evaluate((s) => {
+    const p0 = window.viewTest.worldPoint(s, 0, 0.5);
+    const p1 = window.viewTest.worldPoint(s, 1, 0.5);
+    if (!p0 || !p1) return null;
+    return Math.hypot(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]);
+  }, surface);
+  if (p === null) throw new Error(`Surface ${surface} not found`);
+  return p;
+}
+
+/** Reads screensScale and controlsScale from localStorage. */
+async function storedScales(page: Page): Promise<{ screensScale: number; controlsScale: number }> {
+  const raw = await page.evaluate(() => localStorage.getItem('spatial-view-group-offsets'));
+  if (!raw) throw new Error('No group offsets in localStorage');
+  const d = JSON.parse(raw) as [[number, number, number], [number, number, number]];
+  return { screensScale: d[0][2] ?? 1, controlsScale: d[1][2] ?? 1 };
+}
+
+/** Grabs the right edge of the front panel and drags outward past it, then releases. */
+async function dragFrontRightEdgeOut(page: Page): Promise<void> {
+  // Aim at the right edge strip (97% across, mid-height).
+  await aim(page, 'controller', 'front', 0.97, 0.5);
+  await setPressed(page, 'controller', 1);
+  await page.waitForTimeout(100);
+  // Aim past the right edge — the ray-plane intersection moves farther from the head.
+  await aim(page, 'controller', 'front', 1.4, 0.5);
+  await page.waitForTimeout(200);
+  await setPressed(page, 'controller', 0);
+  await page.waitForTimeout(150);
+}
+
+/** Grabs the right edge of the front panel and drags inward, then releases. */
+async function dragFrontRightEdgeIn(page: Page): Promise<void> {
+  await aim(page, 'controller', 'front', 0.97, 0.5);
+  await setPressed(page, 'controller', 1);
+  await page.waitForTimeout(100);
+  // Aim well inside the panel — the intersection point is closer to the head.
+  await aim(page, 'controller', 'front', 0.3, 0.5);
+  await page.waitForTimeout(200);
+  await setPressed(page, 'controller', 0);
+  await page.waitForTimeout(150);
+}
+
+test('AC-9.1: edge grab of front panel right edge scales screens group bigger', async ({ page }) => {
+  test.setTimeout(90_000);
+  r = await rig([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' as const }] }]);
+  await emulateQuest(page);
+  await pair(page, r);
+  await enterMixedReality(page);
+  await expect.poll(async () => (await viewState(page)).surfaces).toContain('front');
+
+  const widthBefore = await surfaceWorldWidth(page, 'front');
+  await dragFrontRightEdgeOut(page);
+  const widthAfter = await surfaceWorldWidth(page, 'front');
+
+  expect(widthAfter, 'front panel grew after outward edge drag').toBeGreaterThan(widthBefore * 1.02);
+
+  const { screensScale } = await storedScales(page);
+  expect(screensScale, 'screensScale > 1 after outward drag').toBeGreaterThan(1.0);
+});
+
+test('AC-9.1: edge drag inward scales screens group smaller', async ({ page }) => {
+  test.setTimeout(90_000);
+  r = await rig([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' as const }] }]);
+  await emulateQuest(page);
+  await pair(page, r);
+  await enterMixedReality(page);
+  await expect.poll(async () => (await viewState(page)).surfaces).toContain('front');
+
+  const widthBefore = await surfaceWorldWidth(page, 'front');
+  await dragFrontRightEdgeIn(page);
+  const widthAfter = await surfaceWorldWidth(page, 'front');
+
+  expect(widthAfter, 'front panel shrank after inward edge drag').toBeLessThan(widthBefore * 0.98);
+
+  const { screensScale } = await storedScales(page);
+  expect(screensScale, 'screensScale < 1 after inward drag').toBeLessThan(1.0);
+});
+
+test('AC-9.1: edge resize leaves the controls group unchanged', async ({ page }) => {
+  test.setTimeout(90_000);
+  r = await rig([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' as const }] }]);
+  await emulateQuest(page);
+  await pair(page, r);
+  await enterMixedReality(page);
+  await expect.poll(async () => (await viewState(page)).surfaces).toContain('talk');
+
+  const talkWidthBefore = await surfaceWorldWidth(page, 'talk');
+  await dragFrontRightEdgeOut(page);
+  const talkWidthAfter = await surfaceWorldWidth(page, 'talk');
+
+  // Controls group must not change.
+  expect(Math.abs(talkWidthAfter - talkWidthBefore) / (talkWidthBefore || 1), 'talk panel unchanged').toBeLessThan(0.01);
+
+  const { controlsScale } = await storedScales(page);
+  expect(controlsScale, 'controlsScale still 1.0').toBeCloseTo(1.0, 2);
+});
+
+test('AC-9.1: scale persists in localStorage and survives a reload', async ({ page }) => {
+  test.setTimeout(120_000);
+  r = await rig([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' as const }] }]);
+  await emulateQuest(page);
+  await pair(page, r);
+  await enterMixedReality(page);
+  await expect.poll(async () => (await viewState(page)).surfaces).toContain('front');
+
+  await dragFrontRightEdgeOut(page);
+  const { screensScale: scaleBefore } = await storedScales(page);
+  expect(scaleBefore).toBeGreaterThan(1.0);
+
+  // Reload the page and re-enter XR.
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await enterMixedReality(page);
+  await expect.poll(async () => (await viewState(page)).surfaces).toContain('front');
+
+  // The world width should still reflect the saved scale.
+  const widthAfterReload = await surfaceWorldWidth(page, 'front');
+  // Compare against the width at scale=1 (from layout: FRONT_WIDTH = 1.1 m).
+  expect(widthAfterReload, 'width reflects saved scale after reload').toBeGreaterThan(1.1 * 1.02);
+});
+
+test('AC-9.1: Recenter resets scale to 1.0', async ({ page }) => {
+  test.setTimeout(90_000);
+  r = await rig([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' as const }] }]);
+  await emulateQuest(page);
+  await pair(page, r);
+  await enterMixedReality(page);
+  await expect.poll(async () => (await viewState(page)).surfaces).toContain('controls-0');
+
+  // Set a non-default scale in storage.
+  await page.evaluate(() => {
+    localStorage.setItem('spatial-view-group-offsets', JSON.stringify([[0, 0, 1.4], [0, 0, 1.4]]));
+  });
+
+  // Tap Recenter.
+  await tap(page, 'controller', 'controls-0', 'recenter');
+
+  // Wait for scale to return to 1.0 in storage.
+  await page.waitForFunction(() => {
+    const raw = localStorage.getItem('spatial-view-group-offsets');
+    if (!raw) return false;
+    try {
+      const d = JSON.parse(raw) as [[number, number, number], [number, number, number]];
+      return Math.abs((d[0][2] ?? 1) - 1.0) < 0.001 && Math.abs((d[1][2] ?? 1) - 1.0) < 0.001;
+    } catch { return false; }
+  }, undefined, { timeout: 8000 });
+
+  const { screensScale, controlsScale } = await storedScales(page);
+  expect(screensScale, 'screensScale reset to 1 after Recenter').toBeCloseTo(1.0, 2);
+  expect(controlsScale, 'controlsScale reset to 1 after Recenter').toBeCloseTo(1.0, 2);
+});
+
+test('AC-9.1: grabbing inside the front panel (not an edge) does not trigger resize', async ({ page }) => {
+  test.setTimeout(90_000);
+  r = await rig([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' as const }] }]);
+  await emulateQuest(page);
+  await pair(page, r);
+  await enterMixedReality(page);
+  await expect.poll(async () => (await viewState(page)).surfaces).toContain('front');
+
+  const widthBefore = await surfaceWorldWidth(page, 'front');
+
+  // Grab the centre of the front panel and drag — this scrolls content, not resize.
+  await aim(page, 'controller', 'front', 0.5, 0.5);
+  await setPressed(page, 'controller', 1);
+  await page.waitForTimeout(100);
+  await aim(page, 'controller', 'front', 0.5, 0.8);
+  await page.waitForTimeout(200);
+  await setPressed(page, 'controller', 0);
+  await page.waitForTimeout(150);
+
+  const widthAfter = await surfaceWorldWidth(page, 'front');
+  expect(Math.abs(widthAfter - widthBefore) / (widthBefore || 1), 'width unchanged for interior grab').toBeLessThan(0.01);
+});
+
+test('AC-9.1: control button still fires after a screens group scale-up', async ({ page }) => {
+  test.setTimeout(120_000);
+  r = await rig([{ label: 'alpha', panes: [{ name: 'keys', kind: 'shell' as const }] }]);
+  await emulateQuest(page);
+  await pair(page, r);
+  await page.evaluate(() => window.viewTest.fakeMic());
+  await enterMixedReality(page);
+  await expect.poll(async () => (await viewState(page)).surfaces).toContain('controls-1');
+
+  // Set up an echo in the shell pane.
+  await r.bench.client.call('pane.focus', { pane_id: r.bench.pane('keys') });
+  await r.bench.type('keys', 'cat -v');
+
+  // Scale the screens group up.
+  await dragFrontRightEdgeOut(page);
+
+  // After resize, a control button must still reach the session.
+  await tap(page, 'controller', 'controls-1', 'enter');
+  await expect.poll(() => plainText(r, 'keys'), { timeout: 10_000 }).toContain('cat -v');
+});
+
+test('AC-9.1: bar:screens still moves the group after a scale change', async ({ page }) => {
+  test.setTimeout(90_000);
+  r = await rig([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' as const }] }]);
+  await emulateQuest(page);
+  await pair(page, r);
+  await enterMixedReality(page);
+  await expect.poll(async () => (await viewState(page)).surfaces).toContain('bar:screens');
+
+  // Scale first.
+  await dragFrontRightEdgeOut(page);
+
+  // Then drag the bar — group should still move.
+  const frontBefore = await page.evaluate(() => window.viewTest.worldPoint('front', 0.5, 0.5)) as [number, number, number];
+  await aim(page, 'controller', 'bar:screens', 0.5, 0.5);
+  await setPressed(page, 'controller', 1);
+  await page.waitForTimeout(100);
+  await aim(page, 'controller', 'bar:screens', 0.9, 0.5);
+  await page.waitForTimeout(200);
+  await setPressed(page, 'controller', 0);
+  await page.waitForTimeout(150);
+  const frontAfter = await page.evaluate(() => window.viewTest.worldPoint('front', 0.5, 0.5)) as [number, number, number];
+
+  const dist = Math.hypot(frontAfter[0] - frontBefore[0], frontAfter[2] - frontBefore[2]);
+  expect(dist, 'screens group moved after scale + bar drag').toBeGreaterThan(0.01);
+});
+
+test('AC-9.1: mouse drag of front panel right edge outward scales screens group bigger', async ({ page }) => {
+  // Desktop mode (no XR session) — exercises the mouse code path in scene.ts.
+  test.setTimeout(90_000);
+  r = await rig([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' as const }] }]);
+  await pair(page, r);
+  await expect.poll(async () => (await viewState(page)).surfaces).toContain('front');
+  await page.waitForTimeout(300); // allow at least one render
+
+  // Compute the canvas screen coordinates for the right edge (x=0.97) and a far point (x=1.4).
+  const ptEdge = await page.evaluate(() => {
+    const eye: [number, number, number] = [0, 0.15, 1.15];
+    const tanFov = Math.tan(1.45 / 2);
+    const canvas = document.getElementById('scene') as HTMLCanvasElement;
+    const rect = canvas.getBoundingClientRect();
+    const aspect = rect.width / Math.max(1, rect.height);
+    function toScreen(fx: number, fy: number): { x: number; y: number } | null {
+      const wp = window.viewTest.worldPoint('front', fx, fy);
+      if (!wp) return null;
+      const dz = wp[2] - eye[2];
+      if (dz >= 0) return null;
+      const k = -dz;
+      const nx = (wp[0] - eye[0]) / (k * tanFov * aspect);
+      const ny = (wp[1] - eye[1]) / (k * tanFov);
+      return { x: ((nx + 1) / 2) * rect.width + rect.left, y: ((1 - ny) / 2) * rect.height + rect.top };
+    }
+    return { edge: toScreen(0.97, 0.5), far: toScreen(1.4, 0.5) };
+  });
+  if (!ptEdge?.edge || !ptEdge.far) throw new Error('Could not compute screen coordinates for front panel');
+
+  const widthBefore = await surfaceWorldWidth(page, 'front');
+
+  // Mouse drag: move to edge, press, move outward, release.
+  await page.mouse.move(ptEdge.edge.x, ptEdge.edge.y);
+  await page.waitForTimeout(80);
+  await page.mouse.down();
+  await page.waitForTimeout(80);
+  await page.mouse.move(ptEdge.far.x, ptEdge.far.y, { steps: 8 });
+  await page.waitForTimeout(200);
+  await page.mouse.up();
+  await page.waitForTimeout(150);
+
+  const widthAfter = await surfaceWorldWidth(page, 'front');
+  expect(widthAfter, 'front panel grew after mouse edge drag outward').toBeGreaterThan(widthBefore * 1.02);
+
+  const { screensScale } = await storedScales(page);
+  expect(screensScale, 'screensScale > 1 after mouse drag').toBeGreaterThan(1.0);
+});
+
+test('AC-9.1: edge drag of talk panel (controls group) scales controls group; screens group stays unchanged', async ({ page }) => {
+  test.setTimeout(90_000);
+  r = await rig([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' as const }] }]);
+  await emulateQuest(page);
+  await pair(page, r);
+  await enterMixedReality(page);
+  await expect.poll(async () => (await viewState(page)).surfaces).toContain('talk');
+
+  const talkWidthBefore = await surfaceWorldWidth(page, 'talk');
+  const frontWidthBefore = await surfaceWorldWidth(page, 'front');
+
+  // Grab the right edge of the talk panel (controls group) and drag outward.
+  await aim(page, 'controller', 'talk', 0.97, 0.5);
+  await setPressed(page, 'controller', 1);
+  await page.waitForTimeout(100);
+  await aim(page, 'controller', 'talk', 1.4, 0.5);
+  await page.waitForTimeout(200);
+  await setPressed(page, 'controller', 0);
+  await page.waitForTimeout(150);
+
+  const talkWidthAfter = await surfaceWorldWidth(page, 'talk');
+  const frontWidthAfter = await surfaceWorldWidth(page, 'front');
+
+  expect(talkWidthAfter, 'talk panel grew after outward edge drag').toBeGreaterThan(talkWidthBefore * 1.02);
+
+  const { controlsScale, screensScale } = await storedScales(page);
+  expect(controlsScale, 'controlsScale > 1 after talk edge drag').toBeGreaterThan(1.0);
+  expect(screensScale, 'screensScale unchanged after controls resize').toBeCloseTo(1.0, 2);
+  expect(Math.abs(frontWidthAfter - frontWidthBefore) / (frontWidthBefore || 1), 'front panel unchanged').toBeLessThan(0.01);
+});

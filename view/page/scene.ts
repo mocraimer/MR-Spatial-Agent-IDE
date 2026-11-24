@@ -20,6 +20,8 @@ export interface Hit { surface: string; x: number; y: number }
 export type Pointer = 'select-start' | 'select-end' | 'select' | 'squeeze-start' | 'squeeze-end' | 'button-start' | 'button-end';
 /** A rectangle on a surface's canvas, in its pixels: what a pointer is over. */
 export interface Rect { x: number; y: number; w: number; h: number }
+/** Which edge of a surface the pointer is over for a resize grab. */
+export type EdgeDir = 'top' | 'bottom' | 'left' | 'right';
 
 export interface SceneEvents {
   pointer(event: Pointer, hit: Hit | null): void;
@@ -44,6 +46,18 @@ export interface SceneEvents {
   frame(): void;
   /** The control under a pointer, to highlight; null when there is nothing to select there. */
   target(hit: Hit): Rect | null;
+  /** Whether this surface's edges can be grabbed to resize its group. */
+  edgeResize(surface: string): boolean;
+  /**
+   * An edge grab just started on `surface`. main.ts records the current group scale as scale0
+   * for ratio tracking.
+   */
+  edgeStart(surface: string): void;
+  /**
+   * An edge grab moved: ratio = newDist / initDist where both are distances from the head to
+   * the ray–surface intersection. main.ts applies scale0 × ratio, clamped to [0.6, 1.8].
+   */
+  edgeMove(surface: string, ratio: number): void;
 }
 
 // ---- Matrices (column-major, as WebGL and WebXR use) -----------------------------------------
@@ -100,6 +114,8 @@ void main() {
 
 /** Thumbstick scrolling: rows a second at full push, and the dead zone around the centre. */
 const STICK_ROWS_PER_S = 30, STICK_DEAD = 0.15;
+/** Fraction of a surface's canvas dimension that counts as an edge strip for resize grabs. */
+const EDGE_FRAC = 0.07;
 
 /** Desktop overview camera: a step behind the owner's seat, so the whole shelf is in view. */
 const DESKTOP_EYE: [number, number, number] = [0, 0.15, 1.15];
@@ -126,6 +142,10 @@ export class Scene {
   private readonly grabs = new Map<XRInputSource | 'mouse', { surface: string; y: number }>();
   /** Group bar grabs: surface being dragged and the cylinder radius for projection. */
   private readonly barGrabs = new Map<XRInputSource | 'mouse', { surface: string; radius: number }>();
+  /** Edge resize grabs: surface, grabbed edge, and initial distance from head to the grab point. */
+  private readonly edgeGrabs = new Map<XRInputSource | 'mouse', { surface: string; edge: EdgeDir; initDist: number }>();
+  /** The edge currently hovered by the pointer, or null. */
+  private currentEdgeHover: { surface: string; edge: EdgeDir } | null = null;
   private lastFrame = 0;
   private mouseHit: Hit | null = null;
   private anisotropy: { ext: EXT_texture_filter_anisotropic; max: number } | null = null;
@@ -148,7 +168,7 @@ export class Scene {
     const ext = gl.getExtension('EXT_texture_filter_anisotropic');
     if (ext) this.anisotropy = { ext, max: gl.getParameter(ext.MAX_TEXTURE_MAX_ANISOTROPY_EXT) as number };
     canvas.addEventListener('pointerdown', e => { this.mousePressed = true; this.mouse(e, 'select-start'); this.grab('mouse', this.mouseHit); });
-    canvas.addEventListener('pointerup', e => { this.mousePressed = false; this.grabs.delete('mouse'); this.barGrabs.delete('mouse'); this.mouse(e, 'select-end'); this.events.pointer('select', this.mouseHit); });
+    canvas.addEventListener('pointerup', e => { this.mousePressed = false; this.grabs.delete('mouse'); this.barGrabs.delete('mouse'); this.edgeGrabs.delete('mouse'); this.mouse(e, 'select-end'); this.events.pointer('select', this.mouseHit); });
     canvas.addEventListener('pointermove', e => { this.mouse(e, null); this.dragMouse(e); });
     canvas.addEventListener('wheel', e => this.events.scroll(-Math.sign(e.deltaY) * 3), { passive: true });
     // Outside the headset the window's frames drive drawing. In immersive mode the Quest stops
@@ -158,6 +178,13 @@ export class Scene {
   }
 
   get immersive(): boolean { return this.session !== null; }
+  /** Edge currently hovered by the pointer, or null when no resizable edge is under the pointer. */
+  get hoveredEdge(): { surface: string; edge: EdgeDir } | null { return this.currentEdgeHover; }
+  /** Surface currently being edge-resized and the grabbed edge, or null. */
+  get activeEdgeGrab(): { surface: string; edge: EdgeDir } | null {
+    for (const e of this.edgeGrabs.values()) return { surface: e.surface, edge: e.edge };
+    return null;
+  }
   /** Whether the current XR session supports the system keyboard; null when not in XR. */
   get sessionKeyboardSupported(): boolean | null {
     if (!this.session) return null;
@@ -211,12 +238,12 @@ export class Scene {
       this.grab(e.inputSource, hit);
       this.events.pointer('select-start', hit);
     });
-    session.addEventListener('selectend', e => { this.pressing.delete(e.inputSource); this.grabs.delete(e.inputSource); this.barGrabs.delete(e.inputSource); this.events.pointer('select-end', this.rays.get(e.inputSource)?.hit ?? null); });
+    session.addEventListener('selectend', e => { this.pressing.delete(e.inputSource); this.grabs.delete(e.inputSource); this.barGrabs.delete(e.inputSource); this.edgeGrabs.delete(e.inputSource); this.events.pointer('select-end', this.rays.get(e.inputSource)?.hit ?? null); });
     session.addEventListener('select', e => this.events.pointer('select', this.rays.get(e.inputSource)?.hit ?? null));
     session.addEventListener('squeezestart', () => this.events.pointer('squeeze-start', null));
     session.addEventListener('squeezeend', () => this.events.pointer('squeeze-end', null));
     session.addEventListener('visibilitychange', () => { this.events.visibilityChange?.(session.visibilityState); });
-    session.addEventListener('end', () => { this.session = null; this.space = null; this.rays.clear(); this.pressing.clear(); this.buttonDown.clear(); this.grabs.clear(); this.barGrabs.clear(); this.joints = []; onEnd(); });
+    session.addEventListener('end', () => { this.session = null; this.space = null; this.rays.clear(); this.pressing.clear(); this.buttonDown.clear(); this.grabs.clear(); this.barGrabs.clear(); this.edgeGrabs.clear(); this.joints = []; onEnd(); });
     session.requestAnimationFrame((t, frame) => this.frame(t, frame));
   }
 
@@ -264,6 +291,16 @@ export class Scene {
       if (grab) this.follow(source, grab, origin, dir);
       const bar = this.barGrabs.get(source);
       if (bar) this.followBar(source, bar, origin, dir);
+      const edgeGrab = this.edgeGrabs.get(source);
+      if (edgeGrab) this.followEdge(source, edgeGrab, origin, dir);
+      // Update hover state: last controller with an edge hit wins.
+      if (!edgeGrab && hit?.hit && this.events.edgeResize(hit.hit.surface)) {
+        const e = this.edgeOf(hit.hit);
+        if (e) this.currentEdgeHover = { surface: hit.hit.surface, edge: e };
+        else if (this.currentEdgeHover?.surface === hit.hit.surface) this.currentEdgeHover = null;
+      } else if (!edgeGrab && this.currentEdgeHover && !this.edgeGrabs.size) {
+        this.currentEdgeHover = null;
+      }
       // A/X (the lower face button) held is talk, like holding the Talk button.
       const down = source.gamepad?.buttons[4]?.pressed === true;
       if (down && !this.buttonDown.has(source)) { this.buttonDown.add(source); this.events.pointer('button-start', null); }
@@ -378,7 +415,7 @@ export class Scene {
     return best ? { hit: best.hit, point: best.point } : null;
   }
 
-  /** Starts a scroll grab (draggable surface) or a group-bar grab depending on what was hit. */
+  /** Starts a scroll grab (draggable surface), group-bar grab, or edge-resize grab. */
   private grab(by: XRInputSource | 'mouse', hit: Hit | null): void {
     if (!hit) return;
     if (this.events.groupBar(hit.surface)) {
@@ -394,7 +431,51 @@ export class Scene {
       }
       return;
     }
+    // Edge resize: a hit in the border strip of a resizable panel starts an edge grab.
+    if (this.events.edgeResize(hit.surface)) {
+      const edge = this.edgeOf(hit);
+      if (edge) {
+        const s = this.surfaces.get(hit.surface);
+        if (s) {
+          const initDist = this.edgeInitDist(s, edge);
+          if (initDist > 0) {
+            this.edgeGrabs.set(by, { surface: hit.surface, edge, initDist });
+            this.events.edgeStart(hit.surface);
+            return;
+          }
+        }
+        return; // consume the event even if initDist failed
+      }
+    }
     if (this.events.draggable(hit.surface) && !this.events.target(hit)) this.grabs.set(by, { surface: hit.surface, y: hit.y });
+  }
+
+  /** Returns which edge the hit lands in, or null for the interior. */
+  private edgeOf(hit: Hit): EdgeDir | null {
+    const s = this.surfaces.get(hit.surface);
+    if (!s) return null;
+    const nx = hit.x / s.canvas.width, ny = hit.y / s.canvas.height;
+    if (nx < EDGE_FRAC) return 'left';
+    if (nx > 1 - EDGE_FRAC) return 'right';
+    if (ny < EDGE_FRAC) return 'top';
+    if (ny > 1 - EDGE_FRAC) return 'bottom';
+    return null;
+  }
+
+  /**
+   * Distance from the head (anchor origin) to the centre of the given edge, in anchor-local metres.
+   * Used as the reference distance for scaling: ratio = newDist / initDist.
+   */
+  private edgeInitDist(s: Surface, edge: EdgeDir): number {
+    const h = s.width * s.canvas.height / s.canvas.width;
+    // Local offset of edge centre from surface centre (surface-local XY; Z=0)
+    const lx = edge === 'right' ? s.width / 2 : edge === 'left' ? -s.width / 2 : 0;
+    const ly = edge === 'top' ? h / 2 : edge === 'bottom' ? -h / 2 : 0;
+    // Transform from surface-local to anchor-local using pose columns (rigid body).
+    const ax = (s.pose[0] ?? 0) * lx + (s.pose[4] ?? 0) * ly + (s.pose[12] ?? 0);
+    const ay = (s.pose[1] ?? 0) * lx + (s.pose[5] ?? 0) * ly + (s.pose[13] ?? 0);
+    const az = (s.pose[2] ?? 0) * lx + (s.pose[6] ?? 0) * ly + (s.pose[14] ?? 0);
+    return Math.sqrt(ax * ax + ay * ay + az * az);
   }
 
   /** Moves a grab to where its ray now meets the grabbed surface's plane, even past its edge. */
@@ -432,11 +513,36 @@ export class Scene {
     this.events.groupMove(bar.surface, pos);
   }
 
+  /**
+   * Moves an edge grab: intersects the ray with the surface plane in anchor-local space,
+   * measures the distance from the origin to the hit, and reports the ratio to main.ts.
+   */
+  private followEdge(by: XRInputSource | 'mouse', edgeGrab: { surface: string; initDist: number }, origin: [number, number, number], dir: [number, number, number]): void {
+    const s = this.surfaces.get(edgeGrab.surface);
+    if (!s) { this.edgeGrabs.delete(by); return; }
+    // Convert ray to anchor-local space.
+    const toLocal = invertRigid(this.anchor);
+    const o = apply(toLocal, origin, 1), d = apply(toLocal, dir, 0);
+    // Surface plane normal and centre in anchor-local: col 2 and col 3 of pose.
+    const nx = s.pose[8] ?? 0, ny = s.pose[9] ?? 0, nz = s.pose[10] ?? 0;
+    const cx = s.pose[12] ?? 0, cy = s.pose[13] ?? 0, cz = s.pose[14] ?? 0;
+    const denom = d[0] * nx + d[1] * ny + d[2] * nz;
+    if (Math.abs(denom) < 1e-6) return;
+    const t = ((cx - o[0]) * nx + (cy - o[1]) * ny + (cz - o[2]) * nz) / denom;
+    if (t <= 0) return;
+    const px = o[0] + d[0] * t, py = o[1] + d[1] * t, pz = o[2] + d[2] * t;
+    const newDist = Math.sqrt(px * px + py * py + pz * pz);
+    if (newDist <= 0) return;
+    this.events.edgeMove(edgeGrab.surface, newDist / edgeGrab.initDist);
+  }
+
   private dragMouse(e: PointerEvent): void {
     const grab = this.grabs.get('mouse');
     if (grab && !this.session) { this.follow('mouse', grab, DESKTOP_EYE, this.mouseRay(e)); return; }
     const bar = this.barGrabs.get('mouse');
-    if (bar && !this.session) this.followBar('mouse', bar, DESKTOP_EYE, this.mouseRay(e));
+    if (bar && !this.session) { this.followBar('mouse', bar, DESKTOP_EYE, this.mouseRay(e)); return; }
+    const edgeGrab = this.edgeGrabs.get('mouse');
+    if (edgeGrab && !this.session) this.followEdge('mouse', edgeGrab, DESKTOP_EYE, this.mouseRay(e));
   }
 
   private mouseRay(e: PointerEvent): [number, number, number] {
@@ -450,6 +556,13 @@ export class Scene {
     if (this.session) return;
     this.mouseHit = this.cast(DESKTOP_EYE, this.mouseRay(e))?.hit ?? null;
     this.canvas.style.cursor = this.mouseHit ? 'pointer' : 'default';
+    // Update edge hover state for desktop/mouse.
+    if (this.mouseHit && this.events.edgeResize(this.mouseHit.surface)) {
+      const e2 = this.edgeOf(this.mouseHit);
+      this.currentEdgeHover = e2 ? { surface: this.mouseHit.surface, edge: e2 } : null;
+    } else {
+      this.currentEdgeHover = null;
+    }
     if (event) this.events.pointer(event, this.mouseHit);
   }
 }
