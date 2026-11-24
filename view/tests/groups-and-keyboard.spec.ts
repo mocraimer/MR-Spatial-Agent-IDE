@@ -919,3 +919,82 @@ test('AC-9.1: bar:screens still moves the group after a scale change', async ({ 
   const dist = Math.hypot(frontAfter[0] - frontBefore[0], frontAfter[2] - frontBefore[2]);
   expect(dist, 'screens group moved after scale + bar drag').toBeGreaterThan(0.01);
 });
+
+test('AC-9.1: mouse drag of front panel right edge outward scales screens group bigger', async ({ page }) => {
+  // Desktop mode (no XR session) — exercises the mouse code path in scene.ts.
+  test.setTimeout(90_000);
+  r = await rig([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' as const }] }]);
+  await pair(page, r);
+  await expect.poll(async () => (await viewState(page)).surfaces).toContain('front');
+  await page.waitForTimeout(300); // allow at least one render
+
+  // Compute the canvas screen coordinates for the right edge (x=0.97) and a far point (x=1.4).
+  const ptEdge = await page.evaluate(() => {
+    const eye: [number, number, number] = [0, 0.15, 1.15];
+    const tanFov = Math.tan(1.45 / 2);
+    const canvas = document.getElementById('scene') as HTMLCanvasElement;
+    const rect = canvas.getBoundingClientRect();
+    const aspect = rect.width / Math.max(1, rect.height);
+    function toScreen(fx: number, fy: number): { x: number; y: number } | null {
+      const wp = window.viewTest.worldPoint('front', fx, fy);
+      if (!wp) return null;
+      const dz = wp[2] - eye[2];
+      if (dz >= 0) return null;
+      const k = -dz;
+      const nx = (wp[0] - eye[0]) / (k * tanFov * aspect);
+      const ny = (wp[1] - eye[1]) / (k * tanFov);
+      return { x: ((nx + 1) / 2) * rect.width + rect.left, y: ((1 - ny) / 2) * rect.height + rect.top };
+    }
+    return { edge: toScreen(0.97, 0.5), far: toScreen(1.4, 0.5) };
+  });
+  if (!ptEdge?.edge || !ptEdge.far) throw new Error('Could not compute screen coordinates for front panel');
+
+  const widthBefore = await surfaceWorldWidth(page, 'front');
+
+  // Mouse drag: move to edge, press, move outward, release.
+  await page.mouse.move(ptEdge.edge.x, ptEdge.edge.y);
+  await page.waitForTimeout(80);
+  await page.mouse.down();
+  await page.waitForTimeout(80);
+  await page.mouse.move(ptEdge.far.x, ptEdge.far.y, { steps: 8 });
+  await page.waitForTimeout(200);
+  await page.mouse.up();
+  await page.waitForTimeout(150);
+
+  const widthAfter = await surfaceWorldWidth(page, 'front');
+  expect(widthAfter, 'front panel grew after mouse edge drag outward').toBeGreaterThan(widthBefore * 1.02);
+
+  const { screensScale } = await storedScales(page);
+  expect(screensScale, 'screensScale > 1 after mouse drag').toBeGreaterThan(1.0);
+});
+
+test('AC-9.1: edge drag of talk panel (controls group) scales controls group; screens group stays unchanged', async ({ page }) => {
+  test.setTimeout(90_000);
+  r = await rig([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' as const }] }]);
+  await emulateQuest(page);
+  await pair(page, r);
+  await enterMixedReality(page);
+  await expect.poll(async () => (await viewState(page)).surfaces).toContain('talk');
+
+  const talkWidthBefore = await surfaceWorldWidth(page, 'talk');
+  const frontWidthBefore = await surfaceWorldWidth(page, 'front');
+
+  // Grab the right edge of the talk panel (controls group) and drag outward.
+  await aim(page, 'controller', 'talk', 0.97, 0.5);
+  await setPressed(page, 'controller', 1);
+  await page.waitForTimeout(100);
+  await aim(page, 'controller', 'talk', 1.4, 0.5);
+  await page.waitForTimeout(200);
+  await setPressed(page, 'controller', 0);
+  await page.waitForTimeout(150);
+
+  const talkWidthAfter = await surfaceWorldWidth(page, 'talk');
+  const frontWidthAfter = await surfaceWorldWidth(page, 'front');
+
+  expect(talkWidthAfter, 'talk panel grew after outward edge drag').toBeGreaterThan(talkWidthBefore * 1.02);
+
+  const { controlsScale, screensScale } = await storedScales(page);
+  expect(controlsScale, 'controlsScale > 1 after talk edge drag').toBeGreaterThan(1.0);
+  expect(screensScale, 'screensScale unchanged after controls resize').toBeCloseTo(1.0, 2);
+  expect(Math.abs(frontWidthAfter - frontWidthBefore) / (frontWidthBefore || 1), 'front panel unchanged').toBeLessThan(0.01);
+});
