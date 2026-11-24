@@ -177,6 +177,45 @@ export async function squeeze(page: Page, value: number): Promise<void> {
   await page.evaluate(value => { (window as unknown as { __xr: Emulator }).__xr.controllers.right.updateButtonValue('squeeze', value); }, value);
 }
 
+/**
+ * Places the right hand's index-finger-tip at `offsetM` metres in front of the surface point
+ * (surface, x, y), then activates hand mode so the poke loop in scene.ts can detect it.
+ * Pass a negative offsetM to push the tip behind the surface plane.
+ */
+export async function pokeTip(page: Page, surface: string, x: number, y: number, offsetM = 0.005): Promise<void> {
+  const ok = await page.evaluate(({ surface, x, y, offsetM }) => {
+    const xr = (window as unknown as { __xr: Emulator }).__xr;
+    const target = window.viewTest.worldPoint(surface, x, y);
+    const normal = window.viewTest.surfaceNormal(surface);
+    if (!target || !normal) return false;
+    const w = window as unknown as { __head?: [number, number, number] };
+    w.__head ??= [xr.position.x, xr.position.y, xr.position.z];
+    const [hx, hy, hz] = w.__head;
+    const tipPos: [number, number, number] = [
+      target[0] + normal[0] * offsetM + hx,
+      target[1] + normal[1] * offsetM + hy,
+      target[2] + normal[2] * offsetM + hz,
+    ];
+    xr.primaryInputMode = 'hand';
+    // IWER: pin the hand's index-finger-tip to the tip world position.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (xr.hands.right as any).setPin({ anchor: 'index-tip', target: tipPos });
+    return true;
+  }, { surface, x, y, offsetM });
+  if (!ok) throw new Error(`No surface ${surface} to poke`);
+  await page.waitForTimeout(200);
+}
+
+/** Retracts the right index-finger-tip far from all surfaces (clears any poke state). */
+export async function clearPoke(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const xr = (window as unknown as { __xr: Emulator }).__xr;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (xr.hands.right as any).setPin(null);
+  });
+  await page.waitForTimeout(200);
+}
+
 /** The point of a button region on a surface, as fractions of the surface. */
 export async function regionPoint(page: Page, surface: string, id: string): Promise<{ x: number; y: number }> {
   // A region appears on the frame after the state that draws it.

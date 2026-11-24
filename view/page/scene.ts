@@ -20,8 +20,8 @@ export interface Hit { surface: string; x: number; y: number }
 export type Pointer = 'select-start' | 'select-end' | 'select' | 'squeeze-start' | 'squeeze-end' | 'button-start' | 'button-end';
 /** A rectangle on a surface's canvas, in its pixels: what a pointer is over. */
 export interface Rect { x: number; y: number; w: number; h: number }
-/** Which edge of a surface the pointer is over for a resize grab. */
-export type EdgeDir = 'top' | 'bottom' | 'left' | 'right';
+/** Which corner of a surface the pointer is over for a resize grab. */
+export type CornerDir = 'tl' | 'tr' | 'bl' | 'br';
 
 export interface SceneEvents {
   pointer(event: Pointer, hit: Hit | null): void;
@@ -46,18 +46,18 @@ export interface SceneEvents {
   frame(): void;
   /** The control under a pointer, to highlight; null when there is nothing to select there. */
   target(hit: Hit): Rect | null;
-  /** Whether this surface's edges can be grabbed to resize its group. */
-  edgeResize(surface: string): boolean;
+  /** Whether this surface's corners can be grabbed to resize its group. */
+  cornerResize(surface: string): boolean;
   /**
-   * An edge grab just started on `surface`. main.ts records the current group scale as scale0
+   * A corner grab just started on `surface`. main.ts records the current group scale as scale0
    * for ratio tracking.
    */
-  edgeStart(surface: string): void;
+  cornerStart(surface: string): void;
   /**
-   * An edge grab moved: ratio = newDist / initDist where both are distances from the head to
+   * A corner grab moved: ratio = newDist / initDist where both are distances from the head to
    * the ray–surface intersection. main.ts applies scale0 × ratio, clamped to [0.6, 1.8].
    */
-  edgeMove(surface: string, ratio: number): void;
+  cornerMove(surface: string, ratio: number): void;
 }
 
 // ---- Matrices (column-major, as WebGL and WebXR use) -----------------------------------------
@@ -114,8 +114,18 @@ void main() {
 
 /** Thumbstick scrolling: rows a second at full push, and the dead zone around the centre. */
 const STICK_ROWS_PER_S = 30, STICK_DEAD = 0.15;
-/** Fraction of a surface's canvas dimension that counts as an edge strip for resize grabs. */
-const EDGE_FRAC = 0.07;
+/**
+ * Fraction of each canvas dimension that counts as a corner zone for resize grabs.
+ * A hit in the corner zone (nx < CORNER_FRAC && ny < CORNER_FRAC, etc.) starts a corner grab.
+ */
+const CORNER_FRAC = 0.12;
+/**
+ * Fingertip-poke thresholds for direct hand interaction.
+ * When the index-finger-tip (joint 9) crosses from outside to within POKE_ENTER_M of a surface
+ * plane, and a button target is under the projected canvas position, the button fires once.
+ * The poke ends when the tip retreats past POKE_EXIT_M (hysteresis prevents chattering).
+ */
+const POKE_ENTER_M = 0.015, POKE_EXIT_M = 0.030;
 
 /** Desktop overview camera: a step behind the owner's seat, so the whole shelf is in view. */
 const DESKTOP_EYE: [number, number, number] = [0, 0.15, 1.15];
@@ -142,10 +152,16 @@ export class Scene {
   private readonly grabs = new Map<XRInputSource | 'mouse', { surface: string; y: number }>();
   /** Group bar grabs: surface being dragged and the cylinder radius for projection. */
   private readonly barGrabs = new Map<XRInputSource | 'mouse', { surface: string; radius: number }>();
-  /** Edge resize grabs: surface, grabbed edge, and initial distance from head to the grab point. */
-  private readonly edgeGrabs = new Map<XRInputSource | 'mouse', { surface: string; edge: EdgeDir; initDist: number }>();
-  /** The edge currently hovered by the pointer, or null. */
-  private currentEdgeHover: { surface: string; edge: EdgeDir } | null = null;
+  /** Corner resize grabs: surface, grabbed corner, and initial distance from head to the grab point. */
+  private readonly cornerGrabs = new Map<XRInputSource | 'mouse', { surface: string; corner: CornerDir; initDist: number }>();
+  /** The corner currently hovered by the pointer, or null. */
+  private currentCornerHover: { surface: string; corner: CornerDir } | null = null;
+  /**
+   * Per-hand-source poke state for fingertip direct interaction.
+   * `inside` = tip is currently within POKE_ENTER_M of a surface with a button target —
+   * the button fired on entry and must not re-fire until the tip retreats past POKE_EXIT_M.
+   */
+  private readonly pokeStates = new Map<XRInputSource, { surface: string; inside: boolean }>();
   private lastFrame = 0;
   private mouseHit: Hit | null = null;
   private anisotropy: { ext: EXT_texture_filter_anisotropic; max: number } | null = null;
@@ -168,7 +184,7 @@ export class Scene {
     const ext = gl.getExtension('EXT_texture_filter_anisotropic');
     if (ext) this.anisotropy = { ext, max: gl.getParameter(ext.MAX_TEXTURE_MAX_ANISOTROPY_EXT) as number };
     canvas.addEventListener('pointerdown', e => { this.mousePressed = true; this.mouse(e, 'select-start'); this.grab('mouse', this.mouseHit); });
-    canvas.addEventListener('pointerup', e => { this.mousePressed = false; this.grabs.delete('mouse'); this.barGrabs.delete('mouse'); this.edgeGrabs.delete('mouse'); this.mouse(e, 'select-end'); this.events.pointer('select', this.mouseHit); });
+    canvas.addEventListener('pointerup', e => { this.mousePressed = false; this.grabs.delete('mouse'); this.barGrabs.delete('mouse'); this.cornerGrabs.delete('mouse'); this.mouse(e, 'select-end'); this.events.pointer('select', this.mouseHit); });
     canvas.addEventListener('pointermove', e => { this.mouse(e, null); this.dragMouse(e); });
     canvas.addEventListener('wheel', e => this.events.scroll(-Math.sign(e.deltaY) * 3), { passive: true });
     // Outside the headset the window's frames drive drawing. In immersive mode the Quest stops
@@ -178,11 +194,11 @@ export class Scene {
   }
 
   get immersive(): boolean { return this.session !== null; }
-  /** Edge currently hovered by the pointer, or null when no resizable edge is under the pointer. */
-  get hoveredEdge(): { surface: string; edge: EdgeDir } | null { return this.currentEdgeHover; }
-  /** Surface currently being edge-resized and the grabbed edge, or null. */
-  get activeEdgeGrab(): { surface: string; edge: EdgeDir } | null {
-    for (const e of this.edgeGrabs.values()) return { surface: e.surface, edge: e.edge };
+  /** Corner currently hovered by the pointer, or null when no resizable corner is under the pointer. */
+  get hoveredCorner(): { surface: string; corner: CornerDir } | null { return this.currentCornerHover; }
+  /** Surface currently being corner-resized and the grabbed corner, or null. */
+  get activeCornerGrab(): { surface: string; corner: CornerDir } | null {
+    for (const e of this.cornerGrabs.values()) return { surface: e.surface, corner: e.corner };
     return null;
   }
   /** Whether the current XR session supports the system keyboard; null when not in XR. */
@@ -212,6 +228,14 @@ export class Scene {
     return apply(multiply(this.anchor, s.pose), [(x - 0.5) * s.width, (0.5 - y) * h, 0], 1);
   }
 
+  /** Returns the outward-facing normal of a surface in WebXR local-space coordinates. */
+  surfaceNormal(id: string): [number, number, number] | null {
+    const s = this.surfaces.get(id);
+    if (!s) return null;
+    const m = multiply(this.anchor, s.pose);
+    return [m[8] as number, m[9] as number, m[10] as number];
+  }
+
   async enter(onEnd: () => void): Promise<void> {
     const xr = navigator.xr;
     if (!xr) throw new Error('This browser has no WebXR.');
@@ -238,12 +262,12 @@ export class Scene {
       this.grab(e.inputSource, hit);
       this.events.pointer('select-start', hit);
     });
-    session.addEventListener('selectend', e => { this.pressing.delete(e.inputSource); this.grabs.delete(e.inputSource); this.barGrabs.delete(e.inputSource); this.edgeGrabs.delete(e.inputSource); this.events.pointer('select-end', this.rays.get(e.inputSource)?.hit ?? null); });
+    session.addEventListener('selectend', e => { this.pressing.delete(e.inputSource); this.grabs.delete(e.inputSource); this.barGrabs.delete(e.inputSource); this.cornerGrabs.delete(e.inputSource); this.events.pointer('select-end', this.rays.get(e.inputSource)?.hit ?? null); });
     session.addEventListener('select', e => this.events.pointer('select', this.rays.get(e.inputSource)?.hit ?? null));
     session.addEventListener('squeezestart', () => this.events.pointer('squeeze-start', null));
     session.addEventListener('squeezeend', () => this.events.pointer('squeeze-end', null));
     session.addEventListener('visibilitychange', () => { this.events.visibilityChange?.(session.visibilityState); });
-    session.addEventListener('end', () => { this.session = null; this.space = null; this.rays.clear(); this.pressing.clear(); this.buttonDown.clear(); this.grabs.clear(); this.barGrabs.clear(); this.edgeGrabs.clear(); this.joints = []; onEnd(); });
+    session.addEventListener('end', () => { this.session = null; this.space = null; this.rays.clear(); this.pressing.clear(); this.buttonDown.clear(); this.grabs.clear(); this.barGrabs.clear(); this.cornerGrabs.clear(); this.pokeStates.clear(); this.joints = []; onEnd(); });
     session.requestAnimationFrame((t, frame) => this.frame(t, frame));
   }
 
@@ -277,6 +301,17 @@ export class Scene {
           const jp = frame.getJointPose?.(joint, space);
           if (jp) this.joints.push(apply(jp.transform.matrix as Mat, [0, 0, 0], 1));
         }
+        // Fingertip poke: index-finger-tip (joint index 9) pressing a button directly.
+        const indexTipJoint = [...source.hand.values()][9];
+        const tipPose = indexTipJoint ? frame.getJointPose?.(indexTipJoint, space) : null;
+        if (tipPose) {
+          const tip = apply(tipPose.transform.matrix as Mat, [0, 0, 0], 1);
+          this.checkPoke(source, tip);
+        } else {
+          this.pokeStates.delete(source);
+        }
+      } else {
+        this.pokeStates.delete(source);
       }
       const p = frame.getPose(source.targetRaySpace, space);
       if (!p) continue;
@@ -291,16 +326,16 @@ export class Scene {
       if (grab) this.follow(source, grab, origin, dir);
       const bar = this.barGrabs.get(source);
       if (bar) this.followBar(source, bar, origin, dir);
-      const edgeGrab = this.edgeGrabs.get(source);
-      if (edgeGrab) this.followEdge(source, edgeGrab, origin, dir);
-      // Update hover state: last controller with an edge hit wins.
-      // Suppress the edge highlight when a target (button/region) is under the pointer.
-      if (!edgeGrab && hit?.hit && this.events.edgeResize(hit.hit.surface) && !this.events.target(hit.hit)) {
-        const e = this.edgeOf(hit.hit);
-        if (e) this.currentEdgeHover = { surface: hit.hit.surface, edge: e };
-        else if (this.currentEdgeHover?.surface === hit.hit.surface) this.currentEdgeHover = null;
-      } else if (!edgeGrab && this.currentEdgeHover && !this.edgeGrabs.size) {
-        this.currentEdgeHover = null;
+      const cornerGrab = this.cornerGrabs.get(source);
+      if (cornerGrab) this.followCorner(source, cornerGrab, origin, dir);
+      // Update hover state: last controller with a corner hit wins.
+      // Suppress the corner highlight when a target (button/region) is under the pointer.
+      if (!cornerGrab && hit?.hit && this.events.cornerResize(hit.hit.surface) && !this.events.target(hit.hit)) {
+        const c = this.cornerOf(hit.hit);
+        if (c) this.currentCornerHover = { surface: hit.hit.surface, corner: c };
+        else if (this.currentCornerHover?.surface === hit.hit.surface) this.currentCornerHover = null;
+      } else if (!cornerGrab && this.currentCornerHover && !this.cornerGrabs.size) {
+        this.currentCornerHover = null;
       }
       // A/X (the lower face button) held is talk, like holding the Talk button.
       const down = source.gamepad?.buttons[4]?.pressed === true;
@@ -416,7 +451,7 @@ export class Scene {
     return best ? { hit: best.hit, point: best.point } : null;
   }
 
-  /** Starts a scroll grab (draggable surface), group-bar grab, or edge-resize grab. */
+  /** Starts a scroll grab (draggable surface), group-bar grab, or corner-resize grab. */
   private grab(by: XRInputSource | 'mouse', hit: Hit | null): void {
     if (!hit) return;
     if (this.events.groupBar(hit.surface)) {
@@ -432,18 +467,18 @@ export class Scene {
       }
       return;
     }
-    // Edge resize: a hit in the border strip of a resizable panel starts an edge grab,
+    // Corner resize: a hit in the corner zone of a resizable panel starts a corner grab,
     // but only when there is no button or region target under the pointer — a press on
     // a target always fires the target, never the resize.
-    if (this.events.edgeResize(hit.surface) && !this.events.target(hit)) {
-      const edge = this.edgeOf(hit);
-      if (edge) {
+    if (this.events.cornerResize(hit.surface) && !this.events.target(hit)) {
+      const corner = this.cornerOf(hit);
+      if (corner) {
         const s = this.surfaces.get(hit.surface);
         if (s) {
-          const initDist = this.edgeInitDist(s, edge);
+          const initDist = this.cornerInitDist(s, corner);
           if (initDist > 0) {
-            this.edgeGrabs.set(by, { surface: hit.surface, edge, initDist });
-            this.events.edgeStart(hit.surface);
+            this.cornerGrabs.set(by, { surface: hit.surface, corner, initDist });
+            this.events.cornerStart(hit.surface);
             return;
           }
         }
@@ -453,27 +488,27 @@ export class Scene {
     if (this.events.draggable(hit.surface) && !this.events.target(hit)) this.grabs.set(by, { surface: hit.surface, y: hit.y });
   }
 
-  /** Returns which edge the hit lands in, or null for the interior. */
-  private edgeOf(hit: Hit): EdgeDir | null {
+  /** Returns which corner the hit lands in, or null for the interior or non-corner edges. */
+  private cornerOf(hit: Hit): CornerDir | null {
     const s = this.surfaces.get(hit.surface);
     if (!s) return null;
     const nx = hit.x / s.canvas.width, ny = hit.y / s.canvas.height;
-    if (nx < EDGE_FRAC) return 'left';
-    if (nx > 1 - EDGE_FRAC) return 'right';
-    if (ny < EDGE_FRAC) return 'top';
-    if (ny > 1 - EDGE_FRAC) return 'bottom';
+    if (nx < CORNER_FRAC && ny < CORNER_FRAC) return 'tl';
+    if (nx > 1 - CORNER_FRAC && ny < CORNER_FRAC) return 'tr';
+    if (nx < CORNER_FRAC && ny > 1 - CORNER_FRAC) return 'bl';
+    if (nx > 1 - CORNER_FRAC && ny > 1 - CORNER_FRAC) return 'br';
     return null;
   }
 
   /**
-   * Distance from the head (anchor origin) to the centre of the given edge, in anchor-local metres.
+   * Distance from the head (anchor origin) to the given corner of `s`, in anchor-local metres.
    * Used as the reference distance for scaling: ratio = newDist / initDist.
    */
-  private edgeInitDist(s: Surface, edge: EdgeDir): number {
+  private cornerInitDist(s: Surface, corner: CornerDir): number {
     const h = s.width * s.canvas.height / s.canvas.width;
-    // Local offset of edge centre from surface centre (surface-local XY; Z=0)
-    const lx = edge === 'right' ? s.width / 2 : edge === 'left' ? -s.width / 2 : 0;
-    const ly = edge === 'top' ? h / 2 : edge === 'bottom' ? -h / 2 : 0;
+    // Surface-local offset of corner from surface centre (canvas x right → positive lx; canvas y down → negative ly).
+    const lx = (corner === 'tr' || corner === 'br') ? s.width / 2 : -s.width / 2;
+    const ly = (corner === 'tl' || corner === 'tr') ? h / 2 : -h / 2;
     // Transform from surface-local to anchor-local using pose columns (rigid body).
     const ax = (s.pose[0] ?? 0) * lx + (s.pose[4] ?? 0) * ly + (s.pose[12] ?? 0);
     const ay = (s.pose[1] ?? 0) * lx + (s.pose[5] ?? 0) * ly + (s.pose[13] ?? 0);
@@ -517,12 +552,12 @@ export class Scene {
   }
 
   /**
-   * Moves an edge grab: intersects the ray with the surface plane in anchor-local space,
+   * Moves a corner grab: intersects the ray with the surface plane in anchor-local space,
    * measures the distance from the origin to the hit, and reports the ratio to main.ts.
    */
-  private followEdge(by: XRInputSource | 'mouse', edgeGrab: { surface: string; initDist: number }, origin: [number, number, number], dir: [number, number, number]): void {
-    const s = this.surfaces.get(edgeGrab.surface);
-    if (!s) { this.edgeGrabs.delete(by); return; }
+  private followCorner(by: XRInputSource | 'mouse', cornerGrab: { surface: string; initDist: number }, origin: [number, number, number], dir: [number, number, number]): void {
+    const s = this.surfaces.get(cornerGrab.surface);
+    if (!s) { this.cornerGrabs.delete(by); return; }
     // Convert ray to anchor-local space.
     const toLocal = invertRigid(this.anchor);
     const o = apply(toLocal, origin, 1), d = apply(toLocal, dir, 0);
@@ -536,7 +571,72 @@ export class Scene {
     const px = o[0] + d[0] * t, py = o[1] + d[1] * t, pz = o[2] + d[2] * t;
     const newDist = Math.sqrt(px * px + py * py + pz * pz);
     if (newDist <= 0) return;
-    this.events.edgeMove(edgeGrab.surface, newDist / edgeGrab.initDist);
+    this.events.cornerMove(cornerGrab.surface, newDist / cornerGrab.initDist);
+  }
+
+  /**
+   * Checks whether the index fingertip is poking a button on any surface.
+   * Fires select events (once per poke, with hysteresis) when the tip crosses POKE_ENTER_M
+   * in front of a surface plane and a button target is under the projected canvas position.
+   */
+  private checkPoke(source: XRInputSource, tip: [number, number, number]): void {
+    const toLocal = invertRigid(this.anchor);
+    const tipLocal = apply(toLocal, tip, 1);
+
+    // Track whether this source poked anything this frame; if not and it was inside, check exit.
+    let closestPokeHit: Hit | null = null;
+    let closestDist = POKE_ENTER_M;
+
+    for (const [id, s] of this.surfaces) {
+      // Surface normal and centre in anchor-local space.
+      const nx = s.pose[8] ?? 0, ny = s.pose[9] ?? 0, nz = s.pose[10] ?? 0;
+      const cx = s.pose[12] ?? 0, cy = s.pose[13] ?? 0, cz = s.pose[14] ?? 0;
+      // Signed distance from tip to surface plane (positive = in front of surface).
+      const signedDist = (tipLocal[0] - cx) * nx + (tipLocal[1] - cy) * ny + (tipLocal[2] - cz) * nz;
+      if (signedDist < 0 || signedDist > POKE_EXIT_M) continue;
+      // Project tip onto surface plane.
+      const px = tipLocal[0] - signedDist * nx;
+      const py = tipLocal[1] - signedDist * ny;
+      const pz = tipLocal[2] - signedDist * nz;
+      // Transform from anchor-local to surface-local.
+      const surfLocal = invertRigid(s.pose);
+      const sl = apply(surfLocal, [px, py, pz], 1);
+      const h = s.width * s.canvas.height / s.canvas.width;
+      if (Math.abs(sl[0]) > s.width / 2 || Math.abs(sl[1]) > h / 2) continue;
+      // Canvas coordinates of projected tip.
+      const canvasX = (sl[0] / s.width + 0.5) * s.canvas.width;
+      const canvasY = (0.5 - sl[1] / h) * s.canvas.height;
+      const hit: Hit = { surface: id, x: canvasX, y: canvasY };
+      // Only poke if a button is there.
+      if (!this.events.target(hit)) continue;
+      // Track the closest poke candidate within POKE_ENTER_M.
+      if (signedDist < closestDist) {
+        closestDist = signedDist;
+        closestPokeHit = hit;
+      }
+    }
+
+    const state = this.pokeStates.get(source);
+    if (closestPokeHit) {
+      if (!state || !state.inside) {
+        // Tip just entered poke range over a button — fire once.
+        this.pokeStates.set(source, { surface: closestPokeHit.surface, inside: true });
+        this.events.pointer('select-start', closestPokeHit);
+        this.events.pointer('select', closestPokeHit);
+        this.events.pointer('select-end', closestPokeHit);
+      }
+      // While inside, do nothing (hysteresis: wait for retreat past POKE_EXIT_M).
+    } else if (state?.inside) {
+      // Check if tip has retreated past POKE_EXIT_M for all surfaces.
+      let stillNear = false;
+      for (const [, s] of this.surfaces) {
+        const nx = s.pose[8] ?? 0, ny = s.pose[9] ?? 0, nz = s.pose[10] ?? 0;
+        const cx = s.pose[12] ?? 0, cy = s.pose[13] ?? 0, cz = s.pose[14] ?? 0;
+        const signedDist = (tipLocal[0] - cx) * nx + (tipLocal[1] - cy) * ny + (tipLocal[2] - cz) * nz;
+        if (signedDist >= 0 && signedDist < POKE_EXIT_M) { stillNear = true; break; }
+      }
+      if (!stillNear) this.pokeStates.set(source, { surface: state.surface, inside: false });
+    }
   }
 
   private dragMouse(e: PointerEvent): void {
@@ -544,8 +644,8 @@ export class Scene {
     if (grab && !this.session) { this.follow('mouse', grab, DESKTOP_EYE, this.mouseRay(e)); return; }
     const bar = this.barGrabs.get('mouse');
     if (bar && !this.session) { this.followBar('mouse', bar, DESKTOP_EYE, this.mouseRay(e)); return; }
-    const edgeGrab = this.edgeGrabs.get('mouse');
-    if (edgeGrab && !this.session) this.followEdge('mouse', edgeGrab, DESKTOP_EYE, this.mouseRay(e));
+    const cornerGrab = this.cornerGrabs.get('mouse');
+    if (cornerGrab && !this.session) this.followCorner('mouse', cornerGrab, DESKTOP_EYE, this.mouseRay(e));
   }
 
   private mouseRay(e: PointerEvent): [number, number, number] {
@@ -559,12 +659,12 @@ export class Scene {
     if (this.session) return;
     this.mouseHit = this.cast(DESKTOP_EYE, this.mouseRay(e))?.hit ?? null;
     this.canvas.style.cursor = this.mouseHit ? 'pointer' : 'default';
-    // Update edge hover state for desktop/mouse. Suppress over targets.
-    if (this.mouseHit && this.events.edgeResize(this.mouseHit.surface) && !this.events.target(this.mouseHit)) {
-      const e2 = this.edgeOf(this.mouseHit);
-      this.currentEdgeHover = e2 ? { surface: this.mouseHit.surface, edge: e2 } : null;
+    // Update corner hover state for desktop/mouse. Suppress over targets.
+    if (this.mouseHit && this.events.cornerResize(this.mouseHit.surface) && !this.events.target(this.mouseHit)) {
+      const c = this.cornerOf(this.mouseHit);
+      this.currentCornerHover = c ? { surface: this.mouseHit.surface, corner: c } : null;
     } else {
-      this.currentEdgeHover = null;
+      this.currentCornerHover = null;
     }
     if (event) this.events.pointer(event, this.mouseHit);
   }

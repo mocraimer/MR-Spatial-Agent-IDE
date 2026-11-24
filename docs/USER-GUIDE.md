@@ -87,7 +87,8 @@ A **project** is a Herdr workspace. The view shows one place at a time, and the 
 - **Below it:** the **Talk** button, then five rows of buttons: on the first, moving between sessions, scrolling, text size and re-centering, **Overview**, **Mirror**, **New project**, and **Exit MR**; on the second, the keys sent to the receiver; on the third, **Go**, **Scratch that**, and the send setting; on the fourth, the model and effort of the session in front; on the fifth, the voice: **Voice on/off**, **Read replies/Stop reading**, **Read that**, **Quiet**, **Keep my speech** (lit when on), **Stop keeping speech**, **Delete my speech**.
 - **Above it:** when a draft waits, a bar says in which session and the words that send or clear it.
 - **Grab bars:** a narrow horizontal bar sits below each group (Screens and Controls). Grab a bar with the trigger and drag to move the whole group in space; the new position is kept across restarts. **Recenter** resets both groups to their default positions and sizes.
-- **Edge resize:** each panel in both groups shows a blue strip along all four edges. Grab any edge with the trigger and drag outward to scale the group bigger, or inward to smaller (0.6× to 1.8×). The scale is kept across restarts; Recenter resets it to 1×.
+- **Corner resize:** each panel in both groups shows a small curved arc handle at each of its four corners. Grab any corner arc with the trigger (controller) or pinch (hand) and drag outward to scale the group bigger, or inward to smaller (0.6× to 1.8×). The arc brightens when the ray hovers the corner and fills while you drag. The scale is kept across restarts; Recenter resets it to 1×.
+- **Fingertip poke:** with hand tracking active, press any button directly by moving your index fingertip into the panel surface. No pointing needed — touch the button and it fires. The button does not re-fire while your fingertip stays on the surface; pull back and touch again to press a second time.
 
 ## Talking to the agents at each level
 
@@ -122,7 +123,8 @@ Point a hand or controller at something. A ray shows where you point. Pinch (han
 | Larger or smaller text | **A+, A−** | "bigger text", "smaller text" |
 | Put the shelf in front of you again | **Recenter** | "recenter" |
 | Move the Screens or Controls group | Grab its bar (below the group) with trigger and drag | — |
-| Scale the Screens or Controls group | Grab any panel edge with trigger and drag outward (bigger) or inward (smaller) | — |
+| Scale the Screens or Controls group | Grab a corner arc (trigger or pinch) and drag outward (bigger) or inward (smaller) | — |
+| Press a button with your fingertip | Move index fingertip directly into the button surface (hand tracking) | — |
 | Type with the headset keyboard | **Keyboard** (lit while the keyboard is open; tap again to close) | "keyboard", "show keyboard", "open keyboard", "type" |
 | Leave mixed reality, back to the flat page | **Exit MR** (or the Quest's Meta button) | "leave mixed reality" |
 | Set the model of the session in front | **Model Haiku, Model Sonnet, Model Opus** (the fourth row) | "model haiku", "model sonnet", "model opus" (also "set model to sonnet") |
