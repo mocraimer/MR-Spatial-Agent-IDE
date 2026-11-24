@@ -20,7 +20,7 @@ Start Herdr first, then:
 ```sh
 npm ci
 npm run build
-npm run view:setup   # once: fetches the speech model (~31 MB) and Kokoro voice (~311 MB)
+npm run view:setup   # once: fetches the speech model (~698 MB) and Kokoro voice (~311 MB)
 npm run view         # prints the address to open on the headset
 ```
 

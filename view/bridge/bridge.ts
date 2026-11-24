@@ -908,10 +908,12 @@ export class Bridge {
       ])].sort();
       // Cap at 1,000 pairs; trim oldest first (stems sort lexicographically by timestamp).
       if (allStems.length >= 1000) {
-        for (const stem of allStems.slice(0, allStems.length - 999)) {
+        const toDrop = allStems.slice(0, allStems.length - 999);
+        for (const stem of toDrop) {
           try { rmSync(join(dir, `${stem}.wav`)); } catch { /* ok if already missing */ }
           try { rmSync(join(dir, `${stem}.txt`)); } catch { /* ok if already missing */ }
         }
+        this.log(`kept speech cap: dropped ${toDrop.length} oldest utterance${toDrop.length === 1 ? '' : 's'}`);
       }
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
       writeFileSync(join(dir, `${stamp}.txt`), text);

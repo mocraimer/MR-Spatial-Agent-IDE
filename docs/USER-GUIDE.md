@@ -14,7 +14,7 @@ The view shows your real sessions. Herdr owns them: the view asks Herdr to bring
    npm run view:setup
    ```
 
-   `view:setup` downloads Moonshine tiny (about 31 MB, free) into `~/.local/share/spatial-agent-workspace/view/models`. After that, speech never leaves the PC.
+   `view:setup` downloads Moonshine v2 Small (streaming, quantized, about 698 MB, free) and Kokoro-82M (about 311 MB, free) into `~/.local/share/spatial-agent-workspace/view/models`. After that, speech never leaves the PC.
 
 2. Let the headset reach the PC over Wi-Fi. This needs two changes to Windows, made once from an **administrator PowerShell**:
 
@@ -322,6 +322,6 @@ Then delete the view's data directory, `~/.local/share/spatial-agent-workspace/v
 
 - **Herdr 0.9.3, socket protocol 22.** If Herdr's protocol changes, the view says so and shows no sessions until they match.
 - **Quest browser:** a WebXR `immersive-ar` session, hand tracking, controllers, and the microphone, on a page with a self-signed certificate. The text is drawn by the view itself onto WebGL quads; compositor layers are not used.
-- **Speech:** Moonshine tiny, English, 8-bit weights, about 31 MB, on the PC's CPU through `@huggingface/transformers` and ONNX Runtime. About 0.1 s per utterance on this PC.
+- **Speech:** Moonshine v2 Small (streaming, English, quantized weights, about 698 MB on disk), on the PC's CPU through `@huggingface/transformers` and ONNX Runtime. About 1 s per utterance on this PC; command-length phrases in about 90 ms.
 - **Window mirrors:** a small helper on Windows (`view/windows/window_helper.py`), started by the view through WSL and talking to it over its own input and output (it listens on no port). It uses Windows' own window capture through the open-source `windows-capture` package, at most 15 pictures a second, and passes clicks and keys by bringing the window forward for a moment. Each mirror is a Herdr session running `mirror-session.js`, labelled "window: " and the window's title.
 - **Level agents:** Claude Code, using your existing Claude login: the helper and each project's agent on Sonnet at medium effort (`--model sonnet --effort medium`, and the same in their settings, so a resumed agent keeps them). "sonnet" is Claude Code's own name for its current Sonnet; to pin one release, change `LEVEL_MODEL` in `view/bridge/agents.ts`. An agent that is already running keeps its model until it is restarted: close its tab and go to its level again. Their settings, the closing hook and their instructions live in `~/.local/share/spatial-agent-workspace/view/agents` (one folder for the helper, one shared by all project agents), which is also where they work, so an agent Herdr restarts by itself keeps them. A project agent is found again by its tab label "project agent", the helper by its label "helper"; renaming those tabs makes the view start new ones.

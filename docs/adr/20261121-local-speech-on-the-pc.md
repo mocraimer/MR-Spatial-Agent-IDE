@@ -1,7 +1,7 @@
 # ADR: Local speech on the PC with Moonshine tiny
 
 ## Status
-Accepted; extended by [20261123-speech-model-chosen-by-measurement](../adr/20261123-speech-model-chosen-by-measurement.md): the Moonshine tiny q8 choice is now backed by a reproducible measurement against a frozen utterance set
+Accepted; extended by 20261123-speech-model-chosen-by-measurement: the Moonshine tiny q8 choice is now backed by a reproducible measurement against a frozen utterance set
 
 ## Area
 Spatial view

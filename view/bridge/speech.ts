@@ -8,7 +8,7 @@ import type { SpeechState } from '../shared/messages.js';
 import type { Transcriber } from './bridge.js';
 
 /**
- * Moonshine streaming small, quantized (~100 MB on disk), English only. Chosen over tiny q8 on
+ * Moonshine streaming small, quantized (~698 MB on disk), English only. Chosen over tiny q8 on
  * LibriSpeech test-other: WER 7.7% vs 14.2%, median warm time 963 ms vs 459 ms (both under the
  * 1100 ms gate). See the ADR on local speech and docs/SPEECH.md for the full measurement table.
  *
