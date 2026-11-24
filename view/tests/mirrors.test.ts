@@ -219,6 +219,10 @@ test('new projects: a folder with git and a workspace starting there; an existin
     const ws = (await s.bench.client.snapshot()).workspaces.find(w => w.id === made.workspaceId);
     assert.equal(ws?.label, 'My Recipes!');
     assert.equal((await s.bench.client.snapshot()).panes.find(p => p.id === made.paneId)?.cwd, made.folder, 'its first session starts in the folder');
+    // AC-10.1: tab.list must show 'shell' as the first tab label (workspace.create → tab.rename).
+    const projectTabs = await s.bench.client.call('tab.list', { workspace_id: made.workspaceId });
+    const projectTabLabels = (projectTabs.tabs as Array<{ label: string }>).map(t => t.label);
+    assert.ok(projectTabLabels.includes('shell'), `new project first tab label = 'shell'; got: ${JSON.stringify(projectTabLabels)}`);
     writeFileSync(join(made.folder, 'keep.txt'), 'x');
     await assert.rejects(makeProject(s.bench.client, r1, 'my recipes'), /already exists/);
     assert.ok(existsSync(join(made.folder, 'keep.txt')), 'the existing folder is untouched');

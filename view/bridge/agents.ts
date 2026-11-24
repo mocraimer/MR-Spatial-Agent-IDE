@@ -184,6 +184,11 @@ export class HerdrLevelAgents implements LevelAgents {
         ? await this.herdr.call('tab.create', { workspace_id: workspace.id, cwd: agent.cwd, focus: false, env, label: SEAT_LABEL[role] })
         : await this.herdr.call('workspace.create', { label: OVERVIEW_LABEL, cwd: agent.cwd, focus: false, env });
       const paneId = paneOf(made.root_pane);
+      // Name the first tab on initial workspace.create so the Herdr tab bar is not blank (ASM-14).
+      if (!workspace) {
+        const tabId = (made.tab as { tab_id?: unknown } | undefined)?.tab_id;
+        if (typeof tabId === 'string') await this.herdr.call('tab.rename', { tab_id: tabId, label: SEAT_LABEL[role] });
+      }
       await this.herdr.call('pane.rename', { pane_id: paneId, label: SEAT_LABEL[role] });
       pane = { id: paneId, workspaceId: workspace?.id ?? '', tabId: '', agent: null, status: 'unknown', label: SEAT_LABEL[role], title: null, cwd: agent.cwd };
     }

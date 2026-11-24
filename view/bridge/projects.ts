@@ -106,5 +106,8 @@ async function workspaceIn(herdr: HerdrClient, cwd: string, label: string): Prom
   const made = await herdr.call('workspace.create', { label, cwd, focus: false });
   const workspaceId = (made.workspace as { workspace_id?: unknown } | undefined)?.workspace_id;
   if (typeof workspaceId !== 'string') throw new Error('Herdr sent an unexpected workspace');
+  // Name the first tab so the Herdr tab bar is not blank (ASM-14).
+  const tabId = (made.tab as { tab_id?: unknown } | undefined)?.tab_id;
+  if (typeof tabId === 'string') await herdr.call('tab.rename', { tab_id: tabId, label: 'shell' });
   return { workspaceId, paneId: paneOf(made.root_pane) };
 }

@@ -75,6 +75,18 @@ test('the helper is one, whatever state Herdr is in: none yet, a workspace of it
   } finally { await s.stop(); }
 });
 
+test('AC-10.1: helper initial workspace and new project workspace first tab carry labels from tab.rename', async () => {
+  // Uses LAYOUT (no pre-existing helper workspace): seat(OVERVIEW) triggers workspace.create for helper.
+  const s = await setup();
+  try {
+    const first = await s.agents.seat(OVERVIEW);
+    await s.agents.ready(first.paneId);
+    const helperWs = (await s.snap()).workspaces.find(w => w.label === 'helper')?.id as string;
+    assert.ok(helperWs, 'helper workspace created');
+    assert.ok((await tabLabels(s, helperWs)).includes('helper'), 'helper workspace first tab label = helper');
+  } finally { await s.stop(); }
+});
+
 test('going into a project puts its one agent in front, every time, and sends nothing to any session', async () => {
   const s = await setup();
   try {
