@@ -11,8 +11,9 @@
  * period with no page connected. If the owner resizes the window by hand during the session, the
  * bridge detects the change and keeps that size on restore instead of its own (B.4).
  */
-import { readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { readFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
+import { atomicWriteText } from './fs-util.js';
 import type { HerdrClient } from './herdr.js';
 import type { Windows, WindowRect } from './windows.js';
 import { FRONT_COLS } from '../shared/front-cols.js';
@@ -259,7 +260,7 @@ export function persistFitState(state: FitState, dir: string): void {
   if (!state.hwnd || !state.restoreRect) return;
   const { hwnd, restoreRect, restoreMaximized } = state;
   try {
-    writeFileSync(join(dir, FIT_STATE_FILE), JSON.stringify({ hwnd, restoreRect, restoreMaximized }) + '\n', 'utf8');
+    atomicWriteText(join(dir, FIT_STATE_FILE), JSON.stringify({ hwnd, restoreRect, restoreMaximized }) + '\n');
   } catch { /* best effort */ }
 }
 

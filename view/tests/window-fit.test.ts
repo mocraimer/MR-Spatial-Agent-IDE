@@ -10,8 +10,11 @@
  *   crashing.
  */
 import assert from 'node:assert/strict';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { test } from 'node:test';
-import { fitWindow, restoreWindow, newFitState } from '../bridge/window-fit.js';
+import { atomicWriteText } from '../bridge/fs-util.js';
+import { fitWindow, restoreWindow, newFitState, persistFitState, clearFitState } from '../bridge/window-fit.js';
 import type { FitOptions, FitState } from '../bridge/window-fit.js';
 import type { Windows, WindowRect, FoundWindow } from '../bridge/windows.js';
 
@@ -137,6 +140,38 @@ test('AC-1.2: restoreWindow restores the terminal to its original rect', async (
   const widthAfterRestore = fake.currentRect.right - fake.currentRect.left;
   assert.equal(widthAfterRestore, originalRect.right - originalRect.left, 'restored to original width');
   assert.equal(state.hwnd, null, 'fitState cleared after restore');
+});
+
+// ── NL2: persistFitState uses atomicWriteText ──────────────────────────────────────────────────
+
+test('NL2: atomicWriteText writes file contents and leaves no temp files', () => {
+  const dir = mkdtempSync('/tmp/wf-nl2-');
+  try {
+    const path = join(dir, 'out.txt');
+    atomicWriteText(path, 'hello atomic\n');
+    assert.equal(readFileSync(path, 'utf8'), 'hello atomic\n', 'file has the written content');
+    const leftovers = readdirSync(dir).filter(f => f.startsWith('.tmp-'));
+    assert.equal(leftovers.length, 0, `no temp files should remain after write; found: ${leftovers.join(', ')}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('NL2: persistFitState + clearFitState round-trip is atomic (no partial reads)', () => {
+  const dir = mkdtempSync('/tmp/wf-nl2b-');
+  try {
+    const state = newFitState();
+    state.hwnd = 7;
+    state.restoreRect = { left: 0, top: 0, right: 1920, bottom: 1080 };
+    persistFitState(state, dir);
+    const leftovers = readdirSync(dir).filter(f => f.startsWith('.tmp-'));
+    assert.equal(leftovers.length, 0, 'persistFitState leaves no temp files');
+    clearFitState(dir);
+    const remaining = readdirSync(dir).filter(f => !f.startsWith('.'));
+    assert.equal(remaining.length, 0, 'clearFitState removes the state file');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('AC-1.3: when no terminal window is found, a notice is shown and no crash', async () => {
