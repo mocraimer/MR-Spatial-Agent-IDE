@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { saveDefaults } from '../bridge/claude-settings.js';
 import { HerdrBench } from '../bench/bench.js';
 import type { LevelAgents } from '../bridge/agents.js';
 import { Bridge, type Transcriber } from '../bridge/bridge.js';
@@ -217,4 +218,34 @@ test('Fix-#3: announceVoice broadcasts the voice state including standingIn to c
       disconnect();
     }
   } finally { await s.stop(); }
+});
+
+test('Fix-#5: bridge.stop() drains a pending watchLoop settings token', async () => {
+  // If the bridge is stopped while a /model watchLoop is still running (within 4 s),
+  // the token must still be restored by stop(). Without the fix, stop() was synchronous
+  // and never touched pendingRestoreToken; the loop could run after the new bridge started.
+  const s = await setup();
+  const dir = mkdtempSync('/tmp/svl-bridge-stop-');
+  try {
+    const settingsPath = join(dir, 'settings.json');
+    writeFileSync(settingsPath, `{"model":"claude-opus-4-5"}\n`, 'utf8');
+
+    // Simulate the state at the moment the /model watchLoop is running: saveDefaults was
+    // called, Claude Code has since written the changed model, but the loop has not yet
+    // restored because RESTORE_WATCH_MS has not elapsed.
+    const token = saveDefaults(settingsPath);
+    writeFileSync(settingsPath, `{"model":"claude-sonnet-5-5"}\n`, 'utf8');
+
+    // Inject the pending token as if the watchLoop had just started.
+    (s.bridge as unknown as Record<string, unknown>).pendingRestoreToken = token;
+
+    // Stop the bridge. With the fix, this drains the pending token immediately.
+    s.bridge.stop();
+
+    const restored = JSON.parse(readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
+    assert.equal(restored.model, 'claude-opus-4-5', 'pending token restored synchronously on stop()');
+  } finally {
+    await s.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -206,6 +206,10 @@ export class Bridge {
   /** Interval timer that polls front-pane width while in mixed reality to catch layout changes. */
   private layoutPollTimer: ReturnType<typeof setInterval> | null = null;
   private readonly speechKeepDir: string | undefined;
+  /** Set true when stop() is called; lets the watchLoop exit early. */
+  private stopped = false;
+  /** The restore token from the most recent live watchLoop (null when no loop is running). */
+  private pendingRestoreToken: ReturnType<typeof saveDefaults> | null = null;
 
   constructor(
     private readonly herdr: HerdrClient,
@@ -256,11 +260,17 @@ export class Bridge {
     this.noteTimer.unref();
   }
 
-  /** Clears the bridge's own timers. The view stops the mirror and the window mirrors itself. */
+  /** Clears the bridge's own timers and runs a final settings restore if one is pending. */
   stop(): void {
+    this.stopped = true;
     clearInterval(this.noteTimer);
     if (this.picker) clearTimeout(this.picker.timer);
     for (const f of this.frames.values()) if (f.timer) clearTimeout(f.timer);
+    if (this.pendingRestoreToken) {
+      const token = this.pendingRestoreToken;
+      this.pendingRestoreToken = null;
+      try { restoreDefaults(token); } catch { /* best effort */ }
+    }
   }
 
   /** Herdr's sessions as the mirror holds them, with which level agents are starting or failed. */
@@ -866,13 +876,15 @@ export class Bridge {
         }
       };
       tryRestore();
-      // Keep watching until the guard window closes.
+      // Keep watching until the guard window closes or the bridge is stopped.
+      this.pendingRestoreToken = token;
       const watchLoop = async () => {
-        while (Date.now() < watchUntil) {
+        while (Date.now() < watchUntil && !this.stopped) {
           await new Promise(r => setTimeout(r, 200));
-          if (!token) break;
+          if (!token || this.stopped) break;
           try { restoreDefaults(token); } catch { /* will be caught on the next full tryRestore */ }
         }
+        if (this.pendingRestoreToken === token) this.pendingRestoreToken = null;
       };
       void watchLoop().catch(() => undefined);
       // Immediate restore is enough for the returned outcome.
