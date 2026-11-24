@@ -191,15 +191,18 @@ export class Bridge {
   /** Path to the Claude Code settings file for restoring model/effort defaults; null to skip. */
   private readonly settingsFilePath: string | null;
   /** State for the terminal window fitting (Deliverable 1). */
-  private readonly fitState: FitState = newFitState();
+  /** @internal Exposed for tests only. */
+  readonly fitState: FitState = newFitState();
   /** Timer that restores the terminal window after all pages leave mixed reality. */
   private restoreTimer: NodeJS.Timeout | null = null;
   /** Pages currently in mixed reality, by per-connection pageId. */
   private readonly mrPages = new Set<string>();
   /** The last focused session id during a fit session, so re-fits happen on change. */
   private lastFitFocusId: string | null = null;
-  /** Serialization: the pending fit promise (newer call supersedes an in-flight one). */
+  /** Monotonic counter used to supersede queued fit calls. */
   private fitSeq = 0;
+  /** Chain that serialises fitWindow calls so they never run concurrently. */
+  private fitChain: Promise<void> = Promise.resolve();
   /** Interval timer that polls front-pane width while in mixed reality to catch layout changes. */
   private layoutPollTimer: ReturnType<typeof setInterval> | null = null;
   private readonly speechKeepDir: string | undefined;
@@ -376,16 +379,22 @@ export class Bridge {
    * Runs a window fit for the current focused session. Serialized: each call gets a sequence
    * number; the promise abandons work if superseded by a newer call.
    */
-  private async doFit(): Promise<void> {
-    if (this.mrPages.size === 0) return;
+  private doFit(): Promise<void> {
+    // Append to the chain so only one fitWindow runs at a time (concurrent calls would
+    // both overwrite fitState.restoreRect with the already-fitted rect).
     const seq = ++this.fitSeq;
-    const shelf = this.shelf();
-    const front = shelf.sessions.find(s => s.id === shelf.focusedId);
-    if (!front) return;
-    if (seq !== this.fitSeq) return; // Superseded.
-    const workspaceLabel = shelf.projects.find(p => p.id === front.workspaceId)?.label ?? '';
-    const notice = (text: string) => this.broadcast({ type: 'notice', text });
-    await fitWindow(front.id, workspaceLabel, this.fitState, { log: this.log, notice, herdr: this.herdr, windows: this.mirrors.windowHelper() });
+    const chain = this.fitChain.then(async () => {
+      if (seq !== this.fitSeq) return; // Superseded while waiting in the chain.
+      if (this.mrPages.size === 0) return;
+      const shelf = this.shelf();
+      const front = shelf.sessions.find(s => s.id === shelf.focusedId);
+      if (!front) return;
+      const workspaceLabel = shelf.projects.find(p => p.id === front.workspaceId)?.label ?? '';
+      const notice = (text: string) => this.broadcast({ type: 'notice', text });
+      await fitWindow(front.id, workspaceLabel, this.fitState, { log: this.log, notice, herdr: this.herdr, windows: this.mirrors.windowHelper() });
+    }).catch(() => undefined);
+    this.fitChain = chain;
+    return chain;
   }
 
   /** Sends a notice to every connected page. */
