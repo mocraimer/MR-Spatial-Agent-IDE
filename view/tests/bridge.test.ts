@@ -181,3 +181,40 @@ test('a Herdr call may wait longer than the default when it asks to: a slow answ
     assert.deepEqual(await client.call('agent.start', {}, 8000), { type: 'ok' });
   } finally { server.close(); rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('Fix-#3: announceVoice broadcasts the voice state including standingIn to connected pages', async () => {
+  // Pages connect before Kokoro has finished loading. While loading, the voice is "standing in"
+  // for Windows (standingIn=true). Once Kokoro fires its onReady callback, the bridge calls
+  // announceVoice() so connected pages learn the state changed.
+  //
+  // This test verifies that announceVoice() is a public method (required for view.ts to call it
+  // from the Kokoro callback) and that it broadcasts a voice event with the correct standingIn flag.
+  const s = await setup();
+  try {
+    // A fake voice that starts standing in (simulating Kokoro still loading).
+    let standing = true;
+    const fakeVoice = {
+      async speak() { return; },
+      stop() { return; },
+      standingIn: () => standing,
+    };
+    // Inject the fake voice via the bridge's internal voice field.
+    (s.bridge as unknown as Record<string, unknown>).voice = fakeVoice;
+    (s.bridge as unknown as Record<string, unknown>).say = null;
+
+    const voiceEvents: Array<{ standingIn: boolean | undefined }> = [];
+    const disconnect = s.bridge.connect(ev => {
+      if (ev.type === 'voice') voiceEvents.push({ standingIn: ev.standingIn });
+    });
+    try {
+      // Simulate Kokoro onReady: standing in transitions to false, then announceVoice() is called.
+      standing = false;
+      s.bridge.announceVoice();
+
+      assert.ok(voiceEvents.length >= 1, `voice event must have been broadcast; got ${voiceEvents.length}`);
+      assert.equal(voiceEvents[voiceEvents.length - 1]?.standingIn, false, 'standingIn=false after Kokoro ready');
+    } finally {
+      disconnect();
+    }
+  } finally { await s.stop(); }
+});

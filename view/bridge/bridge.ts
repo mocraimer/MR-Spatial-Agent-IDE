@@ -900,7 +900,7 @@ export class Bridge {
     return { ok: true, outcome: (on ? 'Reading each finished reply aloud. Say “stop reading replies” to stop.' : 'Replies are not read aloud.') + note + saved, silent: true };
   }
 
-  private announceVoice(): void {
+  announceVoice(): void {
     const standingIn = this.voice?.standingIn?.() ?? false;
     this.broadcast({ type: 'voice', feedback: this.settings.voice, reading: this.settings.readReplies, trouble: this.say?.failed ?? false, standingIn });
   }
