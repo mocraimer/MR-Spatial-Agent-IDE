@@ -151,7 +151,6 @@ test('AC-1.3: when no terminal window is found, a notice is shown and no crash',
   };
   const result = await fitWindow('pane-1', 'alpha', state, opts);
   assert.equal(result, null, 'returns null when window not found');
-  assert.ok(notices.length > 0 || true, 'no crash'); // No crash is the main requirement; notice is also expected
   // A notice about columns cut should be shown.
   const cutNotice = notices.find(n => /cut|wider/.test(n));
   assert.ok(cutNotice !== undefined, `expected a cut notice; got: ${JSON.stringify(notices)}`);
