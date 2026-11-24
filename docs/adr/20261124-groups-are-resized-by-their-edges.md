@@ -1,7 +1,7 @@
 # ADR: Groups are resized by grabbing any edge
 
 ## Status
-Accepted
+Superseded by [20261124-groups-are-resized-by-corner-handles]
 
 ## Area
 Spatial view

@@ -3,7 +3,7 @@
  */
 import { expect, test, type Page } from '@playwright/test';
 import { plain } from '../shared/ansi.js';
-import { aim, emulateQuest, enterMixedReality, pair, rig, setPressed, tap, viewState, type Rig } from './fixture.js';
+import { aim, clearPoke, emulateQuest, enterMixedReality, pair, pokeTip, rig, setPressed, tap, viewState, type Rig } from './fixture.js';
 
 const plainText = async (r: Rig, name: string) => plain(await r.bench.client.read(r.bench.pane(name), 60));
 
@@ -798,7 +798,7 @@ test('AC-5.3: /api/log accepts only structured events and rejects free text', as
   expect(r.logs.some(l => l.includes('typed text')), 'typed text absent from log').toBe(false);
 });
 
-// ---- AC-9.1: group edge resize -------------------------------------------------------
+// ---- AC-9.1: group corner resize -------------------------------------------------------
 
 /** Helpers for measuring the world width of a surface (left-to-right at mid-height). */
 async function surfaceWorldWidth(page: Page, surface: string): Promise<number> {
@@ -834,32 +834,32 @@ async function storedScales(page: Page): Promise<{ screensScale: number; control
   return { screensScale: d[0][2] ?? 1, controlsScale: d[1][2] ?? 1 };
 }
 
-/** Grabs the right edge of the front panel and drags outward past it, then releases. */
+/** Grabs the top-right corner of the front panel and drags outward past it, then releases. */
 async function dragFrontRightEdgeOut(page: Page): Promise<void> {
-  // Aim at the right edge strip (97% across, mid-height).
-  await aim(page, 'controller', 'front', 0.97, 0.5);
+  // Aim at the top-right corner (97% across, 3% down — within the 12% corner zone).
+  await aim(page, 'controller', 'front', 0.97, 0.03);
   await setPressed(page, 'controller', 1);
   await page.waitForTimeout(100);
   // Aim past the right edge — the ray-plane intersection moves farther from the head.
-  await aim(page, 'controller', 'front', 1.4, 0.5);
+  await aim(page, 'controller', 'front', 1.4, 0.03);
   await page.waitForTimeout(200);
   await setPressed(page, 'controller', 0);
   await page.waitForTimeout(150);
 }
 
-/** Grabs the right edge of the front panel and drags inward, then releases. */
+/** Grabs the top-right corner of the front panel and drags inward, then releases. */
 async function dragFrontRightEdgeIn(page: Page): Promise<void> {
-  await aim(page, 'controller', 'front', 0.97, 0.5);
+  await aim(page, 'controller', 'front', 0.97, 0.03);
   await setPressed(page, 'controller', 1);
   await page.waitForTimeout(100);
   // Aim well inside the panel — the intersection point is closer to the head.
-  await aim(page, 'controller', 'front', 0.3, 0.5);
+  await aim(page, 'controller', 'front', 0.3, 0.03);
   await page.waitForTimeout(200);
   await setPressed(page, 'controller', 0);
   await page.waitForTimeout(150);
 }
 
-test('AC-9.1: edge grab of front panel right edge scales screens group bigger', async ({ page }) => {
+test('AC-9.1: corner grab of front panel top-right corner scales screens group bigger', async ({ page }) => {
   test.setTimeout(90_000);
   r = await rig([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' as const }] }]);
   await emulateQuest(page);
@@ -886,7 +886,7 @@ test('AC-9.1: edge grab of front panel right edge scales screens group bigger', 
   expect(screensScale, 'screensScale > 1 after outward drag').toBeGreaterThan(1.0);
 });
 
-test('AC-9.1: edge drag inward scales screens group smaller', async ({ page }) => {
+test('AC-9.1: corner drag inward scales screens group smaller', async ({ page }) => {
   test.setTimeout(90_000);
   r = await rig([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' as const }] }]);
   await emulateQuest(page);
@@ -908,7 +908,7 @@ test('AC-9.1: edge drag inward scales screens group smaller', async ({ page }) =
   expect(screensScale, 'screensScale < 1 after inward drag').toBeLessThan(1.0);
 });
 
-test('AC-9.1: edge resize leaves the controls group unchanged', async ({ page }) => {
+test('AC-9.1: corner resize leaves the controls group unchanged', async ({ page }) => {
   test.setTimeout(90_000);
   r = await rig([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' as const }] }]);
   await emulateQuest(page);
@@ -981,7 +981,7 @@ test('AC-9.1: Recenter resets scale to 1.0', async ({ page }) => {
   expect(controlsScale, 'controlsScale reset to 1 after Recenter').toBeCloseTo(1.0, 2);
 });
 
-test('AC-9.1: grabbing inside the front panel (not an edge) does not trigger resize', async ({ page }) => {
+test('AC-9.1: grabbing inside the front panel (not a corner) does not trigger resize', async ({ page }) => {
   test.setTimeout(90_000);
   r = await rig([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' as const }] }]);
   await emulateQuest(page);
@@ -1004,7 +1004,7 @@ test('AC-9.1: grabbing inside the front panel (not an edge) does not trigger res
   expect(Math.abs(widthAfter - widthBefore) / (widthBefore || 1), 'width unchanged for interior grab').toBeLessThan(0.01);
 });
 
-test('AC-9.1: control button still fires after a screens group scale-up', async ({ page }) => {
+test('AC-9.1: control button still fires after a screens group corner scale-up', async ({ page }) => {
   test.setTimeout(120_000);
   r = await rig([{ label: 'alpha', panes: [{ name: 'keys', kind: 'shell' as const }] }]);
   await emulateQuest(page);
@@ -1025,7 +1025,7 @@ test('AC-9.1: control button still fires after a screens group scale-up', async 
   await expect.poll(() => plainText(r, 'keys'), { timeout: 10_000 }).toContain('cat -v');
 });
 
-test('AC-9.1: bar:screens still moves the group after a scale change', async ({ page }) => {
+test('AC-9.1: bar:screens still moves the group after a corner scale change', async ({ page }) => {
   test.setTimeout(90_000);
   r = await rig([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' as const }] }]);
   await emulateQuest(page);
@@ -1058,7 +1058,7 @@ test('AC-9.1: bar:screens still moves the group after a scale change', async ({ 
   expect(distAfterMove, 'front panel stays at same arc distance after bar move').toBeCloseTo(distAfterScale, 1);
 });
 
-test('AC-9.1: mouse drag of front panel right edge outward scales screens group bigger', async ({ page }) => {
+test('AC-9.1: mouse drag of front panel top-right corner outward scales screens group bigger', async ({ page }) => {
   // Desktop mode (no XR session) — exercises the mouse code path in scene.ts.
   test.setTimeout(90_000);
   r = await rig([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' as const }] }]);
@@ -1066,8 +1066,8 @@ test('AC-9.1: mouse drag of front panel right edge outward scales screens group 
   await expect.poll(async () => (await viewState(page)).surfaces).toContain('front');
   await page.waitForTimeout(300); // allow at least one render
 
-  // Compute the canvas screen coordinates for the right edge (x=0.97) and a far point (x=1.4).
-  const ptEdge = await page.evaluate(() => {
+  // Compute the canvas screen coordinates for the top-right corner (x=0.97, y=0.03) and a far point (x=1.4, y=0.03).
+  const ptCorner = await page.evaluate(() => {
     const eye: [number, number, number] = [0, 0.15, 1.15];
     const tanFov = Math.tan(1.45 / 2);
     const canvas = document.getElementById('scene') as HTMLCanvasElement;
@@ -1083,34 +1083,34 @@ test('AC-9.1: mouse drag of front panel right edge outward scales screens group 
       const ny = (wp[1] - eye[1]) / (k * tanFov);
       return { x: ((nx + 1) / 2) * rect.width + rect.left, y: ((1 - ny) / 2) * rect.height + rect.top };
     }
-    return { edge: toScreen(0.97, 0.5), far: toScreen(1.4, 0.5) };
+    return { corner: toScreen(0.97, 0.03), far: toScreen(1.4, 0.03) };
   });
-  if (!ptEdge?.edge || !ptEdge.far) throw new Error('Could not compute screen coordinates for front panel');
+  if (!ptCorner?.corner || !ptCorner.far) throw new Error('Could not compute screen coordinates for front panel');
 
   const widthBefore = await surfaceWorldWidth(page, 'front');
 
-  // Mouse drag: move to edge, press, move outward, release.
-  await page.mouse.move(ptEdge.edge.x, ptEdge.edge.y);
+  // Mouse drag: move to corner, press, move outward, release.
+  await page.mouse.move(ptCorner.corner.x, ptCorner.corner.y);
   await page.waitForTimeout(80);
   await page.mouse.down();
   await page.waitForTimeout(80);
-  await page.mouse.move(ptEdge.far.x, ptEdge.far.y, { steps: 8 });
+  await page.mouse.move(ptCorner.far.x, ptCorner.far.y, { steps: 8 });
   await page.waitForTimeout(200);
   await page.mouse.up();
   await page.waitForTimeout(150);
 
   const widthAfter = await surfaceWorldWidth(page, 'front');
-  expect(widthAfter, 'front panel grew after mouse edge drag outward').toBeGreaterThan(widthBefore * 1.02);
+  expect(widthAfter, 'front panel grew after mouse corner drag outward').toBeGreaterThan(widthBefore * 1.02);
 
   const { screensScale } = await storedScales(page);
   expect(screensScale, 'screensScale > 1 after mouse drag').toBeGreaterThan(1.0);
 });
 
-test('AC-9.1: edge drag of controls-0 top edge scales controls group; screens group stays unchanged', async ({ page }) => {
-  // The talk surface registers its whole canvas as a target so its edge zone
-  // correctly fires the talk button. Use the TOP edge of controls-0 instead:
+test('AC-9.1: corner drag of controls-0 top-right corner scales controls group; screens group stays unchanged', async ({ page }) => {
+  // The talk surface registers its whole canvas as a target so its corner zone
+  // correctly fires the talk button. Use the top-right corner of controls-0 instead:
   // drawControls leaves an 8 px gap above the first button row (y: 8) so the
-  // top 7 % of that canvas (< 7.7 px) has no region target — edge resize starts there.
+  // top 12 % of that canvas has no region target — corner resize starts there.
   test.setTimeout(90_000);
   r = await rig([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' as const }] }]);
   await emulateQuest(page);
@@ -1121,9 +1121,9 @@ test('AC-9.1: edge drag of controls-0 top edge scales controls group; screens gr
   const talkWidthBefore = await surfaceWorldWidth(page, 'talk');
   const frontWidthBefore = await surfaceWorldWidth(page, 'front');
 
-  // Grab the top-right corner of controls-0 (x=97%, y=3%) — no button target there
-  // (buttons are at y≥8px; the right 7% has 'exit' but only at y≥8px; the top 7% gap
-  // is empty). edgeOf checks right before top, so this starts a RIGHT edge grab.
+  // Grab the top-right corner of controls-0 (x=97%, y=3%) — in the 'tr' corner zone
+  // (nx > 0.88 and ny < 0.12). No button target at (97%, 3%) — buttons start at y≥8px,
+  // the right edge has 'exit' but only at y≥8px, and the top gap is empty.
   // Dragging right increases the ray–plane intersection distance from origin → scale > 1.
   await aim(page, 'controller', 'controls-0', 0.97, 0.03);
   await setPressed(page, 'controller', 1);
@@ -1136,15 +1136,15 @@ test('AC-9.1: edge drag of controls-0 top edge scales controls group; screens gr
   const talkWidthAfter = await surfaceWorldWidth(page, 'talk');
   const frontWidthAfter = await surfaceWorldWidth(page, 'front');
 
-  expect(talkWidthAfter, 'talk panel grew after outward edge drag on controls-0').toBeGreaterThan(talkWidthBefore * 1.02);
+  expect(talkWidthAfter, 'talk panel grew after outward corner drag on controls-0').toBeGreaterThan(talkWidthBefore * 1.02);
 
   const { controlsScale, screensScale } = await storedScales(page);
-  expect(controlsScale, 'controlsScale > 1 after controls-0 edge drag').toBeGreaterThan(1.0);
+  expect(controlsScale, 'controlsScale > 1 after controls-0 corner drag').toBeGreaterThan(1.0);
   expect(screensScale, 'screensScale unchanged after controls resize').toBeCloseTo(1.0, 2);
   expect(Math.abs(frontWidthAfter - frontWidthBefore) / (frontWidthBefore || 1), 'front panel unchanged').toBeLessThan(0.01);
 });
 
-test('AC-9.1: edge affordance screenshots — rest, hover and drag states on front and talk panels', async ({ page }) => {
+test('AC-9.1: corner affordance screenshots — rest, hover and drag states on front and talk panels', async ({ page }) => {
   test.setTimeout(90_000);
   const shot = (name: string) => page.screenshot({ path: test.info().outputPath(`${name}.png`) });
   r = await rig([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' as const }] }]);
@@ -1153,39 +1153,39 @@ test('AC-9.1: edge affordance screenshots — rest, hover and drag states on fro
   await enterMixedReality(page);
   await expect.poll(async () => (await viewState(page)).surfaces).toContain('front');
 
-  // Rest state: no ray near any edge.
+  // Rest state: ray in the centre, no corner hovered.
   await aim(page, 'controller', 'front', 0.5, 0.5);
   await page.waitForTimeout(100);
-  await shot('edge-rest-front');
+  await shot('corner-rest-front');
 
-  // Hover state on front panel right edge.
-  await aim(page, 'controller', 'front', 0.97, 0.5);
+  // Hover state on front panel top-right corner.
+  await aim(page, 'controller', 'front', 0.97, 0.03);
   await page.waitForTimeout(200);
-  await shot('edge-hover-front');
+  await shot('corner-hover-front');
 
-  // Drag state: trigger held on front panel right edge.
+  // Drag state: trigger held on front panel top-right corner.
   await setPressed(page, 'controller', 1);
   await page.waitForTimeout(200);
-  await shot('edge-drag-front');
+  await shot('corner-drag-front');
   await setPressed(page, 'controller', 0);
   await page.waitForTimeout(100);
 
   // Rest and hover on the talk panel (a control panel).
-  // talk's whole canvas is a target, so hovering its edge does not show the edge highlight —
+  // talk's whole canvas is a target, so hovering its corner does not show the corner highlight —
   // pressing it fires the talk action, not a resize. The screenshot captures this correct state.
   await aim(page, 'controller', 'talk', 0.5, 0.5);
   await page.waitForTimeout(100);
-  await shot('edge-rest-talk');
-  await aim(page, 'controller', 'talk', 0.97, 0.5);
+  await shot('corner-rest-talk');
+  await aim(page, 'controller', 'talk', 0.97, 0.03);
   await page.waitForTimeout(200);
-  await shot('edge-hover-talk');
+  await shot('corner-hover-talk');
 });
 
-test('AC-9.1: a button in the edge zone of its panel fires the button, not a resize', async ({ page }) => {
-  // Regression guard: before the fix, a press inside the 7 % edge strip of a resizable surface
-  // started an edge-resize grab even when a button target was under the pointer.
+test('AC-9.1: a button in the corner zone of its panel fires the button, not a resize', async ({ page }) => {
+  // Regression guard: a press inside the 12 % corner zone of a resizable surface must not start
+  // a corner-resize grab when a button target is under the pointer — buttons always win.
   // "enter" in controls-1 is the first button in its row; its centre is at ~5 % of the canvas
-  // width, well inside the left 7 % edge zone (EDGE_FRAC = 0.07).
+  // width, inside the left 12 % corner zone (CORNER_FRAC = 0.12).
   test.setTimeout(90_000);
   r = await rig([{ label: 'alpha', panes: [{ name: 'keys', kind: 'shell' as const }] }]);
   await emulateQuest(page);
@@ -1198,7 +1198,7 @@ test('AC-9.1: a button in the edge zone of its panel fires the button, not a res
   await r.bench.client.call('pane.focus', { pane_id: r.bench.pane('keys') });
   await r.bench.type('keys', 'cat -v');
 
-  // Tap "enter" — its centre lies in the left edge zone of the controls-1 surface.
+  // Tap "enter" — its centre lies in the left corner zone of the controls-1 surface.
   // The button must send Enter to the session (not start a resize).
   await tap(page, 'controller', 'controls-1', 'enter');
   await expect.poll(() => plainText(r, 'keys'), { timeout: 10_000 }).toContain('cat -v');
@@ -1208,4 +1208,124 @@ test('AC-9.1: a button in the edge zone of its panel fires the button, not a res
   const raw = await page.evaluate(() => localStorage.getItem('spatial-view-group-offsets'));
   const controlsScale = raw ? (JSON.parse(raw) as [[number, number, number], [number, number, number]])[1][2] ?? 1 : 1;
   expect(controlsScale, 'controlsScale still 1.0 — enter button did not trigger resize').toBeCloseTo(1.0, 2);
+});
+
+// ---- Deliverable 2: direct hand interaction — fingertip poke ----------------------------------------
+
+test('AC-2.1: pressing a controls button with the index fingertip fires it once', async ({ page }) => {
+  // A poke of the right index-finger-tip into a button surface must fire the button exactly once.
+  // We use the "latest" button in the controls strip (controls-0) and verify the page scrolls.
+  // A shell pane with output is used so there is content to scroll before the poke.
+  test.setTimeout(90_000);
+  r = await rig([{ label: 'alpha', panes: [{ name: 'keys', kind: 'shell' as const }] }]);
+  await emulateQuest(page);
+  await pair(page, r);
+  await page.evaluate(() => window.viewTest.fakeMic());
+  await enterMixedReality(page);
+  await expect.poll(async () => (await viewState(page)).surfaces).toContain('controls-0');
+
+  // Type a command to generate enough output lines to scroll.
+  await r.bench.client.call('pane.focus', { pane_id: r.bench.pane('keys') });
+  await r.bench.type('keys', 'seq 60\n');
+  await expect.poll(() => plainText(r, 'keys'), { timeout: 8_000 }).toContain('60');
+
+  // Drag the front panel downward to scroll up (see older content; scroll row count increases).
+  // This matches the pattern of the passing AC-4.1 drag-scroll test.
+  await aim(page, 'controller', 'front', 0.5, 0.35);
+  await setPressed(page, 'controller', 1);
+  for (const y of [0.45, 0.55, 0.65]) await aim(page, 'controller', 'front', 0.5, y);
+  await setPressed(page, 'controller', 0);
+  await expect.poll(async () => (await viewState(page)).scroll, { timeout: 5000 }).toBeGreaterThan(0);
+  const scrollBefore = (await viewState(page)).scroll;
+
+  // Poke the "Latest" button (region id 'bottom') — its centre is exposed via the region map.
+  const bottomPt = await page.evaluate(() => window.viewTest.region('controls-0', 'bottom'));
+  if (!bottomPt) throw new Error('"bottom" region not found on controls-0');
+  await pokeTip(page, 'controls-0', bottomPt.x, bottomPt.y, 0.005);
+  const scrollAfter = (await viewState(page)).scroll;
+  expect(scrollAfter, 'scroll position reset to bottom after poke of "Latest"').toBe(0);
+  expect(scrollBefore, 'there was content above scroll=0 before the poke').toBeGreaterThan(0);
+
+  await clearPoke(page);
+});
+
+test('AC-2.2: fingertip re-entry fires after retreating past POKE_EXIT_M', async ({ page }) => {
+  // Poke fires once, then retreating the tip past 30 mm resets the hysteresis so re-entry fires again.
+  // Uses a controller for scrolling between pokes to avoid the IWER pin-conflict: pokeTip() calls
+  // setPin() on the hand, which re-solves every frame; aim('hand') while a pin is active does not
+  // reliably move the target-ray, so controller is used for the scroll grabs instead.
+  test.setTimeout(90_000);
+  r = await rig([{ label: 'alpha', panes: [{ name: 'keys', kind: 'shell' as const }] }]);
+  await emulateQuest(page);
+  await pair(page, r);
+  await page.evaluate(() => window.viewTest.fakeMic());
+  await enterMixedReality(page);
+  await expect.poll(async () => (await viewState(page)).surfaces).toContain('controls-0');
+
+  await r.bench.client.call('pane.focus', { pane_id: r.bench.pane('keys') });
+  await r.bench.type('keys', 'seq 60\n');
+  await expect.poll(() => plainText(r, 'keys'), { timeout: 8_000 }).toContain('60');
+
+  const bottomPt = await page.evaluate(() => window.viewTest.region('controls-0', 'bottom'));
+  if (!bottomPt) throw new Error('"bottom" region not found on controls-0');
+
+  // Scroll up (see older content) by dragging the front panel downward.
+  await aim(page, 'controller', 'front', 0.5, 0.35);
+  await setPressed(page, 'controller', 1);
+  for (const y of [0.45, 0.55, 0.65]) await aim(page, 'controller', 'front', 0.5, y);
+  await setPressed(page, 'controller', 0);
+  await expect.poll(async () => (await viewState(page)).scroll, { timeout: 5000 }).toBeGreaterThan(0);
+
+  // First poke — fires "Latest" → scroll resets to bottom.
+  await pokeTip(page, 'controls-0', bottomPt.x, bottomPt.y, 0.005);
+  expect((await viewState(page)).scroll, 'first poke fired: scroll at bottom').toBe(0);
+
+  // Retreat the tip well past POKE_EXIT_M (30 mm) by repositioning 50 mm in front.
+  // checkPoke will see signedDist > POKE_EXIT_M and clear the poke state to inside:false.
+  await pokeTip(page, 'controls-0', bottomPt.x, bottomPt.y, 0.05);
+  await page.waitForTimeout(200);
+
+  // Scroll up again with controller (safe: pin is now at 50 mm in front, away from surfaces).
+  await aim(page, 'controller', 'front', 0.5, 0.35);
+  await setPressed(page, 'controller', 1);
+  for (const y of [0.45, 0.55, 0.65]) await aim(page, 'controller', 'front', 0.5, y);
+  await setPressed(page, 'controller', 0);
+  await expect.poll(async () => (await viewState(page)).scroll, { timeout: 5000 }).toBeGreaterThan(0);
+
+  // Second poke — hysteresis reset: fires "Latest" again.
+  await pokeTip(page, 'controls-0', bottomPt.x, bottomPt.y, 0.005);
+  expect((await viewState(page)).scroll, 'second poke fired after retreat: scroll at bottom').toBe(0);
+
+  await clearPoke(page);
+});
+
+test('AC-2.3: fingertip poke on empty canvas area (no button) does nothing', async ({ page }) => {
+  // Poking an area of a panel where no button region is registered must not fire any button.
+  // We use the front panel which has no button targets — only the controls strip has them.
+  // A shell pane generates content so the initial scroll can be > 0, making the assertion stronger.
+  test.setTimeout(90_000);
+  r = await rig([{ label: 'alpha', panes: [{ name: 'keys', kind: 'shell' as const }] }]);
+  await emulateQuest(page);
+  await pair(page, r);
+  await page.evaluate(() => window.viewTest.fakeMic());
+  await enterMixedReality(page);
+  await expect.poll(async () => (await viewState(page)).surfaces).toContain('front');
+
+  // Generate output then scroll up (see older content) by dragging the front panel downward.
+  await r.bench.client.call('pane.focus', { pane_id: r.bench.pane('keys') });
+  await r.bench.type('keys', 'seq 60\n');
+  await expect.poll(() => plainText(r, 'keys'), { timeout: 8_000 }).toContain('60');
+  await aim(page, 'controller', 'front', 0.5, 0.35);
+  await setPressed(page, 'controller', 1);
+  for (const y of [0.45, 0.55, 0.65]) await aim(page, 'controller', 'front', 0.5, y);
+  await setPressed(page, 'controller', 0);
+  await expect.poll(async () => (await viewState(page)).scroll, { timeout: 5000 }).toBeGreaterThan(0);
+  const scrollBefore = (await viewState(page)).scroll;
+
+  // Poke the centre of the front panel — no button there.
+  await pokeTip(page, 'front', 0.5, 0.5, 0.005);
+  const scrollAfter = (await viewState(page)).scroll;
+  expect(scrollAfter, 'scroll unchanged after poke on empty front surface').toBe(scrollBefore);
+
+  await clearPoke(page);
 });

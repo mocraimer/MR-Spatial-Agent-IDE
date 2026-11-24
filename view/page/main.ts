@@ -16,7 +16,7 @@ import {
   CONTROLS_SIZE, LINE_PX, drawChip, drawControls, drawTalk, TALK_SIZE, type TalkPhase, drawDraft, DRAFT_SIZE, drawFront, drawStrip, drawTile, STRIP_SIZE, EMPTY_FRONT, FRONT_SIZE, NO_SESSIONS, frontRows, lightOf, regionAt, resetFonts, terminalLines, tileRows, type ControlButton, type DraftState, type Region, type StripState,
   drawBar,
 } from './panels.js';
-import { multiply, onArc, pose, Scene, type Hit, type Mat, type Pointer, type Rect } from './scene.js';
+import { multiply, onArc, pose, Scene, type CornerDir, type Hit, type Mat, type Pointer, type Rect } from './scene.js';
 
 /** The bridge instance id from the last connect; a change means the bridge restarted. */
 let lastBridgeInstance: string | null = null;
@@ -72,8 +72,8 @@ let controlsAz = 0, controlsDy = 0, controlsScale = 1.0;
 
 /** State captured at bar-grab start: initial cylinder hit and group state. */
 let barGrabState: { surface: string; az0: number; y0: number; groupAz: number; groupDy: number } | null = null;
-/** State captured at edge-resize grab start: which surface and the group scale at that moment. */
-let edgeGrabState: { surface: string; scale0: number } | null = null;
+/** State captured at corner-resize grab start: which surface and the group scale at that moment. */
+let cornerGrabState: { surface: string; scale0: number } | null = null;
 
 const GROUP_STORAGE_KEY = 'spatial-view-group-offsets';
 
@@ -141,15 +141,15 @@ const scene = new Scene(canvas, {
   frame: () => { if (renderWanted) { renderWanted = false; renderNow(); } },
   target: hit => targetRect(hit),
   visibilityChange: state => { bridgeLog({ event: 'visibility', state: state as 'visible' | 'visible-blurred' | 'hidden' }); },
-  // Edge resize: front panel for screens group, talk/controls-N for controls group.
-  edgeResize: surface => surface === 'front' || surface === 'talk' || surface.startsWith('controls-'),
-  edgeStart: surface => {
+  // Corner resize: front panel for screens group, talk/controls-N for controls group.
+  cornerResize: surface => surface === 'front' || surface === 'talk' || surface.startsWith('controls-'),
+  cornerStart: surface => {
     const isScreens = surface === 'front';
-    edgeGrabState = { surface, scale0: isScreens ? screensScale : controlsScale };
+    cornerGrabState = { surface, scale0: isScreens ? screensScale : controlsScale };
   },
-  edgeMove: (surface, ratio) => {
-    if (!edgeGrabState || edgeGrabState.surface !== surface) return;
-    const newScale = Math.max(0.6, Math.min(1.8, edgeGrabState.scale0 * ratio));
+  cornerMove: (surface, ratio) => {
+    if (!cornerGrabState || cornerGrabState.surface !== surface) return;
+    const newScale = Math.max(0.6, Math.min(1.8, cornerGrabState.scale0 * ratio));
     if (surface === 'front') screensScale = newScale;
     else controlsScale = newScale;
     saveGroupOffsets();
@@ -670,46 +670,50 @@ function renderNow(): void {
     surface(id, key, width, multiply(groupOff, basePose), draw);
   };
 
-  // Current edge hover / active grab — included in keys so resizable surfaces redraw on change.
-  const hovEdge = scene.hoveredEdge;
-  const activeEdgeGrab = scene.activeEdgeGrab;
+  // Current corner hover / active grab — included in keys so resizable surfaces redraw on change.
+  const hovCorner = scene.hoveredCorner;
+  const activeCornerGrab = scene.activeCornerGrab;
   /**
-   * Wraps a draw function with a four-state edge affordance:
-   *   rest (always): 7 % strip at 22 % opacity — wide enough to see on dark panels; matches the grab zone
-   *   hover:  45 % opacity — confirms the ray is in the grab region
+   * Wraps a draw function with corner arc affordances:
+   *   rest (always): quarter-circle arcs at 20 % opacity — subtle but discoverable
+   *   hover:  50 % opacity — confirms the ray is in the grab zone
    *   drag:   90 % opacity — unambiguous grab confirmation
-   * The strip is always drawn for all four edges; only the active/hovered one is brighter.
+   * All four corner arcs are always drawn; only the active/hovered one is brighter.
+   * The arc radius matches CORNER_FRAC (12 %) of the smaller canvas dimension.
    */
-  const withEdge = (id: string, draw: (c: HTMLCanvasElement) => void): (c: HTMLCanvasElement) => void => {
-    const hovState = hovEdge?.surface === id ? hovEdge.edge : null;
-    const dragState = activeEdgeGrab?.surface === id ? activeEdgeGrab.edge : null;
+  const withCorners = (id: string, draw: (c: HTMLCanvasElement) => void): (c: HTMLCanvasElement) => void => {
+    const hovState = hovCorner?.surface === id ? hovCorner.corner : null;
+    const dragState = activeCornerGrab?.surface === id ? activeCornerGrab.corner : null;
     return c => {
       draw(c);
       const ctx = c.getContext('2d');
       if (!ctx) return;
-      // t matches EDGE_FRAC (7 %) so the visible strip coincides exactly with the grab zone.
-      const t = Math.round(c.width * 0.07);
+      const r = Math.round(Math.min(c.width, c.height) * 0.12);
       ctx.save();
-      // Rest state: 7 % strip at 22 % opacity — wide enough to see on dark panels.
-      ctx.fillStyle = 'rgba(108,182,255,0.22)';
-      ctx.fillRect(0, 0, t, c.height);               // left
-      ctx.fillRect(c.width - t, 0, t, c.height);     // right
-      ctx.fillRect(0, 0, c.width, t);                 // top
-      ctx.fillRect(0, c.height - t, c.width, t);     // bottom
-      // Active edge: brighter overlay on the hovered/grabbed edge.
-      const activeEdge = hovState ?? dragState;
-      if (activeEdge) {
-        ctx.fillStyle = dragState !== null ? 'rgba(108,182,255,0.9)' : 'rgba(108,182,255,0.45)';
-        if (activeEdge === 'left') ctx.fillRect(0, 0, t, c.height);
-        else if (activeEdge === 'right') ctx.fillRect(c.width - t, 0, t, c.height);
-        else if (activeEdge === 'top') ctx.fillRect(0, 0, c.width, t);
-        else ctx.fillRect(0, c.height - t, c.width, t);
+      ctx.lineWidth = 4;
+      ctx.lineCap = 'round';
+      for (const corner of ['tl', 'tr', 'bl', 'br'] as CornerDir[]) {
+        const isHov = corner === hovState;
+        const isDrag = corner === dragState && dragState !== null;
+        const alpha = isDrag ? 0.9 : isHov ? 0.5 : 0.2;
+        ctx.strokeStyle = `rgba(108,182,255,${alpha})`;
+        ctx.beginPath();
+        // Each arc is a quarter circle whose centre is at the panel corner,
+        // sweeping inward so it lies entirely within the canvas bounds.
+        // Canvas Y increases downward, so: 0=right, π/2=down, π=left, 3π/2=up.
+        switch (corner) {
+          case 'tl': ctx.arc(0,       0,       r, 0,            Math.PI / 2); break;
+          case 'tr': ctx.arc(c.width, 0,       r, Math.PI / 2,  Math.PI);     break;
+          case 'br': ctx.arc(c.width, c.height, r, Math.PI,      3 * Math.PI / 2); break;
+          case 'bl': ctx.arc(0,       c.height, r, 3 * Math.PI / 2, 2 * Math.PI); break;
+        }
+        ctx.stroke();
       }
       ctx.restore();
     };
   };
-  /** Key fragment encoding edge state for a given surface id (drives canvas redraw on change). */
-  const edgeKey = (id: string): string | null => hovEdge?.surface === id ? hovEdge.edge : activeEdgeGrab?.surface === id ? `drag:${activeEdgeGrab.edge}` : null;
+  /** Key fragment encoding corner state for a given surface id (drives canvas redraw on change). */
+  const cornerKey = (id: string): string | null => hovCorner?.surface === id ? hovCorner.corner : activeCornerGrab?.surface === id ? `drag:${activeCornerGrab.corner}` : null;
 
   // Scale each group about its own centre at constant distance (ASM-13).
   // All arc radii stay fixed; widths scale by k; each surface's y and angle offsets
@@ -724,7 +728,7 @@ function renderNow(): void {
   const controlsOffset = pose(0, controlsDy * cS, 0, -controlsAz);
 
   // ---- Screens group: front session, strip (above), tiles and chips ----
-  inGroup('front', JSON.stringify([frontKey, edgeKey('front')]), frontWidth * sS, onArc(0, FRONT_Y, FRONT_DISTANCE), screensOffset, withEdge('front', c => {
+  inGroup('front', JSON.stringify([frontKey, cornerKey('front')]), frontWidth * sS, onArc(0, FRONT_Y, FRONT_DISTANCE), screensOffset, withCorners('front', c => {
     if (state.picker) { regions.set('front', drawPicker(c, state.picker)); windowRect = null; return; }
     regions.delete('front');
     if (front?.window) { windowRect = drawWindowFront(c, front, placeName, picture, windowNote, frontStale); return; }
@@ -823,13 +827,13 @@ function renderNow(): void {
   const talkProblem = mic.problem ?? (state.speech.ready ? null : state.speech.reason);
   const talkHeight = stripWidth * TALK_SIZE.h / TALK_SIZE.w;
   const talkY = CONTROLS_DEFAULT_Y;
-  inGroup('talk', JSON.stringify([[phase, talkProblem], edgeKey('talk')]), stripWidth * cS, onArc(0, CONTROLS_DEFAULT_Y, CONTROLS_DEFAULT_DISTANCE), controlsOffset, withEdge('talk', c => { regions.set('talk', drawTalk(c, phase, talkProblem)); }));
+  inGroup('talk', JSON.stringify([[phase, talkProblem], cornerKey('talk')]), stripWidth * cS, onArc(0, CONTROLS_DEFAULT_Y, CONTROLS_DEFAULT_DISTANCE), controlsOffset, withCorners('talk', c => { regions.set('talk', drawTalk(c, phase, talkProblem)); }));
   used.add('talk');
   const controlsHeight = stripWidth * CONTROLS_SIZE.h / CONTROLS_SIZE.w;
   rows.forEach((buttons, i) => {
     const id = `controls-${i}`;
     const y = talkY - talkHeight / 2 - 0.012 - controlsHeight / 2 - i * (controlsHeight + 0.008);
-    inGroup(id, JSON.stringify([buttons, edgeKey(id)]), stripWidth * cS, onArc(0, controlsY(y), CONTROLS_DEFAULT_DISTANCE), controlsOffset, withEdge(id, c => { regions.set(id, drawControls(c, buttons)); }));
+    inGroup(id, JSON.stringify([buttons, cornerKey(id)]), stripWidth * cS, onArc(0, controlsY(y), CONTROLS_DEFAULT_DISTANCE), controlsOffset, withCorners(id, c => { regions.set(id, drawControls(c, buttons)); }));
     used.add(id);
   });
 
@@ -890,7 +894,7 @@ function updatePage(): void {
 declare global {
   interface Window {
     viewState(): ViewState;
-    viewTest: { text(id: string): string[]; feed(samples: number[]): void; fakeMic(refuse?: boolean): void; worldPoint(id: string, x: number, y: number): [number, number, number] | null; region(surface: string, id: string): { x: number; y: number } | null; simulateInstance(id: string, pageId: string): void };
+    viewTest: { text(id: string): string[]; feed(samples: number[]): void; fakeMic(refuse?: boolean): void; worldPoint(id: string, x: number, y: number): [number, number, number] | null; surfaceNormal(id: string): [number, number, number] | null; region(surface: string, id: string): { x: number; y: number } | null; simulateInstance(id: string, pageId: string): void };
   }
 }
 window.viewState = () => {
@@ -937,6 +941,7 @@ window.viewTest = {
     };
   },
   worldPoint: (id, x, y) => scene.worldPoint(id, x, y),
+  surfaceNormal: id => scene.surfaceNormal(id),
   region: (surface, id) => {
     const r = regions.get(surface)?.find(x => x.id === id);
     const c = canvases.get(surface);
