@@ -379,6 +379,15 @@ function getOrCreateKeyboardInput(): HTMLInputElement {
     if (state.keyboardOpen) { state.keyboardOpen = false; bridgeLog({ event: 'keyboard', open: false }); render(); }
   });
 
+  // AC-5.1: When the floating keyboard deletes on an EMPTY field the value does not change,
+  // so no input event fires and the diff sees nothing. Send the key directly from beforeinput
+  // only when the field is already empty — if it has content, the input diff handles it.
+  el.addEventListener('beforeinput', (e: InputEvent) => {
+    if (!state.keyboardOpen || el.value !== '') return;
+    if (e.inputType === 'deleteContentBackward') forwardKey('backspace');
+    else if (e.inputType === 'deleteWordBackward') forwardKey('ctrl+w');
+  });
+
   // AC-5.1: Characters from the system keyboard arrive via input events.
   // Physical keydowns call e.preventDefault(), so the field never changes for them and no
   // input event follows — no extra flag is needed.
@@ -434,7 +443,7 @@ function openKeyboard(): void {
 }
 
 /** AC-5.2: Post a named key (from a physical keyboard) to the session in front. */
-function forwardKey(key: 'enter' | 'escape' | 'backspace' | 'tab' | 'up' | 'down' | 'left' | 'right' | 'ctrl+c'): void {
+function forwardKey(key: 'enter' | 'escape' | 'backspace' | 'ctrl+w' | 'tab' | 'up' | 'down' | 'left' | 'right' | 'ctrl+c'): void {
   void link.post('/api/action', { key });
 }
 
@@ -797,7 +806,7 @@ function renderNow(): void {
   const row = (groups: string[][], key: boolean): ControlButton[] => groups.flatMap(ids => ids.map((id, i) => ({ id, label: command(id).label, key, group: i === 0 })));
   const rows: ControlButton[][] = [
     row([['next', 'back'], ['scroll-up', 'scroll-down', 'bottom'], ['smaller', 'bigger', 'recenter'], ['overview', 'mirror', 'new-project'], ['keyboard', 'exit']], false),
-    row([['enter', 'escape', 'interrupt'], ['up', 'down', 'tab'], ['y', 'n'], ['one', 'two', 'three']], true),
+    row([['enter', 'escape', 'interrupt'], ['up', 'down', 'tab'], ['y', 'n'], ['one', 'two', 'three'], ['backspace', 'delete-word']], true),
     // Words: send or clear the draft in front, and how spoken prompts are sent. The one in force is lit.
     row([['send', 'scratch'], ['direct-on', 'direct-off']], false).map(b => ({ ...b, on: b.id === (state.direct ? 'direct-on' : 'direct-off') })),
     // Words for the session in front: its model and effort (typed into it as /model and /effort).

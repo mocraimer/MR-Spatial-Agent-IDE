@@ -127,7 +127,7 @@ export function startServer(options: ServerOptions): Promise<Server> {
         return send(res, 200, await bridge.act({ kind: 'type-text', text: body.type_text }));
       }
       if (typeof body.key === 'string') {
-        const validKeys = ['enter','escape','ctrl+c','up','down','left','right','tab','backspace','y','n','1','2','3'] as const;
+        const validKeys = ['enter','escape','ctrl+c','ctrl+w','up','down','left','right','tab','backspace','y','n','1','2','3'] as const;
         type ValidKey = typeof validKeys[number];
         if (!validKeys.includes(body.key as ValidKey)) return send(res, 400, { error: 'Unknown key.' });
         return send(res, 200, await bridge.act({ kind: 'key', key: body.key as ValidKey }));

@@ -135,6 +135,36 @@ for (const input of ['controller', 'hand'] as const) {
   });
 }
 
+test('⌫ button sends backspace; Del wd sends ctrl+w; voice forms work; a spoken draft can be shortened', async ({ page }) => {
+  test.setTimeout(90_000);
+  await start(page);
+
+  // 1. ⌫ button shortens a spoken draft.
+  // Simulate what happens after voice types a draft: type 'echo hello world' WITHOUT Enter
+  // into the shell, then press ⌫ → 'echo hello worl'. Press Enter → 'echo' prints 'hello worl'.
+  await focus('keys');
+  await r.bench.client.call('pane.send_input', { pane_id: r.bench.pane('keys'), text: 'echo hello world', keys: [] });
+  await tapOn(page, 'controller', 'controls-1', 'backspace'); // deletes 'd'
+  await tapOn(page, 'controller', 'controls-1', 'enter');
+  await expect.poll(() => plainText('keys'), { timeout: 10_000 }).toContain('hello worl');
+
+  // 2. Del wd (ctrl+w) deletes a whole word from the shell input.
+  await r.bench.client.call('pane.send_input', { pane_id: r.bench.pane('keys'), text: 'echo hello world', keys: [] });
+  await tapOn(page, 'controller', 'controls-1', 'delete-word'); // ctrl+w deletes 'world'
+  await tapOn(page, 'controller', 'controls-1', 'enter');
+  await expect.poll(() => plainText('keys'), { timeout: 10_000 }).toMatch(/echo hello\s*\n/);
+
+  // 3. Voice "backspace" and "delete word" reach the session.
+  await focus('keys');
+  speech.queue.push('backspace');
+  await say(page, 'press-enter');
+  expect((await viewState(page)).last?.outcome).toMatch(/backspace/i);
+
+  speech.queue.push('delete word');
+  await say(page, 'press-enter');
+  expect((await viewState(page)).last?.outcome).toMatch(/ctrl\+w/i);
+});
+
 test('the receiver is shown, moves only by a focus act, and is fixed when speech starts', async ({ page }) => {
   test.setTimeout(90_000);
   await start(page);

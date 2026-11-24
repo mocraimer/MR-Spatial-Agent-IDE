@@ -518,6 +518,110 @@ test('AC-5.1: value diff handles virtual-keyboard deletes and replacements', asy
   expect(texts.join('')).toContain('p');            // step 3 sent 'p'
 });
 
+// ---- AC-5.1: empty-field beforeinput path --------------------------------------------------
+
+test('AC-5.1: deleteContentBackward on an empty keyboard field sends backspace to the session', async ({ page }) => {
+  // Regression guard: when the floating keyboard's delete key is pressed and the hidden field is
+  // already empty, no value change fires, so the input diff sees nothing. The beforeinput path
+  // must send the key directly.
+  test.setTimeout(60_000);
+  r = await rig([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' as const }] }]);
+  await emulateQuest(page);
+  await pair(page, r);
+  await stubKeyboardSupported(page, true);
+  await enterMixedReality(page);
+  await page.waitForSelector('#keyboard-input');
+
+  await page.evaluate(() => {
+    const el = document.getElementById('keyboard-input') as HTMLInputElement;
+    el.value = '';
+    el.focus(); // state.keyboardOpen = true
+  });
+  await expect.poll(async () => (await viewState(page)).keyboardOpen, { timeout: 5000 }).toBe(true);
+  await spyActions(page);
+
+  // Dispatch deleteContentBackward on the empty field (no value change → no input event).
+  await page.evaluate(() => {
+    const el = document.getElementById('keyboard-input') as HTMLInputElement;
+    el.dispatchEvent(new InputEvent('beforeinput', { inputType: 'deleteContentBackward', bubbles: true, cancelable: true }));
+  });
+  await page.waitForTimeout(300);
+
+  const actions = await page.evaluate(() => (window as unknown as { __actionLog: unknown[] }).__actionLog ?? []) as Array<{ key?: string }>;
+  expect(actions.some(a => a.key === 'backspace'), 'backspace sent when empty field receives deleteContentBackward').toBe(true);
+});
+
+test('AC-5.1: deleteWordBackward on an empty keyboard field sends ctrl+w to the session', async ({ page }) => {
+  test.setTimeout(60_000);
+  r = await rig([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' as const }] }]);
+  await emulateQuest(page);
+  await pair(page, r);
+  await stubKeyboardSupported(page, true);
+  await enterMixedReality(page);
+  await page.waitForSelector('#keyboard-input');
+
+  await page.evaluate(() => {
+    const el = document.getElementById('keyboard-input') as HTMLInputElement;
+    el.value = '';
+    el.focus();
+  });
+  await expect.poll(async () => (await viewState(page)).keyboardOpen, { timeout: 5000 }).toBe(true);
+  await spyActions(page);
+
+  await page.evaluate(() => {
+    const el = document.getElementById('keyboard-input') as HTMLInputElement;
+    el.dispatchEvent(new InputEvent('beforeinput', { inputType: 'deleteWordBackward', bubbles: true, cancelable: true }));
+  });
+  await page.waitForTimeout(300);
+
+  const actions = await page.evaluate(() => (window as unknown as { __actionLog: unknown[] }).__actionLog ?? []) as Array<{ key?: string }>;
+  expect(actions.some(a => a.key === 'ctrl+w'), 'ctrl+w sent when empty field receives deleteWordBackward').toBe(true);
+});
+
+test('AC-5.1: deleteContentBackward on a non-empty keyboard field is NOT double-sent (diff handles it)', async ({ page }) => {
+  test.setTimeout(60_000);
+  r = await rig([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' as const }] }]);
+  await emulateQuest(page);
+  await pair(page, r);
+  await stubKeyboardSupported(page, true);
+  await enterMixedReality(page);
+  await page.waitForSelector('#keyboard-input');
+
+  await page.evaluate(() => {
+    const el = document.getElementById('keyboard-input') as HTMLInputElement;
+    el.value = '';
+    el.focus(); // state.keyboardOpen = true, lastKeyboardValue stays ''
+  });
+  await expect.poll(async () => (await viewState(page)).keyboardOpen, { timeout: 5000 }).toBe(true);
+
+  // Prime lastKeyboardValue to 'abc' by firing an input event BEFORE the spy so the diff
+  // is in the right starting state to detect a deletion.
+  await page.evaluate(() => {
+    const el = document.getElementById('keyboard-input') as HTMLInputElement;
+    el.value = 'abc';
+    el.dispatchEvent(new InputEvent('input', { bubbles: true })); // sets lastKeyboardValue='abc'
+  });
+  await page.waitForTimeout(200);
+
+  await spyActions(page);
+
+  // Simulate the floating keyboard deleting one char: beforeinput fires first (field='abc'),
+  // then the field changes to 'ab', then input fires.
+  // The beforeinput guard sees el.value !== '' → does nothing.
+  // The input diff sees 'abc' → 'ab' → sends exactly one backspace.
+  await page.evaluate(() => {
+    const el = document.getElementById('keyboard-input') as HTMLInputElement;
+    el.dispatchEvent(new InputEvent('beforeinput', { inputType: 'deleteContentBackward', bubbles: true, cancelable: true }));
+    el.value = 'ab';
+    el.dispatchEvent(new InputEvent('input', { bubbles: true }));
+  });
+  await page.waitForTimeout(300);
+
+  const actions = await page.evaluate(() => (window as unknown as { __actionLog: unknown[] }).__actionLog ?? []) as Array<{ key?: string }>;
+  const backspaces = actions.filter(a => a.key === 'backspace').length;
+  expect(backspaces, 'exactly one backspace from the input diff, none extra from beforeinput').toBe(1);
+});
+
 // ---- AC-5.2 evidence -----------------------------------------------------------------------
 
 test('AC-5.2: physical key events in XR are forwarded to the session in front', async ({ page }) => {

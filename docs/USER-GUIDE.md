@@ -114,7 +114,7 @@ Point a hand or controller at something. A ray shows where you point. Pinch (han
 | Bring a session forward | Select its tile | "show 3", "show logs" (a number or name) |
 | Next session that needs you | **Next waiting** | "next waiting" |
 | Return to where you were before "next waiting" | **Back** | "back" |
-| Press a key in the receiver | **Enter, Esc, Ctrl-C, ↑, ↓, Tab, y, n, 1, 2, 3** | "press enter", "press escape", "interrupt", "press up", "press down", "press tab", "press yes", "press no", "press one", "press two", "press three" |
+| Press a key in the receiver | **Enter, Esc, Ctrl-C, ↑, ↓, Tab, ⌫, Del wd, y, n, 1, 2, 3** | "press enter", "press escape", "interrupt", "press up", "press down", "press tab", "backspace", "delete word", "press yes", "press no", "press one", "press two", "press three" |
 | Send the draft in front | **Go** (the third row of buttons) | "go", "submit", "send it" |
 | Clear the draft in front | **Scratch that** | "scratch that", "clear that" |
 | Send each prompt as soon as it is heard, or wait for "go" again | **Send at once**, **Wait for go** (the one in force is lit) | "send at once", "wait for go" |
@@ -147,6 +147,8 @@ Point a hand or controller at something. A ray shows where you point. Pinch (han
 A command must be the whole utterance. "back up the database before you migrate" is a prompt, not "back". "Go" alone sends a draft; "go to docs" goes to a project. When "next waiting" finds nothing waiting, it says so. "Next waiting" goes to the waiting session itself, in whatever project it is, and "back" returns you to the session and project you came from.
 
 To type with a desk keyboard, keys go into Herdr's focused session, which is the one in front. Inside the headset, say "keyboard" or tap **Keyboard** to bring up the Quest system keyboard; it types into the session in front. Tap **Keyboard** again, or press Escape, to close it. Physical keys paired to the headset (Enter, Escape, arrows, Backspace, Tab, and printable characters) are forwarded to the session in front whenever the view is in mixed reality.
+
+The Quest system keyboard is available from Quest home and in the browser, but not inside a WebXR mixed reality session (the owner confirmed this). To delete while the headset keyboard is open, press the floating keyboard's delete key (it deletes one character when the hidden field is empty); or tap **⌫** or **Del wd** in the key row, or say "backspace" or "delete word" — these always reach the session directly.
 
 ## PC windows in a project (window mirrors)
 
@@ -241,6 +243,7 @@ A command must be the whole utterance. These are all the forms, each in quotatio
 | Back | "back", "go back" |
 | Enter, Escape, Ctrl-C | "press enter", "enter"; "press escape", "escape"; "interrupt", "press control c", "control c" |
 | Arrows, Tab | "press up", "arrow up"; "press down", "arrow down"; "press tab" |
+| ⌫, Del wd | "backspace", "press backspace"; "delete word", "delete last word", "delete that word" |
 | y, n | "press yes", "press y"; "press no", "press n" |
 | 1 | "press one", "press 1", "option one", "option 1" |
 | 2 | "press two", "press 2", "option two", "option 2" |

@@ -3,7 +3,7 @@
  * both read this one list, so a button and its words cannot drift apart.
  */
 
-export type KeyName = 'enter' | 'escape' | 'ctrl+c' | 'up' | 'down' | 'left' | 'right' | 'tab' | 'backspace' | 'y' | 'n' | '1' | '2' | '3';
+export type KeyName = 'enter' | 'escape' | 'ctrl+c' | 'ctrl+w' | 'up' | 'down' | 'left' | 'right' | 'tab' | 'backspace' | 'y' | 'n' | '1' | '2' | '3';
 
 /** Done by the page itself: how the view is shown. */
 export type PageAction = 'scroll-up' | 'scroll-down' | 'scroll-bottom' | 'recenter' | 'listening-off' | 'mode-hold' | 'mode-switch' | 'text-bigger' | 'text-smaller' | 'exit-mr' | 'keyboard';
@@ -99,6 +99,8 @@ export const COMMANDS: readonly Command[] = [
   key('up', '↑', 'up', ['press up', 'arrow up']),
   key('down', '↓', 'down', ['press down', 'arrow down']),
   key('tab', 'Tab', 'tab', ['press tab']),
+  key('backspace', '⌫', 'backspace', ['backspace', 'press backspace']),
+  key('delete-word', 'Del wd', 'ctrl+w', ['delete word', 'delete last word', 'delete that word']),
   key('y', 'y', 'y', ['press yes', 'press y']),
   key('n', 'n', 'n', ['press no', 'press n']),
   key('one', '1', '1', ['press one', 'press 1', 'option one', 'option 1']),
