@@ -698,14 +698,20 @@ function renderNow(): void {
   /** Key fragment encoding edge state for a given surface id (drives canvas redraw on change). */
   const edgeKey = (id: string): string | null => hovEdge?.surface === id ? hovEdge.edge : activeEdgeGrab?.surface === id ? `drag:${activeEdgeGrab.edge}` : null;
 
-  // Derive offset matrices from the stored azimuth/height scalars, scaled about the head.
-  // Scaling about the origin means all world-space positions (az stays angular, dy and radii scale).
+  // Scale each group about its own centre at constant distance (ASM-13).
+  // All arc radii stay fixed; widths scale by k; each surface's y and angle offsets
+  // from the group centre scale by k so that angular size actually grows/shrinks.
   const sS = screensScale, cS = controlsScale;
+  // screensY/screensA: scale y/angle about the screens group centre (FRONT_Y, angle 0).
+  const screensY = (y: number) => FRONT_Y + (y - FRONT_Y) * sS;
+  const screensA = (a: number) => a * sS;
+  // controlsY: scale y about the controls group centre (CONTROLS_DEFAULT_Y, angle 0).
+  const controlsY = (y: number) => CONTROLS_DEFAULT_Y + (y - CONTROLS_DEFAULT_Y) * cS;
   const screensOffset = pose(0, screensDy * sS, 0, -screensAz);
   const controlsOffset = pose(0, controlsDy * cS, 0, -controlsAz);
 
   // ---- Screens group: front session, strip (above), tiles and chips ----
-  inGroup('front', JSON.stringify([frontKey, edgeKey('front')]), frontWidth * sS, onArc(0, FRONT_Y * sS, FRONT_DISTANCE * sS), screensOffset, withEdge('front', c => {
+  inGroup('front', JSON.stringify([frontKey, edgeKey('front')]), frontWidth * sS, onArc(0, FRONT_Y, FRONT_DISTANCE), screensOffset, withEdge('front', c => {
     if (state.picker) { regions.set('front', drawPicker(c, state.picker)); windowRect = null; return; }
     regions.delete('front');
     if (front?.window) { windowRect = drawWindowFront(c, front, placeName, picture, windowNote, frontStale); return; }
@@ -735,7 +741,7 @@ function renderNow(): void {
     ask: state.ask,
   };
   const stripBaseY = FRONT_Y + frontHeight / 2 + 0.06;
-  inGroup('strip', JSON.stringify(strip), stripWidth * sS, onArc(0, stripBaseY * sS, FRONT_DISTANCE * sS), screensOffset, c => { regions.set('strip', drawStrip(c, strip)); });
+  inGroup('strip', JSON.stringify(strip), stripWidth * sS, onArc(0, screensY(stripBaseY), FRONT_DISTANCE), screensOffset, c => { regions.set('strip', drawStrip(c, strip)); });
   used.add('strip');
 
   // A draft that waits says where, and the words that send or clear it, just above the strip.
@@ -748,7 +754,7 @@ function renderNow(): void {
   if (draft) {
     const barHeight = stripWidth * DRAFT_SIZE.h / DRAFT_SIZE.w;
     const draftBaseY = stripBaseY + stripHeight / 2 + 0.014 + barHeight / 2;
-    inGroup('draft', JSON.stringify(draft), stripWidth * sS, onArc(0, draftBaseY * sS, FRONT_DISTANCE * sS), screensOffset, c => drawDraft(c, draft));
+    inGroup('draft', JSON.stringify(draft), stripWidth * sS, onArc(0, screensY(draftBaseY), FRONT_DISTANCE), screensOffset, c => drawDraft(c, draft));
     used.add('draft');
   }
 
@@ -756,7 +762,7 @@ function renderNow(): void {
   for (const chip of chips) {
     const id = `chip:${chip.projectId}`;
     chipTargets.set(id, chip.overview ? 'overview' : `go:${chip.projectId}`);
-    inGroup(id, JSON.stringify([chip.project, chip.overview, chip.sessions.map(s => [s.agent, s.status])]), chip.width * sS, onArc(chip.angle, chip.y * sS, CHIP_ARC * sS), screensOffset, c => drawChip(c, chip.project, chip.sessions, chip.overview));
+    inGroup(id, JSON.stringify([chip.project, chip.overview, chip.sessions.map(s => [s.agent, s.status])]), chip.width * sS, onArc(screensA(chip.angle), screensY(chip.y), CHIP_ARC), screensOffset, c => drawChip(c, chip.project, chip.sessions, chip.overview));
     used.add(id);
   }
 
@@ -768,7 +774,7 @@ function renderNow(): void {
       const inFront = t.session.id === front?.id;
       const tilePicture = t.session.window && !inFront ? state.pictures.get(t.session.id) ?? null : null;
       const tileNote = t.session.window ? state.notes.get(t.session.id) ?? null : null;
-      inGroup(id, JSON.stringify([t.n, t.session, inFront, tileStale, inFront ? 0 : t.session.window ? [tilePicture?.version, tileNote] : state.textVersion.get(t.session.id)]), width * sS, onArc(column.angle, (TOP - i * step) * sS, ARC * sS), screensOffset, c => {
+      inGroup(id, JSON.stringify([t.n, t.session, inFront, tileStale, inFront ? 0 : t.session.window ? [tilePicture?.version, tileNote] : state.textVersion.get(t.session.id)]), width * sS, onArc(screensA(column.angle), screensY(TOP - i * step), ARC), screensOffset, c => {
         if (t.session.window && !inFront) drawWindowTile(c, t.n, t.session, tilePicture, tileNote, tileStale);
         else drawTile(c, t.n, t.session, state.texts.get(t.session.id), inFront, tileStale);
       });
@@ -779,7 +785,7 @@ function renderNow(): void {
   // Grab bar for the screens group: at the bottom of the front panel.
   const barPhysH = stripWidth * 80 / 2464; // 80px canvas height at stripWidth metres wide
   const screensBarY = FRONT_Y - frontHeight / 2 - 0.012 - barPhysH / 2;
-  inGroup('bar:screens', JSON.stringify('screens'), stripWidth * sS, onArc(0, screensBarY * sS, FRONT_DISTANCE * sS), screensOffset, c => drawBar(c, 'Screens'));
+  inGroup('bar:screens', JSON.stringify('screens'), stripWidth * sS, onArc(0, screensY(screensBarY), FRONT_DISTANCE), screensOffset, c => drawBar(c, 'Screens'));
   used.add('bar:screens');
 
   // ---- Controls group: Talk, button rows, draft bar ----
@@ -804,20 +810,20 @@ function renderNow(): void {
   const talkProblem = mic.problem ?? (state.speech.ready ? null : state.speech.reason);
   const talkHeight = stripWidth * TALK_SIZE.h / TALK_SIZE.w;
   const talkY = CONTROLS_DEFAULT_Y;
-  inGroup('talk', JSON.stringify([[phase, talkProblem], edgeKey('talk')]), stripWidth * cS, onArc(0, talkY * cS, CONTROLS_DEFAULT_DISTANCE * cS), controlsOffset, withEdge('talk', c => { regions.set('talk', drawTalk(c, phase, talkProblem)); }));
+  inGroup('talk', JSON.stringify([[phase, talkProblem], edgeKey('talk')]), stripWidth * cS, onArc(0, CONTROLS_DEFAULT_Y, CONTROLS_DEFAULT_DISTANCE), controlsOffset, withEdge('talk', c => { regions.set('talk', drawTalk(c, phase, talkProblem)); }));
   used.add('talk');
   const controlsHeight = stripWidth * CONTROLS_SIZE.h / CONTROLS_SIZE.w;
   rows.forEach((buttons, i) => {
     const id = `controls-${i}`;
     const y = talkY - talkHeight / 2 - 0.012 - controlsHeight / 2 - i * (controlsHeight + 0.008);
-    inGroup(id, JSON.stringify([buttons, edgeKey(id)]), stripWidth * cS, onArc(0, y * cS, CONTROLS_DEFAULT_DISTANCE * cS), controlsOffset, withEdge(id, c => { regions.set(id, drawControls(c, buttons)); }));
+    inGroup(id, JSON.stringify([buttons, edgeKey(id)]), stripWidth * cS, onArc(0, controlsY(y), CONTROLS_DEFAULT_DISTANCE), controlsOffset, withEdge(id, c => { regions.set(id, drawControls(c, buttons)); }));
     used.add(id);
   });
 
   // Grab bar for the controls group: below the last controls row.
   const lastControlY = talkY - talkHeight / 2 - 0.012 - controlsHeight / 2 - (rows.length - 1) * (controlsHeight + 0.008);
   const ctrlBarY = lastControlY - controlsHeight / 2 - 0.012 - barPhysH / 2;
-  inGroup('bar:controls', JSON.stringify('controls'), stripWidth * cS, onArc(0, ctrlBarY * cS, CONTROLS_DEFAULT_DISTANCE * cS), controlsOffset, c => drawBar(c, 'Controls'));
+  inGroup('bar:controls', JSON.stringify('controls'), stripWidth * cS, onArc(0, controlsY(ctrlBarY), CONTROLS_DEFAULT_DISTANCE), controlsOffset, c => drawBar(c, 'Controls'));
   used.add('bar:controls');
   for (const id of [...scene.surfaces.keys()]) if (!used.has(id)) { scene.remove(id); canvases.delete(id); drawn.delete(id); }
   updatePage();
