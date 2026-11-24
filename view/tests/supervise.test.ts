@@ -14,7 +14,7 @@
  * C.2: A child that exits after >= CRASH_GUARD_MS is restarted once automatically.
  */
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
@@ -60,11 +60,12 @@ function waitFor(lines: string[], pred: () => boolean, what: string, ms = 8000):
   });
 }
 
-/** Shared env for all supervisor test runs: short guard and settle windows. */
+/** Shared env for all supervisor test runs: short guard, settle, and poll windows. */
 const TEST_ENV = {
   ...process.env,
   SPATIAL_SETTLE_MS: '100',
   SPATIAL_CRASH_GUARD_MS: '500',
+  SPATIAL_POLL_MS: '100',
 };
 
 test('AC-7.1: when a build file changes, the supervisor restarts the bridge with SPATIAL_RESTARTED=1', async () => {
@@ -191,6 +192,7 @@ test('C.2: a child that exits after the guard window is restarted once automatic
         SPATIAL_BUILD_WATCH_DIR: buildDir,
         SPATIAL_SETTLE_MS: '100',
         SPATIAL_CRASH_GUARD_MS: '200',  // Guard shorter than the 300 ms exit delay.
+        SPATIAL_POLL_MS: '100',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -208,4 +210,94 @@ test('C.2: a child that exits after the guard window is restarted once automatic
     sup.kill('SIGTERM');
     await new Promise<void>(resolve => sup.once('exit', () => resolve()));
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('AC-7.1 poll-only: supervisor detects a build when only utimes changes the mtime (no inotify event)', async () => {
+  // This test proves detection is purely stat/mtime-based.
+  // It pre-creates a .js file so the first poll baseline captures it, then advances
+  // its mtime via utimesSync — no write, no inotify event — and asserts that the
+  // supervisor still restarts the child.  On drvfs fs.watch would have been silent;
+  // poll-based detection handles this correctly.
+  const dir = mkdtempSync('/tmp/svl-sup-');
+  try {
+    const buildDir = join(dir, 'build');
+    mkdirSync(buildDir);
+    const sentinelFile = join(buildDir, 'bridge.js');
+    writeFileSync(sentinelFile, '// initial build\n');
+    const childPath = writeChild(dir, 'long_child.mjs', LONG_CHILD_SCRIPT);
+
+    const lines: string[] = [];
+    const sup = spawn(process.execPath, [SUPERVISE_JS], {
+      env: { ...TEST_ENV, SPATIAL_BRIDGE_CHILD: childPath, SPATIAL_BUILD_WATCH_DIR: buildDir },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    createInterface({ input: sup.stdout }).on('line', l => lines.push(l));
+    createInterface({ input: sup.stderr }).on('line', l => lines.push(`STDERR: ${l}`));
+
+    // Wait for the first child to start, then let the crash guard expire.
+    await waitFor(lines, () => lines.some(l => l.includes('started')), 'first child start');
+    await new Promise(resolve => setTimeout(resolve, 650));
+
+    // Advance the mtime via utimesSync — no write, no content change, no inotify event.
+    const future = new Date(Date.now() + 2000);
+    utimesSync(sentinelFile, future, future);
+
+    // The poll loop must notice the mtime change and trigger a restart.
+    await waitFor(lines, () => lines.filter(l => l.includes('started')).length >= 2, 'restart after utimes-only mtime change', 5000);
+
+    assert.ok(lines.some(l => l.includes('new build detected')), `logged restart reason; lines:\n${lines.join('\n')}`);
+    assert.ok(lines.some(l => l.includes('started restarted=1')), `restarted child reports SPATIAL_RESTARTED=1; lines:\n${lines.join('\n')}`);
+
+    sup.kill('SIGTERM');
+    await new Promise<void>(resolve => sup.once('exit', () => resolve()));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('AC-7.1 drvfs: supervisor detects a build when the build dir is on /mnt/d (Windows drvfs)', async () => {
+  // This test runs the supervisor against a build directory on the Windows drvfs (9P) mount.
+  // On drvfs, fs.watch delivers no inotify events; only stat-based polling works.
+  // The test creates a scratch directory, runs the same mtime-change scenario, then cleans up.
+  const drvfsBase = '/mnt/d';
+  const random = Math.random().toString(36).slice(2, 10);
+  const scratchDir = join(drvfsBase, `spatial-supervise-test-${random}`);
+
+  let canAccess = false;
+  try { mkdirSync(scratchDir); canAccess = true; } catch { /* drvfs not available */ }
+  if (!canAccess) {
+    // Skip gracefully if the mount is not present in this environment.
+    console.log('skip: /mnt/d not writable; skipping drvfs test');
+    return;
+  }
+
+  try {
+    const buildDir = join(scratchDir, 'build');
+    mkdirSync(buildDir);
+    const sentinelFile = join(buildDir, 'bridge.js');
+    writeFileSync(sentinelFile, '// drvfs initial build\n');
+    const childPath = join(scratchDir, 'long_child.mjs');
+    writeFileSync(childPath, LONG_CHILD_SCRIPT);
+
+    const lines: string[] = [];
+    const sup = spawn(process.execPath, [SUPERVISE_JS], {
+      env: { ...TEST_ENV, SPATIAL_BRIDGE_CHILD: childPath, SPATIAL_BUILD_WATCH_DIR: buildDir },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    createInterface({ input: sup.stdout }).on('line', l => lines.push(l));
+    createInterface({ input: sup.stderr }).on('line', l => lines.push(`STDERR: ${l}`));
+
+    await waitFor(lines, () => lines.some(l => l.includes('started')), 'first child start (drvfs)', 10_000);
+    await new Promise(resolve => setTimeout(resolve, 650));
+
+    // Touch via utimesSync — same technique inotify cannot observe.
+    const future = new Date(Date.now() + 2000);
+    utimesSync(sentinelFile, future, future);
+
+    await waitFor(lines, () => lines.filter(l => l.includes('started')).length >= 2, 'restart after utimes on drvfs', 10_000);
+
+    assert.ok(lines.some(l => l.includes('new build detected')), `drvfs restart logged; lines:\n${lines.join('\n')}`);
+    assert.ok(lines.some(l => l.includes('started restarted=1')), `drvfs child reports SPATIAL_RESTARTED=1; lines:\n${lines.join('\n')}`);
+
+    sup.kill('SIGTERM');
+    await new Promise<void>(resolve => sup.once('exit', () => resolve()));
+  } finally { rmSync(scratchDir, { recursive: true, force: true }); }
 });

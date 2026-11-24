@@ -1,19 +1,21 @@
 /**
  * `npm run view`: starts the bridge as a child process and restarts it when a new build lands.
  *
- * The supervisor watches the directory it was run from (the build output) for file writes. When
- * the build has settled (no file changed for about 1 s), it restarts the child and logs one line.
- * If the new child exits within 10 s of starting, it logs the error and waits for the next build
- * rather than looping. Ctrl-C ends both.
+ * The supervisor detects builds by polling the build directory for mtime changes (stat-based, ~1 s
+ * interval). This works on any filesystem — including Windows drvfs (9P) where fs.watch receives
+ * no inotify events. When the build has settled (no file changed for SETTLE_MS), it restarts the
+ * child and logs one line. If the new child exits within CRASH_GUARD_MS, it logs the error and
+ * waits for the next build rather than looping. Ctrl-C ends both.
  *
  * Environment overrides (for tests):
  *   SPATIAL_BRIDGE_CHILD — path to the child script to run instead of main.js
  *   SPATIAL_BUILD_WATCH_DIR — directory to watch for .js changes instead of the build root
  *   SPATIAL_SETTLE_MS — settle delay in ms (default 1000)
  *   SPATIAL_CRASH_GUARD_MS — crash guard window in ms (default 10000)
+ *   SPATIAL_POLL_MS — poll interval in ms (default 1000)
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import { watch } from 'node:fs';
+import { readdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -23,6 +25,8 @@ const child = process.env.SPATIAL_BRIDGE_CHILD ?? join(here, 'main.js');
 const SETTLE_MS = Number(process.env.SPATIAL_SETTLE_MS ?? '1000');
 /** Crash guard: a child that exits within this window is treated as a bad build. */
 const CRASH_GUARD_MS = Number(process.env.SPATIAL_CRASH_GUARD_MS ?? '10000');
+/** Poll interval: how often to check mtimes (default 1000 ms). */
+const POLL_MS = Number(process.env.SPATIAL_POLL_MS ?? '1000');
 /** How long between log timestamps. */
 const log = (line: string) => console.log(`${new Date().toISOString().slice(11, 19)} supervisor: ${line}`);
 
@@ -32,6 +36,47 @@ let settleTimer: NodeJS.Timeout | null = null;
 /** After a crash-after-guard restart, track that one grace restart was given. */
 let crashRestartPending = false;
 let stopping = false;
+
+/** Scan `dir` recursively and return a map of path → mtime for all .js files. */
+function scanMtimes(dir: string): Map<string, number> {
+  const result = new Map<string, number>();
+  let entries: string[];
+  try {
+    entries = readdirSync(dir, { recursive: true, encoding: 'utf8' }) as string[];
+  } catch {
+    return result;
+  }
+  for (const rel of entries) {
+    if (!rel.endsWith('.js')) continue;
+    const abs = join(dir, rel);
+    try {
+      result.set(abs, statSync(abs).mtimeMs);
+    } catch { /* file disappeared between readdir and stat – ignore */ }
+  }
+  return result;
+}
+
+/** Start the poll loop. Fires scheduleRestart() when any .js mtime changes. */
+function startPolling(dir: string): void {
+  let prev = scanMtimes(dir);
+  const id = setInterval(() => {
+    if (stopping) { clearInterval(id); return; }
+    const next = scanMtimes(dir);
+    let changed = false;
+    for (const [path, mtime] of next) {
+      if (prev.get(path) !== mtime) { changed = true; break; }
+    }
+    if (!changed) {
+      for (const path of prev.keys()) {
+        if (!next.has(path)) { changed = true; break; }
+      }
+    }
+    if (changed) {
+      prev = next;
+      scheduleRestart();
+    }
+  }, POLL_MS);
+}
 
 function start(reason: string): void {
   if (stopping) return;
@@ -85,12 +130,10 @@ function scheduleRestart(): void {
   }, SETTLE_MS);
 }
 
-// Watch the directory where this file lives (build/view/bridge) and its parent (build/view).
-// tsc writes into build/view/ so watch build/ recursively to catch all output files.
+// Poll the build directory for mtime changes instead of using fs.watch.
+// fs.watch is inotify-based and delivers no events on Windows drvfs (9P).
 const buildDir = process.env.SPATIAL_BUILD_WATCH_DIR ?? join(here, '..', '..');
-watch(buildDir, { recursive: true }, (_event, filename) => {
-  if (filename && /\.js$/.test(filename)) scheduleRestart();
-});
+startPolling(buildDir);
 
 start('bridge starting');
 
