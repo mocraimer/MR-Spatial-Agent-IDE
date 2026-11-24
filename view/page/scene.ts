@@ -294,7 +294,8 @@ export class Scene {
       const edgeGrab = this.edgeGrabs.get(source);
       if (edgeGrab) this.followEdge(source, edgeGrab, origin, dir);
       // Update hover state: last controller with an edge hit wins.
-      if (!edgeGrab && hit?.hit && this.events.edgeResize(hit.hit.surface)) {
+      // Suppress the edge highlight when a target (button/region) is under the pointer.
+      if (!edgeGrab && hit?.hit && this.events.edgeResize(hit.hit.surface) && !this.events.target(hit.hit)) {
         const e = this.edgeOf(hit.hit);
         if (e) this.currentEdgeHover = { surface: hit.hit.surface, edge: e };
         else if (this.currentEdgeHover?.surface === hit.hit.surface) this.currentEdgeHover = null;
@@ -431,8 +432,10 @@ export class Scene {
       }
       return;
     }
-    // Edge resize: a hit in the border strip of a resizable panel starts an edge grab.
-    if (this.events.edgeResize(hit.surface)) {
+    // Edge resize: a hit in the border strip of a resizable panel starts an edge grab,
+    // but only when there is no button or region target under the pointer — a press on
+    // a target always fires the target, never the resize.
+    if (this.events.edgeResize(hit.surface) && !this.events.target(hit)) {
       const edge = this.edgeOf(hit);
       if (edge) {
         const s = this.surfaces.get(hit.surface);
@@ -556,8 +559,8 @@ export class Scene {
     if (this.session) return;
     this.mouseHit = this.cast(DESKTOP_EYE, this.mouseRay(e))?.hit ?? null;
     this.canvas.style.cursor = this.mouseHit ? 'pointer' : 'default';
-    // Update edge hover state for desktop/mouse.
-    if (this.mouseHit && this.events.edgeResize(this.mouseHit.surface)) {
+    // Update edge hover state for desktop/mouse. Suppress over targets.
+    if (this.mouseHit && this.events.edgeResize(this.mouseHit.surface) && !this.events.target(this.mouseHit)) {
       const e2 = this.edgeOf(this.mouseHit);
       this.currentEdgeHover = e2 ? { surface: this.mouseHit.surface, edge: e2 } : null;
     } else {

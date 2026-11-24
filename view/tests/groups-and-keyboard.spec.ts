@@ -1002,22 +1002,29 @@ test('AC-9.1: mouse drag of front panel right edge outward scales screens group 
   expect(screensScale, 'screensScale > 1 after mouse drag').toBeGreaterThan(1.0);
 });
 
-test('AC-9.1: edge drag of talk panel (controls group) scales controls group; screens group stays unchanged', async ({ page }) => {
+test('AC-9.1: edge drag of controls-0 top edge scales controls group; screens group stays unchanged', async ({ page }) => {
+  // The talk surface registers its whole canvas as a target so its edge zone
+  // correctly fires the talk button. Use the TOP edge of controls-0 instead:
+  // drawControls leaves an 8 px gap above the first button row (y: 8) so the
+  // top 7 % of that canvas (< 7.7 px) has no region target — edge resize starts there.
   test.setTimeout(90_000);
   r = await rig([{ label: 'alpha', panes: [{ name: 'a1', kind: 'agent' as const }] }]);
   await emulateQuest(page);
   await pair(page, r);
   await enterMixedReality(page);
-  await expect.poll(async () => (await viewState(page)).surfaces).toContain('talk');
+  await expect.poll(async () => (await viewState(page)).surfaces).toContain('controls-0');
 
   const talkWidthBefore = await surfaceWorldWidth(page, 'talk');
   const frontWidthBefore = await surfaceWorldWidth(page, 'front');
 
-  // Grab the right edge of the talk panel (controls group) and drag outward.
-  await aim(page, 'controller', 'talk', 0.97, 0.5);
+  // Grab the top-right corner of controls-0 (x=97%, y=3%) — no button target there
+  // (buttons are at y≥8px; the right 7% has 'exit' but only at y≥8px; the top 7% gap
+  // is empty). edgeOf checks right before top, so this starts a RIGHT edge grab.
+  // Dragging right increases the ray–plane intersection distance from origin → scale > 1.
+  await aim(page, 'controller', 'controls-0', 0.97, 0.03);
   await setPressed(page, 'controller', 1);
   await page.waitForTimeout(100);
-  await aim(page, 'controller', 'talk', 1.4, 0.5);
+  await aim(page, 'controller', 'controls-0', 1.4, 0.03);
   await page.waitForTimeout(200);
   await setPressed(page, 'controller', 0);
   await page.waitForTimeout(150);
@@ -1025,10 +1032,10 @@ test('AC-9.1: edge drag of talk panel (controls group) scales controls group; sc
   const talkWidthAfter = await surfaceWorldWidth(page, 'talk');
   const frontWidthAfter = await surfaceWorldWidth(page, 'front');
 
-  expect(talkWidthAfter, 'talk panel grew after outward edge drag').toBeGreaterThan(talkWidthBefore * 1.02);
+  expect(talkWidthAfter, 'talk panel grew after outward edge drag on controls-0').toBeGreaterThan(talkWidthBefore * 1.02);
 
   const { controlsScale, screensScale } = await storedScales(page);
-  expect(controlsScale, 'controlsScale > 1 after talk edge drag').toBeGreaterThan(1.0);
+  expect(controlsScale, 'controlsScale > 1 after controls-0 edge drag').toBeGreaterThan(1.0);
   expect(screensScale, 'screensScale unchanged after controls resize').toBeCloseTo(1.0, 2);
   expect(Math.abs(frontWidthAfter - frontWidthBefore) / (frontWidthBefore || 1), 'front panel unchanged').toBeLessThan(0.01);
 });
@@ -1060,10 +1067,41 @@ test('AC-9.1: edge affordance screenshots — rest, hover and drag states on fro
   await page.waitForTimeout(100);
 
   // Rest and hover on the talk panel (a control panel).
+  // talk's whole canvas is a target, so hovering its edge does not show the edge highlight —
+  // pressing it fires the talk action, not a resize. The screenshot captures this correct state.
   await aim(page, 'controller', 'talk', 0.5, 0.5);
   await page.waitForTimeout(100);
   await shot('edge-rest-talk');
   await aim(page, 'controller', 'talk', 0.97, 0.5);
   await page.waitForTimeout(200);
   await shot('edge-hover-talk');
+});
+
+test('AC-9.1: a button in the edge zone of its panel fires the button, not a resize', async ({ page }) => {
+  // Regression guard: before the fix, a press inside the 7 % edge strip of a resizable surface
+  // started an edge-resize grab even when a button target was under the pointer.
+  // "enter" in controls-1 is the first button in its row; its centre is at ~5 % of the canvas
+  // width, well inside the left 7 % edge zone (EDGE_FRAC = 0.07).
+  test.setTimeout(90_000);
+  r = await rig([{ label: 'alpha', panes: [{ name: 'keys', kind: 'shell' as const }] }]);
+  await emulateQuest(page);
+  await pair(page, r);
+  await page.evaluate(() => window.viewTest.fakeMic());
+  await enterMixedReality(page);
+  await expect.poll(async () => (await viewState(page)).surfaces).toContain('controls-1');
+
+  // Type a command into the shell pane so Enter has visible output.
+  await r.bench.client.call('pane.focus', { pane_id: r.bench.pane('keys') });
+  await r.bench.type('keys', 'cat -v');
+
+  // Tap "enter" — its centre lies in the left edge zone of the controls-1 surface.
+  // The button must send Enter to the session (not start a resize).
+  await tap(page, 'controller', 'controls-1', 'enter');
+  await expect.poll(() => plainText(r, 'keys'), { timeout: 10_000 }).toContain('cat -v');
+
+  // The controls group must not have been resized. If the localStorage key was never
+  // written no resize happened at all — that is correct; default to 1.0.
+  const raw = await page.evaluate(() => localStorage.getItem('spatial-view-group-offsets'));
+  const controlsScale = raw ? (JSON.parse(raw) as [[number, number, number], [number, number, number]])[1][2] ?? 1 : 1;
+  expect(controlsScale, 'controlsScale still 1.0 — enter button did not trigger resize').toBeCloseTo(1.0, 2);
 });
