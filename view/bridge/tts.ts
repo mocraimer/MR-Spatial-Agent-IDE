@@ -1,14 +1,18 @@
 /**
- * Spoken output on the PC: either the Kokoro-82M neural voice in a worker thread (default), or
+ * Spoken output on the PC: either the Kokoro-82M neural voice in a child process (default), or
  * the Windows voice run through `powershell.exe` from WSL. While Kokoro loads or if it fails,
  * Windows is used. Text travels only as data; nothing here leaves the PC.
+ *
+ * Kokoro runs in a child process (child_process.fork) rather than a worker thread so that its
+ * nested onnxruntime-node (bundled with kokoro-js) lives in a separate OS process with its own
+ * dlopen space. Worker threads share the parent process's loaded native libraries, which causes
+ * a "version VERS_1.21.0 not found" crash when the main thread has already loaded the speech
+ * model's onnxruntime-node. A child process avoids this entirely.
  */
-import { spawn } from 'node:child_process';
+import { fork, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Worker } from 'node:worker_threads';
-import type { KokoroWorkerData } from './kokoro-worker.js';
 
 /** Where Windows PowerShell is, seen from WSL; `VIEW_POWERSHELL` names another place. */
 export const POWERSHELL = '/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe';
@@ -88,21 +92,27 @@ export class WindowsVoice implements Voice {
   }
 }
 
-type WorkerState = 'loading' | 'ready' | 'failed';
-type WorkerMsg =
+type ChildState = 'loading' | 'ready' | 'failed';
+type ChildMsg =
   | { type: 'ready' }
   | { type: 'failed'; reason: string }
-  | { type: 'done'; id: number; wav: ArrayBuffer }
+  | { type: 'done'; id: number; wav: Buffer }
   | { type: 'error'; id: number; reason: string };
 
 /**
- * Kokoro-82M "af_heart" voice in a worker thread, with Windows as a fallback while loading or
- * after failure. The worker loads the model once at construction; `speak()` uses whichever voice
- * is active. Callbacks are called when the state changes so the bridge can notify the owner.
+ * Kokoro-82M "af_heart" voice in a child process, with Windows as a fallback while loading or
+ * after failure. The child process loads the model once at construction; `speak()` uses whichever
+ * voice is active. Callbacks are called when the state changes so the bridge can notify the owner.
+ *
+ * A child process (fork) is used rather than a worker thread because Kokoro's kokoro-js bundles
+ * its own onnxruntime-node. Worker threads share the parent's dlopen'd libraries; if the main
+ * thread already loaded @huggingface/transformers v4's onnxruntime-node, the worker's attempt
+ * to dlopen a different ORT build fails with "version VERS_1.21.0 not found". A child process
+ * has its own dlopen space and loads whatever ORT its kokoro-js requires.
  */
 export class KokoroVoice implements Voice {
-  private worker: Worker | null = null;
-  private state: WorkerState = 'loading';
+  private child: ChildProcess | null = null;
+  private state: ChildState = 'loading';
   private readonly pending = new Map<number, { resolve: (wav: Buffer) => void; reject: (err: Error) => void }>();
   private nextId = 0;
   readonly voiceId: string;
@@ -119,72 +129,74 @@ export class KokoroVoice implements Voice {
   }
 
   problem(): string | null {
-    // Kokoro is ready: no problem, even if the fallback has one.
     if (this.state === 'ready') return null;
-    // Loading or failed: delegate to the fallback which is standing in.
     return this.fallback.problem();
   }
 
   /** True while Windows is standing in (Kokoro is still loading or has failed). */
   standingIn(): boolean { return this.state !== 'ready'; }
 
+  /** PID of the Kokoro child process, or undefined if it has not started or has exited. */
+  get childPid(): number | undefined { return this.child?.pid; }
+
   speak(text: string): Promise<Buffer> {
-    if (this.state === 'ready' && this.worker) return this.workerSpeak(text);
+    if (this.state === 'ready' && this.child) return this.childSpeak(text);
     return this.fallback.speak(text);
   }
 
-  /** Reject all pending phrases and mark state as failed; called on unexpected worker death. */
-  private workerDied(reason: string): void {
+  /** Reject all pending phrases and mark state as failed; called on unexpected child death. */
+  private childDied(reason: string): void {
     this.state = 'failed';
-    this.worker = null;
+    this.child = null;
     for (const { reject } of this.pending.values()) reject(new Error('the voice stopped'));
     this.pending.clear();
     this.onFailed(reason);
   }
 
   private start(): void {
-    const workerFile = join(dirname(fileURLToPath(import.meta.url)), 'kokoro-worker.js');
-    const data: KokoroWorkerData = { modelPath: this.modelPath, voiceId: this.voiceId };
-    this.worker = new Worker(workerFile, { workerData: data });
-    this.worker.on('message', (msg: WorkerMsg) => {
+    const childFile = join(dirname(fileURLToPath(import.meta.url)), 'kokoro-child.js');
+    // serialization: 'advanced' enables V8 structured clone so Buffer payloads are not
+    // JSON-serialised (which would corrupt binary data).
+    this.child = fork(childFile, [], { serialization: 'advanced' });
+    // Send init data as the first message (replaces workerData from the old worker-thread design).
+    this.child.send({ type: 'init', modelPath: this.modelPath, voiceId: this.voiceId });
+
+    this.child.on('message', (msg: ChildMsg) => {
       if (msg.type === 'ready') {
         this.state = 'ready';
         this.onReady();
       } else if (msg.type === 'failed') {
         this.state = 'failed';
-        // Do NOT call terminate() here: terminating a worker that loaded the onnxruntime
-        // native addon corrupts its global registration state, causing subsequent workers in
-        // the same process to fail. The worker exits naturally after sending 'failed' because
-        // it registers no message listener on failure (see kokoro-worker.ts).
-        this.worker = null;
+        this.child = null;
         this.onFailed(msg.reason);
+        // Child exits naturally (no 'speak' listener registered on failure).
       } else if (msg.type === 'done') {
-        this.pending.get(msg.id)?.resolve(Buffer.from(msg.wav));
+        this.pending.get(msg.id)?.resolve(msg.wav);
         this.pending.delete(msg.id);
       } else if (msg.type === 'error') {
         this.pending.get(msg.id)?.reject(new Error('the voice did not make audio'));
         this.pending.delete(msg.id);
       }
     });
-    // Handle unexpected worker death in any state.
-    this.worker.on('error', err => {
+
+    this.child.on('error', err => {
       if (this.state === 'loading') {
         this.state = 'failed';
-        this.worker = null;
+        this.child = null;
         this.onFailed(err.message);
       } else {
-        this.workerDied(err.message);
+        this.childDied(err.message);
       }
     });
-    this.worker.on('exit', code => {
-      // A graceful exit (code 0) after a 'failed' message is expected; ignore it.
-      if (this.worker === null) return;
-      // Any other exit (crash, OOM) while the worker is still tracked is a failure.
-      this.workerDied(`worker exited with code ${code ?? '?'}`);
+
+    this.child.on('exit', code => {
+      // A graceful exit after a 'failed' message is expected (child is set to null above).
+      if (this.child === null) return;
+      this.childDied(`kokoro child exited with code ${code ?? '?'}`);
     });
   }
 
-  private workerSpeak(text: string): Promise<Buffer> {
+  private childSpeak(text: string): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       const id = this.nextId++;
       const timer = setTimeout(() => {
@@ -195,40 +207,39 @@ export class KokoroVoice implements Voice {
         resolve: (wav: Buffer) => { clearTimeout(timer); resolve(wav); },
         reject: (err: Error) => { clearTimeout(timer); reject(err); },
       });
-      this.worker!.postMessage({ type: 'speak', id, text });
+      this.child!.send({ type: 'speak', id, text });
     });
   }
 
   stop(): void {
     for (const { reject } of this.pending.values()) reject(new Error('the voice stopped'));
     this.pending.clear();
-    this.worker?.terminate();
-    this.worker = null;
+    this.child?.kill();
+    this.child = null;
   }
 }
 
 /**
  * Downloads the Kokoro model into `models` so the voice can run without a network. The only
- * network use of the Kokoro voice, done once at setup. Uses kokoro-js's own transformers copy
- * and sets its cacheDir so files land in the view's models directory.
+ * network use of the Kokoro voice, done once at setup.
+ *
+ * Runs in a forked child process so that kokoro-js's nested onnxruntime-node never loads in
+ * the same process as the speech model's onnxruntime-node. If both were in the same process,
+ * the second ORT build would fail to dlopen because the first is already resident.
  */
 export async function fetchKokoroModel(models: string): Promise<void> {
-  const { createRequire } = await import('node:module');
-  // Access the env from kokoro-js's nested @huggingface/transformers (^3) so we can
-  // set cacheDir without touching the project's own transformers (^4).
-  const kokoroMain = fileURLToPath(import.meta.resolve('kokoro-js'));
-  const kokoroRequire = createRequire(kokoroMain);
-  const { env } = kokoroRequire('@huggingface/transformers') as { env: { cacheDir: string; allowRemoteModels: boolean; allowLocalModels: boolean } };
-  const prev = { cacheDir: env.cacheDir, remote: env.allowRemoteModels, local: env.allowLocalModels };
-  try {
-    env.cacheDir = models;
-    env.allowRemoteModels = true;
-    env.allowLocalModels = true;
-    const { KokoroTTS } = await import('kokoro-js');
-    await (KokoroTTS as unknown as { from_pretrained(id: string, opts: { dtype: string; device: string }): Promise<unknown> }).from_pretrained(KOKORO_MODEL, { dtype: 'fp32', device: 'cpu' });
-  } finally {
-    env.cacheDir = prev.cacheDir;
-    env.allowRemoteModels = prev.remote;
-    env.allowLocalModels = prev.local;
-  }
+  const childFile = join(dirname(fileURLToPath(import.meta.url)), 'fetch-kokoro-child.js');
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const ok  = () => { if (!settled) { settled = true; resolve(); } };
+    const err = (e: Error) => { if (!settled) { settled = true; reject(e); } };
+    const child = fork(childFile, [], { serialization: 'advanced' });
+    child.send({ type: 'fetch', models });
+    child.on('message', (msg: { type: string; reason?: string }) => {
+      if (msg.type === 'done') ok();
+      else err(new Error(`Kokoro fetch failed: ${msg.reason ?? 'unknown'}`));
+    });
+    child.on('error', e => err(e));
+    child.on('exit', code => err(new Error(`Kokoro fetch child exited with code ${code ?? '?'} without completing`)));
+  });
 }
