@@ -923,6 +923,7 @@ export class Bridge {
 
   private setKeepSpeech(on: boolean): Result {
     const saved = this.save(() => this.settings.setKeepSpeech(on), `keep speech turned ${on ? 'on' : 'off'}`);
+    this.announceVoice();
     const note = on ? 'Each utterance is kept as audio and text in the data folder on this PC.' : 'Utterances are no longer kept.';
     return { ok: true, outcome: note + saved, silent: true };
   }
