@@ -119,6 +119,7 @@ Point a hand or controller at something. A ray shows where you point. Pinch (han
 | Scroll the front session back, forward, to the latest | Grab the text (pinch or trigger on it) and drag up or down; or push the thumbstick; or **Scroll up, Scroll down, Latest** | "scroll up", "scroll down", "scroll bottom" |
 | Larger or smaller text | **A+, A−** | "bigger text", "smaller text" |
 | Put the shelf in front of you again | **Recenter** | "recenter" |
+| Type with the headset keyboard | **Keyboard** (lit while the keyboard is open; tap again to close) | "keyboard", "show keyboard", "open keyboard", "type" |
 | Leave mixed reality, back to the flat page | **Exit MR** (or the Quest's Meta button) | "leave mixed reality" |
 | Set the model of the session in front | **Model Haiku, Model Sonnet, Model Opus** (the fourth row) | "model haiku", "model sonnet", "model opus" (also "set model to sonnet") |
 | Set the effort of the session in front | **Effort low, medium, high, extra high, max** | "effort low", "effort medium", "effort high", "effort extra high", "effort max" (also "set effort to high") |
@@ -138,7 +139,7 @@ Point a hand or controller at something. A ray shows where you point. Pinch (han
 
 A command must be the whole utterance. "back up the database before you migrate" is a prompt, not "back". "Go" alone sends a draft; "go to docs" goes to a project. When "next waiting" finds nothing waiting, it says so. "Next waiting" goes to the waiting session itself, in whatever project it is, and "back" returns you to the session and project you came from.
 
-To type, use the keyboard at the desk: it types into Herdr's focused session, which is the one in front.
+To type with a desk keyboard, keys go into Herdr's focused session, which is the one in front. Inside the headset, say "keyboard" or tap **Keyboard** to bring up the Quest system keyboard; it types into the session in front. Tap **Keyboard** again, or press Escape, to close it. Physical keys paired to the headset (Enter, Escape, arrows, Backspace, Tab, and printable characters) are forwarded to the session in front whenever the view is in mixed reality.
 
 ## PC windows in a project (window mirrors)
 
@@ -245,6 +246,7 @@ A command must be the whole utterance. These are all the forms, each in quotatio
 | Send at once, wait for go | "send at once"; "wait for go" ("way for go") |
 | Scroll | "scroll up", "page up"; "scroll down", "page down"; "scroll bottom", "bottom", "go bottom", "scroll to bottom", "latest" |
 | Recenter | "recenter", "re center", "center" |
+| Headset keyboard | "keyboard", "show keyboard", "open keyboard", "type" |
 | Text size | "bigger text", "larger text"; "smaller text" |
 | Listening | "stop listening", "mic off", "microphone off"; "hold to talk"; "keep listening", "start listening", "listening switch" |
 | Leave mixed reality | "leave mixed reality", "exit mixed reality", "exit" |

@@ -539,27 +539,53 @@ export function drawStrip(canvas: HTMLCanvasElement, st: StripState): Region[] {
     ctx.fillText(st.mic.standby ? 'Commands only: each asks “yes”' : st.mic.mode === 'hold' ? 'Hold to talk' : 'Keep listening until “stop listening”', tx, 98);
   }
 
-  // The standing chips, drawn from the right edge first: what is heard gets the room that is left.
+  // The standing chips, drawn from the right edge first; what is heard gets what remains.
+  // With 3+ chips use compact labels so the heard text always keeps at least MIN_SAY_W pixels.
+  const MIN_SAY_W = 350;
+  const chipCount = (st.link ? 1 : 0) + (st.direct ? 1 : 0) + (st.voiceProblem ? 1 : 0) + ((st.voiceOff || st.reading) ? 1 : 0);
+  const compact = chipCount >= 3;
   let right = w - 40;
   if (st.link) right -= chip(ctx, st.link, right, h / 2, 28, AMBER, 'right') + 16;
   // Direct sending is a standing exception to "say go": it shows whenever it is on.
-  if (st.direct) right -= chip(ctx, 'Sending at once', right, h / 2, 32, AMBER, 'right') + 16;
+  if (st.direct) right -= chip(ctx, compact ? 'Direct' : 'Sending at once', right, h / 2, 32, AMBER, 'right') + 16;
   // The voice is a standing setting too: off, or reading each reply, it shows whenever it holds; a voice that failed shows until it works again.
-  if (st.voiceProblem) right -= chip(ctx, 'Voice problem', right, h / 2, 32, AMBER, 'right') + 16;
+  if (st.voiceProblem) right -= chip(ctx, compact ? 'Voice!' : 'Voice problem', right, h / 2, 32, AMBER, 'right') + 16;
   if (st.voiceOff) right -= chip(ctx, 'Voice off', right, h / 2, 32, AMBER, 'right') + 16;
-  else if (st.reading) right -= chip(ctx, 'Reading replies', right, h / 2, 32, ACCENT, 'right') + 16;
-  const sayX = 1250, sayW = Math.max(300, right - sayX);
-  ctx.font = `600 34px ${SANS}`; ctx.fillStyle = st.last || st.pendingHeard ? PAPER : DIM;
-  const said = st.pendingHeard ? 'Hearing…' : st.last ? `“${st.last.heard || '…'}”` : 'Nothing said yet';
-  ctx.fillText(fit(ctx, said, sayW), sayX, 48);
-  let x = sayX;
-  if (!st.notice && st.last) {
-    const tag = { command: 'Command', prompt: 'Prompt', helper: 'Helper order', nothing: 'Not acted on', ignored: 'Ignored' }[st.last.as];
-    x += chip(ctx, tag, x, 102, 24, st.last.ok ? ACCENT : AMBER) + 16;
+  else if (st.reading) right -= chip(ctx, compact ? 'Reading' : 'Reading replies', right, h / 2, 32, ACCENT, 'right') + 16;
+  // The speech area always keeps at least MIN_SAY_W pixels so heard text is readable.
+  const sayX = 1250, sayW = Math.max(MIN_SAY_W, right - sayX);
+  {
+    ctx.font = `600 34px ${SANS}`; ctx.fillStyle = st.last || st.pendingHeard ? PAPER : DIM;
+    const said = st.pendingHeard ? 'Hearing…' : st.last ? `”${st.last.heard || '…'}”` : 'Nothing said yet';
+    ctx.fillText(fit(ctx, said, sayW), sayX, 48);
+    let x = sayX;
+    if (!st.notice && st.last) {
+      const tag = { command: 'Command', prompt: 'Prompt', helper: 'Helper order', nothing: 'Not acted on', ignored: 'Ignored' }[st.last.as];
+      x += chip(ctx, tag, x, 102, 24, st.last.ok ? ACCENT : AMBER) + 16;
+    }
+    ctx.font = `28px ${SANS}`; ctx.fillStyle = st.last && !st.last.ok && !st.notice ? AMBER : DIM; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText(fit(ctx, st.notice ?? st.last?.outcome ?? 'What you say shows here, with where it went.', sayX + sayW - x), x, 103);
   }
-  ctx.font = `28px ${SANS}`; ctx.fillStyle = st.last && !st.last.ok && !st.notice ? AMBER : DIM; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-  ctx.fillText(fit(ctx, st.notice ?? st.last?.outcome ?? 'What you say shows here, with where it went.', sayX + sayW - x), x, 103);
   return [mic];
+}
+
+/** A grab bar surface at the bottom of a group: signals draggability with grip lines. */
+export const BAR_SIZE = { w: 2464, h: 80 };
+export function drawBar(canvas: HTMLCanvasElement, label: string): void {
+  const { w, h } = BAR_SIZE;
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d') as CanvasRenderingContext2D;
+  panel(ctx, w, h, { radius: 20 });
+  // Three grip lines centred in the bar.
+  ctx.strokeStyle = FAINT; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
+  const lw = 200, cx = w / 2, cy = h / 2;
+  for (let i = -1; i <= 1; i += 1) {
+    const y = cy + i * 14;
+    ctx.beginPath(); ctx.moveTo(cx - lw / 2, y); ctx.lineTo(cx + lw / 2, y); ctx.stroke();
+  }
+  // Label on the left in FAINT.
+  ctx.font = `600 24px ${SANS}`; ctx.fillStyle = FAINT; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillText(label.toUpperCase(), 36, cy);
 }
 
 export interface ControlButton { id: string; label: string; on?: boolean; /** A key sent to the session, drawn as a keycap. */ key?: boolean; /** Starts a new group. */ group?: boolean }

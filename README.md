@@ -13,7 +13,7 @@ This is one person's own tool, published as is under the MIT license. It is buil
 
 ## Quick start
 
-One small bridge process on the PC (`view/bridge`) reads your Herdr sessions through Herdr's socket API and serves one WebXR page (`view/page`) to the headset over Wi-Fi, behind a pairing code and the view's own certificate. Speech becomes text on the PC with a small local model, and short spoken answers come back from Windows' own voice on the PC; nothing leaves the PC. The view shows your real sessions; Herdr stays the owner of focus, so the desk keyboard types into the session the view shows in front.
+One small bridge process on the PC (`view/bridge`) reads your Herdr sessions through Herdr's socket API and serves one WebXR page (`view/page`) to the headset over Wi-Fi, behind a pairing code and the view's own certificate. Speech becomes text on the PC with a small local model, and short spoken answers come back from Windows' own voice on the PC; nothing leaves the PC. The view shows your real sessions; Herdr stays the owner of focus, so the desk keyboard types into the session the view shows in front. The headset keyboard and physical keys paired to the headset also type into the session in front from inside the headset.
 
 Start Herdr first, then:
 

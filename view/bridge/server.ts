@@ -96,6 +96,23 @@ export function startServer(options: ServerOptions): Promise<Server> {
       res.writeHead(200, { 'Content-Type': 'audio/wav', 'Cache-Control': 'no-store', 'Content-Length': wav.length });
       return void res.end(wav);
     }
+    if (req.method === 'POST' && path === '/api/log') {
+      const body = await json(req, 256);
+      if (body.event === 'visibility' && typeof body.state === 'string' &&
+          (body.state === 'visible' || body.state === 'visible-blurred' || body.state === 'hidden')) {
+        log(`[page] visibility: ${body.state}`);
+        return send(res, 200, { ok: true });
+      }
+      if (body.event === 'keyboard' && typeof body.open === 'boolean') {
+        log(`[page] keyboard: ${body.open ? 'show' : 'close'}`);
+        return send(res, 200, { ok: true });
+      }
+      if (body.event === 'keys' && typeof body.count === 'number' && Number.isFinite(body.count)) {
+        log(`[page] keys per minute: ${Math.round(body.count)}`);
+        return send(res, 200, { ok: true });
+      }
+      return send(res, 400, { error: 'Unknown event.' });
+    }
     if (req.method === 'POST' && path === '/api/action') {
       const body = await json(req, 4096);
       if (typeof body.focus === 'string') return send(res, 200, await bridge.act({ kind: 'focus', sessionId: body.focus }));
@@ -105,6 +122,15 @@ export function startServer(options: ServerOptions): Promise<Server> {
         const input = windowInput(body.input);
         if (!input) return send(res, 400, { error: 'A click is {type:"click", x, y} and a scroll {type:"wheel", x, y, delta}, with x and y from 0 to 1.' });
         return send(res, 200, await bridge.act({ kind: 'window-input', sessionId: body.window, events: [input] }));
+      }
+      if (typeof body.type_text === 'string') {
+        return send(res, 200, await bridge.act({ kind: 'type-text', text: body.type_text }));
+      }
+      if (typeof body.key === 'string') {
+        const validKeys = ['enter','escape','ctrl+c','up','down','left','right','tab','backspace','y','n','1','2','3'] as const;
+        type ValidKey = typeof validKeys[number];
+        if (!validKeys.includes(body.key as ValidKey)) return send(res, 400, { error: 'Unknown key.' });
+        return send(res, 200, await bridge.act({ kind: 'key', key: body.key as ValidKey }));
       }
       let found;
       try { found = command(String(body.command)); } catch { return send(res, 400, { error: 'Unknown action.' }); }

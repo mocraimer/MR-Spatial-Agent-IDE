@@ -1,7 +1,7 @@
 # ADR: A thin WebXR view over the owner's Herdr sessions
 
 ## Status
-Accepted; narrowed by 20261122-pc-windows-mirrored-into-a-project: a window mirror shows a picture of a PC window, not text
+Accepted; narrowed by 20261122-pc-windows-mirrored-into-a-project: a window mirror shows a picture of a PC window, not text; narrowed by 20261123-typing-from-the-headset: the page also sends text to sessions directly via type-text, so the desk keyboard is not the only way to type
 
 ## Area
 Spatial view

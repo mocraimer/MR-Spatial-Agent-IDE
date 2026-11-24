@@ -42,5 +42,6 @@ export interface ViewState {
   /** The voice: spoken feedback and reading replies as set, and what the player is doing. */
   voice: { feedback: boolean; reading: boolean; /** The PC's voice failed and has not worked since. */ trouble: boolean; playing: boolean; played: number; problem: string | null };
   immersive: boolean;
+  keyboardOpen: boolean;
   surfaces: string[];
 }

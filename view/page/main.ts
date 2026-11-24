@@ -14,8 +14,9 @@ import { VoicePlayer } from './voice.js';
 import {
   bigScreen, drawPicker, drawWindowFront, drawWindowTile, type Picture,
   CONTROLS_SIZE, LINE_PX, drawChip, drawControls, drawTalk, TALK_SIZE, type TalkPhase, drawDraft, DRAFT_SIZE, drawFront, drawStrip, drawTile, STRIP_SIZE, EMPTY_FRONT, FRONT_SIZE, NO_SESSIONS, frontRows, lightOf, regionAt, resetFonts, terminalLines, tileRows, type ControlButton, type DraftState, type Region, type StripState,
+  drawBar,
 } from './panels.js';
-import { onArc, Scene, type Hit, type Pointer, type Rect } from './scene.js';
+import { multiply, onArc, pose, Scene, type Hit, type Mat, type Pointer, type Rect } from './scene.js';
 
 /** The bridge instance id from the last connect; a change means the bridge restarted. */
 let lastBridgeInstance: string | null = null;
@@ -42,6 +43,7 @@ const state = {
   pictures: new Map<string, Picture & { version: number }>(),
   notes: new Map<string, string | null>(),
   picker: null as Picker | null,
+  keyboardOpen: false,
 };
 /** Where the front window mirror's picture is drawn on the front canvas, for mapping a click into the window. */
 let windowRect: Rect | null = null;
@@ -54,6 +56,51 @@ const SCROLL_STEP = 10;
 /** Transcribing and carrying out one utterance takes well under this. */
 const UTTERANCE_TIMEOUT_MS = 20_000;
 
+// ---- Two movable groups -------------------------------------------------------------------------
+
+/** Default controls position: 0.6 m away, 0.35 m below eye height, facing the owner. */
+const CONTROLS_DEFAULT_DISTANCE = 0.6;
+const CONTROLS_DEFAULT_Y = -0.35;
+
+/**
+ * Group positions: azimuth in radians (positive = right of centre) and height delta in metres.
+ * Both start at zero — no offset from their natural positions.
+ * pose(0, dy, 0, -az) gives the group-offset matrix: rotates the group around Y, shifts height.
+ */
+let screensAz = 0, screensDy = 0;
+let controlsAz = 0, controlsDy = 0;
+
+/** State captured at bar-grab start: initial cylinder hit and group state. */
+let barGrabState: { surface: string; az0: number; y0: number; groupAz: number; groupDy: number } | null = null;
+
+const GROUP_STORAGE_KEY = 'spatial-view-group-offsets';
+
+function loadGroupOffsets(): void {
+  try {
+    const raw = localStorage.getItem(GROUP_STORAGE_KEY);
+    if (!raw) return;
+    const data = JSON.parse(raw) as unknown;
+    if (!Array.isArray(data) || data.length !== 2) return;
+    const [s, c] = data as [[number, number], [number, number]];
+    if (Array.isArray(s) && s.length >= 2) { screensAz = Number(s[0]) || 0; screensDy = Number(s[1]) || 0; }
+    if (Array.isArray(c) && c.length >= 2) { controlsAz = Number(c[0]) || 0; controlsDy = Number(c[1]) || 0; }
+  } catch { /* corrupted — use defaults */ }
+}
+
+function saveGroupOffsets(): void {
+  try {
+    localStorage.setItem(GROUP_STORAGE_KEY, JSON.stringify([[screensAz, screensDy], [controlsAz, controlsDy]]));
+  } catch { /* storage unavailable */ }
+}
+
+function resetGroupOffsets(): void {
+  screensAz = 0; screensDy = 0;
+  controlsAz = 0; controlsDy = 0;
+  saveGroupOffsets();
+}
+
+loadGroupOffsets();
+
 const canvas = document.getElementById('scene') as HTMLCanvasElement;
 const scene = new Scene(canvas, {
   pointer,
@@ -61,8 +108,31 @@ const scene = new Scene(canvas, {
   draggable: surface => surface === 'front',
   // The text follows the hand: dragging down brings older lines into view.
   drag: (surface, dy) => { if (surface !== 'front') return; if (frontSession()?.window && !state.picker) windowScroll(dy / LINE_PX); else scrollBy(dy / LINE_PX); },
+  groupBar: surface => surface === 'bar:screens' || surface === 'bar:controls',
+  groupBarStart: (surface, pos) => {
+    // pos is the bar centre in anchor-local space.  Derive its azimuth for delta tracking.
+    barGrabState = {
+      surface,
+      az0: Math.atan2(pos[0], -pos[2]),
+      y0: pos[1],
+      groupAz: surface === 'bar:screens' ? screensAz : controlsAz,
+      groupDy: surface === 'bar:screens' ? screensDy : controlsDy,
+    };
+  },
+  groupMove: (surface, pos) => {
+    // pos is the ray's cylinder intersection in anchor-local space.
+    if (!barGrabState || barGrabState.surface !== surface) return;
+    const az = Math.atan2(pos[0], -pos[2]);
+    const newAz = barGrabState.groupAz + (az - barGrabState.az0);
+    const newDy = barGrabState.groupDy + (pos[1] - barGrabState.y0);
+    if (surface === 'bar:screens') { screensAz = newAz; screensDy = newDy; }
+    else { controlsAz = newAz; controlsDy = newDy; }
+    saveGroupOffsets();
+    render();
+  },
   frame: () => { if (renderWanted) { renderWanted = false; renderNow(); } },
   target: hit => targetRect(hit),
+  visibilityChange: state => { bridgeLog({ event: 'visibility', state: state as 'visible' | 'visible-blurred' | 'hidden' }); },
 });
 let openSource: OpenSource = openMicrophone;
 const mic = new Mic(src => openSource(src), () => state.shelf?.focusedId ?? null, sendUtterance, render);
@@ -211,18 +281,150 @@ async function focus(sessionId: string): Promise<void> {
   render();
 }
 
+// ---- Headset keyboard (AC-5.1 / AC-5.2 / AC-5.3) -----------------------------------------------
+
+type LogEvent =
+  | { event: 'visibility'; state: 'visible' | 'visible-blurred' | 'hidden' }
+  | { event: 'keyboard'; open: boolean }
+  | { event: 'keys'; count: number };
+
+/** Posts a structured diagnostic event to the bridge log (terminal + log file). Never includes typed text. */
+function bridgeLog(ev: LogEvent): void {
+  void link.post('/api/log', ev);
+}
+
+/** Reusable hidden input for the Quest system keyboard. Created once; always in the DOM. */
+let keyboardInput: HTMLInputElement | null = null;
+
+/** Tracks the last value seen from the keyboard input, to compute character diffs. */
+let lastKeyboardValue = '';
+
+/** Text queued for typing: batched while a request is in flight. */
+let typeQueue = '';
+let typeInFlight = false;
+
+/** Timestamps of recent key events for once-per-minute count diagnostics. */
+const keyTimestamps: number[] = [];
+let lastKeyCountMinute = 0;
+
+function updateKeyCount(n: number): void {
+  const now = Date.now();
+  for (let i = 0; i < n; i++) keyTimestamps.push(now);
+  while (keyTimestamps.length > 0 && keyTimestamps[0] !== undefined && now - keyTimestamps[0] > 60_000) keyTimestamps.shift();
+  const bucket = Math.floor(now / 60_000);
+  if (bucket !== lastKeyCountMinute) {
+    lastKeyCountMinute = bucket;
+    bridgeLog({ event: 'keys', count: keyTimestamps.length });
+  }
+}
+
+async function flushTypeQueue(): Promise<void> {
+  if (typeInFlight || typeQueue === '') return;
+  typeInFlight = true;
+  const text = typeQueue;
+  typeQueue = '';
+  await link.post('/api/action', { type_text: text });
+  typeInFlight = false;
+  if (typeQueue !== '') void flushTypeQueue();
+}
+
+function queueText(text: string): void {
+  if (!text) return;
+  updateKeyCount(text.length);
+  typeQueue += text;
+  void flushTypeQueue();
+}
+
+function getOrCreateKeyboardInput(): HTMLInputElement {
+  if (keyboardInput) return keyboardInput;
+  const el = document.createElement('input');
+  el.id = 'keyboard-input';
+  el.type = 'text';
+  el.setAttribute('enterkeyhint', 'send');
+  // Visually hidden but focusable: width/height must be >0 for some browsers.
+  el.style.cssText = 'position:fixed;opacity:0.001;pointer-events:none;left:-9999px;top:0;width:1px;height:1px;';
+  document.body.appendChild(el);
+
+  // AC-5.3: Track focus/blur for state changes.
+  el.addEventListener('focus', () => {
+    if (!state.keyboardOpen) { state.keyboardOpen = true; bridgeLog({ event: 'keyboard', open: true }); render(); }
+  });
+  el.addEventListener('blur', () => {
+    if (state.keyboardOpen) { state.keyboardOpen = false; bridgeLog({ event: 'keyboard', open: false }); render(); }
+  });
+
+  // AC-5.1: Characters from the system keyboard arrive via input events.
+  // Physical keydowns call e.preventDefault(), so the field never changes for them and no
+  // input event follows — no extra flag is needed.
+  // Use a common-prefix diff so deletes and replacements are forwarded correctly.
+  el.addEventListener('input', () => {
+    if (!state.keyboardOpen) return;
+    const prev = lastKeyboardValue;
+    const curr = el.value;
+    // Common prefix: how many chars match from the left.
+    let pfx = 0;
+    while (pfx < prev.length && pfx < curr.length && prev[pfx] === curr[pfx]) pfx++;
+    // Send a backspace for each character deleted after the common prefix.
+    const deleted = prev.length - pfx;
+    for (let i = 0; i < deleted; i++) forwardKey('backspace');
+    // Queue the new suffix.
+    const added = curr.slice(pfx);
+    if (added) queueText(added);
+    lastKeyboardValue = curr;
+  });
+
+  keyboardInput = el;
+  return el;
+}
+
+/** AC-5.1: Toggle the Quest system keyboard for the session in front. */
+function openKeyboard(): void {
+  const el = getOrCreateKeyboardInput();
+  if (state.keyboardOpen) {
+    state.keyboardOpen = false;
+    bridgeLog({ event: 'keyboard', open: false });
+    el.blur();
+    render();
+  } else {
+    // AC-5.1: When in XR, check whether the system keyboard is available.
+    if (scene.immersive && scene.sessionKeyboardSupported !== true) {
+      notice('This headset\'s browser cannot show its keyboard here. Use physical keys to type.');
+      render();
+      return;
+    }
+    state.keyboardOpen = true;
+    // Reset field and value tracker so the next show starts from empty.
+    el.value = '';
+    lastKeyboardValue = '';
+    bridgeLog({ event: 'keyboard', open: true });
+    el.focus();
+    render();
+    // Quest: request virtual keyboard explicitly when available.
+    if ('virtualKeyboard' in navigator) {
+      const vk = (navigator as unknown as { virtualKeyboard: { show?: () => void } }).virtualKeyboard;
+      if (typeof vk.show === 'function') vk.show();
+    }
+  }
+}
+
+/** AC-5.2: Post a named key (from a physical keyboard) to the session in front. */
+function forwardKey(key: 'enter' | 'escape' | 'backspace' | 'tab' | 'up' | 'down' | 'left' | 'right' | 'ctrl+c'): void {
+  void link.post('/api/action', { key });
+}
+
 function runPage(action: PageAction): void {
   switch (action) {
     case 'scroll-up': if (frontSession()?.window) windowInput({ type: 'wheel', delta: 3 }); else scroll(1); return;
     case 'scroll-down': if (frontSession()?.window) windowInput({ type: 'wheel', delta: -3 }); else scroll(-1); return;
     case 'scroll-bottom': state.scroll = 0; scrollExact = 0; break;
-    case 'recenter': scene.recenter(); notice('Shelf recentred in front of you.'); break;
+    case 'recenter': scene.recenter(); resetGroupOffsets(); notice('Shelf recentred in front of you.'); break;
     case 'listening-off': stopListening(); break;
     case 'mode-hold': stopListening(); mic.setMode('hold'); notice('Hold Talk to speak; tap it to keep listening.'); break;
     case 'mode-switch': mic.setMode('switch'); void mic.switchOn(); notice('Keep listening: tap Talk or say "stop listening" to stop.'); break;
     case 'text-bigger': state.scale = Math.min(1.6, Math.round((state.scale + 0.1) * 10) / 10); break;
     case 'text-smaller': state.scale = Math.max(0.7, Math.round((state.scale - 0.1) * 10) / 10); break;
     case 'exit-mr': void scene.exit(); break;
+    case 'keyboard': openKeyboard(); break;
     default: return assertNever(action);
   }
   render();
@@ -335,11 +537,33 @@ function targetRect(hit: Hit): Rect | null {
 }
 
 addEventListener('keydown', e => {
-  if (e.target instanceof HTMLInputElement) return;
+  // Skip forwarding for inputs OTHER than the hidden keyboard input.
+  if (e.target instanceof HTMLInputElement && e.target !== keyboardInput) return;
   if (e.code === 'Backquote' && !e.repeat) { talkStart('key'); e.preventDefault(); return; }
   const asked = state.confirm !== null || state.ask !== null;
-  if (asked && (e.key === 'y' || e.key === 'Y')) void runCommand('confirm');
-  if (asked && (e.key === 'n' || e.key === 'N' || e.key === 'Escape')) void runCommand('decline');
+  if (asked && (e.key === 'y' || e.key === 'Y')) { void runCommand('confirm'); return; }
+  if (asked && (e.key === 'n' || e.key === 'N' || e.key === 'Escape')) { void runCommand('decline'); return; }
+
+  // AC-5.2: forward physical keys to the session in front when in XR.
+  // Works even when the hidden keyboard input is focused (system keyboard open): preventDefault
+  // stops the key from modifying the field, so the input event does not re-fire for it.
+  if (!scene.immersive) return;
+  e.preventDefault();
+  switch (e.key) {
+    case 'Enter': forwardKey('enter'); break;
+    case 'Escape': forwardKey('escape'); break;
+    case 'Backspace': forwardKey('backspace'); break;
+    case 'Tab': forwardKey('tab'); break;
+    case 'ArrowUp': forwardKey('up'); break;
+    case 'ArrowDown': forwardKey('down'); break;
+    case 'ArrowLeft': forwardKey('left'); break;
+    case 'ArrowRight': forwardKey('right'); break;
+    default:
+      if (e.ctrlKey && e.key === 'c') { forwardKey('ctrl+c'); break; }
+      // Printable characters: forward via the serialised queue.
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) queueText(e.key);
+      break;
+  }
 });
 addEventListener('keyup', e => { if (e.code === 'Backquote') talkEnd('key'); });
 // A key released in another window never reaches this one.
@@ -406,7 +630,18 @@ function renderNow(): void {
   const frontKey = state.picker ? ['picker', state.picker, frontStale]
     : front?.window ? ['window', front, picture?.version, windowNote, frontStale, placeName]
     : [front, front && state.textVersion.get(front.id), state.scroll, frontStale, empty, placeName];
-  surface('front', JSON.stringify(frontKey), frontWidth, onArc(0, FRONT_Y, FRONT_DISTANCE), c => {
+  /** Place a surface with a group offset applied to its base pose. */
+  const inGroup = (id: string, key: string, width: number, basePose: Mat, groupOff: Mat, draw: (c: HTMLCanvasElement) => void) => {
+    surface(id, key, width, multiply(groupOff, basePose), draw);
+  };
+
+  // Derive offset matrices from the stored azimuth/height scalars.
+  // pose(0, dy, 0, -az) rotates surfaces around the owner's Y axis and shifts height.
+  const screensOffset = pose(0, screensDy, 0, -screensAz);
+  const controlsOffset = pose(0, controlsDy, 0, -controlsAz);
+
+  // ---- Screens group: front session, strip (above), tiles and chips ----
+  inGroup('front', JSON.stringify(frontKey), frontWidth, onArc(0, FRONT_Y, FRONT_DISTANCE), screensOffset, c => {
     if (state.picker) { regions.set('front', drawPicker(c, state.picker)); windowRect = null; return; }
     regions.delete('front');
     if (front?.window) { windowRect = drawWindowFront(c, front, placeName, picture, windowNote, frontStale); return; }
@@ -433,7 +668,7 @@ function renderNow(): void {
     confirm: state.confirm,
     ask: state.ask,
   };
-  surface('strip', JSON.stringify(strip), stripWidth, onArc(0, FRONT_Y + frontHeight / 2 + 0.06, FRONT_DISTANCE), c => { regions.set('strip', drawStrip(c, strip)); });
+  inGroup('strip', JSON.stringify(strip), stripWidth, onArc(0, FRONT_Y + frontHeight / 2 + 0.06, FRONT_DISTANCE), screensOffset, c => { regions.set('strip', drawStrip(c, strip)); });
   used.add('strip');
 
   // A draft that waits says where, and the words that send or clear it, just above the strip.
@@ -445,43 +680,15 @@ function renderNow(): void {
   };
   if (draft) {
     const barHeight = stripWidth * DRAFT_SIZE.h / DRAFT_SIZE.w;
-    surface('draft', JSON.stringify(draft), stripWidth, onArc(0, FRONT_Y + frontHeight / 2 + 0.06 + stripHeight / 2 + 0.014 + barHeight / 2, FRONT_DISTANCE), c => drawDraft(c, draft));
+    inGroup('draft', JSON.stringify(draft), stripWidth, onArc(0, FRONT_Y + frontHeight / 2 + 0.06 + stripHeight / 2 + 0.014 + barHeight / 2, FRONT_DISTANCE), screensOffset, c => drawDraft(c, draft));
     used.add('draft');
   }
-
-  // Each inner list is a group: what belongs together sits together.
-  const row = (groups: string[][], key: boolean): ControlButton[] => groups.flatMap(ids => ids.map((id, i) => ({ id, label: command(id).label, key, group: i === 0 })));
-  const rows: ControlButton[][] = [
-    row([['next', 'back'], ['scroll-up', 'scroll-down', 'bottom'], ['smaller', 'bigger', 'recenter'], ['overview', 'mirror', 'new-project'], ['exit']], false),
-    row([['enter', 'escape', 'interrupt'], ['up', 'down', 'tab'], ['y', 'n'], ['one', 'two', 'three']], true),
-    // Words: send or clear the draft in front, and how spoken prompts are sent. The one in force is lit.
-    row([['send', 'scratch'], ['direct-on', 'direct-off']], false).map(b => ({ ...b, on: b.id === (state.direct ? 'direct-on' : 'direct-off') })),
-    // Words for the session in front: its model and effort (typed into it as /model and /effort).
-    row([['model-haiku', 'model-sonnet', 'model-opus'], ['effort-low', 'effort-medium', 'effort-high', 'effort-xhigh', 'effort-max']], false),
-    // The voice: whether answers are spoken and replies read, reading the last reply now, and stopping.
-    row([['voice-on', 'voice-off'], ['read-on', 'read-off'], ['read-last', 'voice-stop']], false).map(b => ({ ...b, on: b.id === (state.voice.feedback ? 'voice-on' : 'voice-off') || b.id === (state.voice.reading ? 'read-on' : 'read-off') })),
-  ];
-  // Talk, wide and first under the front session: the way in to speaking.
-  const phase: TalkPhase = mic.problem ?? (state.speech.ready ? null : state.speech.reason) ? 'problem'
-    : mic.open ? (mic.mode === 'hold' ? 'holding' : 'listening') : mic.standby ? 'standby' : mic.isOpening ? 'opening' : 'idle';
-  const talkProblem = mic.problem ?? (state.speech.ready ? null : state.speech.reason);
-  const talkHeight = stripWidth * TALK_SIZE.h / TALK_SIZE.w;
-  const talkY = FRONT_Y - frontHeight / 2 - 0.02 - talkHeight / 2;
-  surface('talk', JSON.stringify([phase, talkProblem]), stripWidth, onArc(0, talkY, FRONT_DISTANCE), c => { regions.set('talk', drawTalk(c, phase, talkProblem)); });
-  used.add('talk');
-  const controlsHeight = stripWidth * CONTROLS_SIZE.h / CONTROLS_SIZE.w;
-  rows.forEach((buttons, i) => {
-    const id = `controls-${i}`;
-    const y = talkY - talkHeight / 2 - 0.012 - controlsHeight / 2 - i * (controlsHeight + 0.008);
-    surface(id, JSON.stringify(buttons), stripWidth, onArc(0, y, FRONT_DISTANCE), c => { regions.set(id, drawControls(c, buttons)); });
-    used.add(id);
-  });
 
   chipTargets.clear();
   for (const chip of chips) {
     const id = `chip:${chip.projectId}`;
     chipTargets.set(id, chip.overview ? 'overview' : `go:${chip.projectId}`);
-    surface(id, JSON.stringify([chip.project, chip.overview, chip.sessions.map(s => [s.agent, s.status])]), chip.width, onArc(chip.angle, chip.y, CHIP_ARC), c => drawChip(c, chip.project, chip.sessions, chip.overview));
+    inGroup(id, JSON.stringify([chip.project, chip.overview, chip.sessions.map(s => [s.agent, s.status])]), chip.width, onArc(chip.angle, chip.y, CHIP_ARC), screensOffset, c => drawChip(c, chip.project, chip.sessions, chip.overview));
     used.add(id);
   }
 
@@ -493,13 +700,56 @@ function renderNow(): void {
       const inFront = t.session.id === front?.id;
       const tilePicture = t.session.window && !inFront ? state.pictures.get(t.session.id) ?? null : null;
       const tileNote = t.session.window ? state.notes.get(t.session.id) ?? null : null;
-      surface(id, JSON.stringify([t.n, t.session, inFront, tileStale, inFront ? 0 : t.session.window ? [tilePicture?.version, tileNote] : state.textVersion.get(t.session.id)]), width, onArc(column.angle, TOP - i * step, ARC), c => {
+      inGroup(id, JSON.stringify([t.n, t.session, inFront, tileStale, inFront ? 0 : t.session.window ? [tilePicture?.version, tileNote] : state.textVersion.get(t.session.id)]), width, onArc(column.angle, TOP - i * step, ARC), screensOffset, c => {
         if (t.session.window && !inFront) drawWindowTile(c, t.n, t.session, tilePicture, tileNote, tileStale);
         else drawTile(c, t.n, t.session, state.texts.get(t.session.id), inFront, tileStale);
       });
       used.add(id);
     });
   }
+
+  // Grab bar for the screens group: at the bottom of the front panel.
+  const barPhysH = stripWidth * 80 / 2464; // 80px canvas height at stripWidth metres wide
+  inGroup('bar:screens', JSON.stringify('screens'), stripWidth, onArc(0, FRONT_Y - frontHeight / 2 - 0.012 - barPhysH / 2, FRONT_DISTANCE), screensOffset, c => drawBar(c, 'Screens'));
+  used.add('bar:screens');
+
+  // ---- Controls group: Talk, button rows, draft bar ----
+  // Each inner list is a group: what belongs together sits together.
+  const row = (groups: string[][], key: boolean): ControlButton[] => groups.flatMap(ids => ids.map((id, i) => ({ id, label: command(id).label, key, group: i === 0 })));
+  const rows: ControlButton[][] = [
+    row([['next', 'back'], ['scroll-up', 'scroll-down', 'bottom'], ['smaller', 'bigger', 'recenter'], ['overview', 'mirror', 'new-project'], ['keyboard', 'exit']], false),
+    row([['enter', 'escape', 'interrupt'], ['up', 'down', 'tab'], ['y', 'n'], ['one', 'two', 'three']], true),
+    // Words: send or clear the draft in front, and how spoken prompts are sent. The one in force is lit.
+    row([['send', 'scratch'], ['direct-on', 'direct-off']], false).map(b => ({ ...b, on: b.id === (state.direct ? 'direct-on' : 'direct-off') })),
+    // Words for the session in front: its model and effort (typed into it as /model and /effort).
+    row([['model-haiku', 'model-sonnet', 'model-opus'], ['effort-low', 'effort-medium', 'effort-high', 'effort-xhigh', 'effort-max']], false),
+    // The voice: whether answers are spoken and replies read, reading the last reply now, and stopping.
+    row([['voice-on', 'voice-off'], ['read-on', 'read-off'], ['read-last', 'voice-stop']], false).map(b => ({ ...b, on: b.id === (state.voice.feedback ? 'voice-on' : 'voice-off') || b.id === (state.voice.reading ? 'read-on' : 'read-off') })),
+  ].map((btns, i) => i === 0 ? btns.map(b => b.id === 'keyboard' ? { ...b, on: state.keyboardOpen } : b) : btns);
+
+  // Controls group: Talk at the natural default position, rows stacking below it.
+  // Base poses use absolute world-space positions (CONTROLS_DEFAULT_Y, CONTROLS_DEFAULT_DISTANCE).
+  // controlsOffset (derived above) rotates and shifts the whole group from these defaults.
+  const phase: TalkPhase = mic.problem ?? (state.speech.ready ? null : state.speech.reason) ? 'problem'
+    : mic.open ? (mic.mode === 'hold' ? 'holding' : 'listening') : mic.standby ? 'standby' : mic.isOpening ? 'opening' : 'idle';
+  const talkProblem = mic.problem ?? (state.speech.ready ? null : state.speech.reason);
+  const talkHeight = stripWidth * TALK_SIZE.h / TALK_SIZE.w;
+  const talkY = CONTROLS_DEFAULT_Y;
+  inGroup('talk', JSON.stringify([phase, talkProblem]), stripWidth, onArc(0, talkY, CONTROLS_DEFAULT_DISTANCE), controlsOffset, c => { regions.set('talk', drawTalk(c, phase, talkProblem)); });
+  used.add('talk');
+  const controlsHeight = stripWidth * CONTROLS_SIZE.h / CONTROLS_SIZE.w;
+  rows.forEach((buttons, i) => {
+    const id = `controls-${i}`;
+    const y = talkY - talkHeight / 2 - 0.012 - controlsHeight / 2 - i * (controlsHeight + 0.008);
+    inGroup(id, JSON.stringify(buttons), stripWidth, onArc(0, y, CONTROLS_DEFAULT_DISTANCE), controlsOffset, c => { regions.set(id, drawControls(c, buttons)); });
+    used.add(id);
+  });
+
+  // Grab bar for the controls group: below the last controls row.
+  const lastControlY = talkY - talkHeight / 2 - 0.012 - controlsHeight / 2 - (rows.length - 1) * (controlsHeight + 0.008);
+  const ctrlBarY = lastControlY - controlsHeight / 2 - 0.012 - barPhysH / 2;
+  inGroup('bar:controls', JSON.stringify('controls'), stripWidth, onArc(0, ctrlBarY, CONTROLS_DEFAULT_DISTANCE), controlsOffset, c => drawBar(c, 'Controls'));
+  used.add('bar:controls');
   for (const id of [...scene.surfaces.keys()]) if (!used.has(id)) { scene.remove(id); canvases.delete(id); drawn.delete(id); }
   updatePage();
 }
@@ -585,6 +835,7 @@ window.viewState = () => {
     direct: state.direct,
     voice: { feedback: state.voice.feedback, reading: state.voice.reading, trouble: state.voice.trouble, playing: player.playing, played: player.played, problem: player.problem },
     immersive: scene.immersive,
+    keyboardOpen: state.keyboardOpen,
     surfaces: [...scene.surfaces.keys()],
   };
 };
@@ -610,3 +861,5 @@ render();
 void Promise.all(['400 16px "JetBrains Mono"', '700 16px "JetBrains Mono"', '400 16px Inter', '600 16px Inter'].map(f => document.fonts.load(f)))
   .then(() => { resetFonts(); drawn.clear(); render(); }, () => undefined);
 void link.connect();
+// Create the hidden keyboard input at page load so tests can find it immediately.
+getOrCreateKeyboardInput();
